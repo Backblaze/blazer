@@ -29,7 +29,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/backblaze/blazer/x/transport"
+	"github.com/burner-account/blazer/x/transport"
 
 	"context"
 )
