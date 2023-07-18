@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kurin/blazer/x/window"
+	"github.com/backblaze/blazer/x/window"
 )
 
 type Accumulator struct {
