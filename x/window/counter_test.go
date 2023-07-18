@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/backblaze/blazer/x/window"
+	"github.com/burner-account/blazer/x/window"
 )
 
 type Counter struct {
