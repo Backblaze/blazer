@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/backblaze/blazer/bonfire"
-	"github.com/backblaze/blazer/internal/pyre"
+	"github.com/burner-account/blazer/bonfire"
+	"github.com/burner-account/blazer/internal/pyre"
 )
 
 type superManager struct {
