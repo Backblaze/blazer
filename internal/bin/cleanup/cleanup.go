@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kurin/blazer/b2"
+	"github.com/backblaze/blazer/b2"
 )
 
 const (
