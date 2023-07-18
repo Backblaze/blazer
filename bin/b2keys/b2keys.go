@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/google/subcommands"
-	"github.com/backblaze/blazer/b2"
+	"github.com/burner-account/blazer/b2"
 )
 
 const (
