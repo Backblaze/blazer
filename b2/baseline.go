@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/backblaze/blazer/base"
+	"github.com/burner-account/blazer/base"
 )
 
 // This file wraps the base package in a thin layer, for testing.  It should be
