@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/backblaze/blazer/internal/blog"
+	"github.com/burner-account/blazer/internal/blog"
 )
 
 // Writer writes data into Backblaze.  It automatically switches to the large
