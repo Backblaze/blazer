@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/backblaze/blazer/internal/b2types"
+	"github.com/burner-account/blazer/internal/b2types"
 )
 
 const uploadFilePrefix = "/b2api/v1/b2_upload_file/"
