@@ -32,7 +32,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/backblaze/blazer/b2"
+	"github.com/burner-account/blazer/b2"
 )
 
 func main() {
