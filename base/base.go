@@ -37,8 +37,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/backblaze/blazer/internal/b2types"
-	"github.com/backblaze/blazer/internal/blog"
+	"github.com/Backblaze/blazer/internal/b2types"
+	"github.com/Backblaze/blazer/internal/blog"
 )
 
 const (
