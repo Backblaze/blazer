@@ -139,3 +139,8 @@ be found via the BaseURL method:
 ```go
 base := bucket.BaseURL()
 ```
+
+
+### Licenses
+The b2 package currently does not consume any third party packages and entirely depends on imports of the Go stdlib or from sources provided within the `blazer` repository itself.
+A report of used licenses can be found at `./b2/licenses.csv` which was generated with https://github.com/google/go-licenses . Please double check yourself if this is a concern as this may change over time and the licenses report could become stale
