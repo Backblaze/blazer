@@ -37,13 +37,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kurin/blazer/internal/b2types"
-	"github.com/kurin/blazer/internal/blog"
+	"github.com/Backblaze/blazer/internal/b2types"
+	"github.com/Backblaze/blazer/internal/blog"
 )
 
 const (
 	APIBase          = "https://api.backblazeb2.com"
-	DefaultUserAgent = "blazer/0.6.0"
+	DefaultUserAgent = "blazer/0.6.1"
 )
 
 type b2err struct {
