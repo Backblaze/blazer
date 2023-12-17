@@ -277,6 +277,7 @@ type B2 struct {
 	accountID   string
 	authToken   string
 	apiURI      string
+	s3URI       string
 	downloadURI string
 	minPartSize int
 	opts        *b2Options
@@ -451,6 +452,7 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		accountID:   b2resp.AccountID,
 		authToken:   b2resp.AuthToken,
 		apiURI:      b2resp.URI,
+		s3URI:       b2resp.S3URI,
 		downloadURI: b2resp.DownloadURI,
 		minPartSize: b2resp.PartSize,
 		bucket:      b2resp.Allowed.Bucket,
@@ -635,6 +637,11 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 // BaseURL returns the base part of the download URLs.
 func (b *Bucket) BaseURL() string {
 	return b.b2.downloadURI
+}
+
+// S3URL returns the base URL for S3-compatible API calls.
+func (b *Bucket) S3URL() string {
+	return b.b2.s3URI
 }
 
 // ListBuckets wraps b2_list_buckets.  If name is non-empty, only that bucket

@@ -54,6 +54,7 @@ type b2BucketInterface interface {
 	hideFile(context.Context, string) (b2FileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
 	baseURL() string
+	s3URL() string
 	file(string, string) b2FileInterface
 }
 
@@ -397,6 +398,10 @@ func (b *b2Bucket) getDownloadAuthorization(ctx context.Context, p string, v tim
 
 func (b *b2Bucket) baseURL() string {
 	return b.b.BaseURL()
+}
+
+func (b *b2Bucket) s3URL() string {
+	return b.b.S3URL()
 }
 
 func (b *b2Bucket) file(id, name string) b2FileInterface { return &b2File{b.b.File(id, name)} }
