@@ -408,6 +408,10 @@ func (b *Bucket) BaseURL() string {
 	return b.b.baseURL()
 }
 
+func (b *Bucket) S3URL() string {
+	return b.b.s3URL()
+}
+
 // Name returns the bucket's name.
 func (b *Bucket) Name() string {
 	return b.b.name()

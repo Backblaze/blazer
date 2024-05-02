@@ -32,6 +32,7 @@ type AuthorizeAccountResponse struct {
 	AccountID      string    `json:"accountId"`
 	AuthToken      string    `json:"authorizationToken"`
 	URI            string    `json:"apiUrl"`
+	S3URI          string    `json:"s3ApiUrl"`
 	DownloadURI    string    `json:"downloadUrl"`
 	MinPartSize    int       `json:"minimumPartSize"`
 	PartSize       int       `json:"recommendedPartSize"`
