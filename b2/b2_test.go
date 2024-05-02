@@ -233,6 +233,7 @@ func (t *testBucket) getDownloadAuthorization(context.Context, string, time.Dura
 	return "", nil
 }
 func (t *testBucket) baseURL() string                      { return "" }
+func (t *testBucket) s3URL() string                        { return "" }
 func (t *testBucket) file(id, name string) b2FileInterface { return nil }
 
 type testURL struct {
