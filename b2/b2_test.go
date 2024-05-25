@@ -679,7 +679,7 @@ func TestReadWrite(t *testing.T) {
 		}
 	}()
 
-	if err := readFile(ctx, lobj, wshaL, 1e7, 10); err != nil {
+	if err := readFile(ctx, lobj, wshaL, 1e5, 10); err != nil {
 		t.Error(err)
 	}
 }

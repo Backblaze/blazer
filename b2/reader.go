@@ -135,9 +135,9 @@ func (r *Reader) thread() {
 			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false)
 			if err == errNoMoreContent {
 				// this read generated a 416 so we are entirely past the end of the object
+				r.rmux.Lock()
 				r.readOffEnd = true
 				buf.final = true
-				r.rmux.Lock()
 				r.chunks[chunkID] = buf
 				r.rmux.Unlock()
 				r.rcond.Broadcast()
