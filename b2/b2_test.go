@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -50,19 +51,16 @@ func (t testError) Error() string {
 
 type errCont struct {
 	errMap map[string]map[int]error
-	opMap  map[string]int
+	opMap  sync.Map
 }
 
 func (e *errCont) getError(name string) error {
 	if e.errMap == nil {
 		return nil
 	}
-	if e.opMap == nil {
-		e.opMap = make(map[string]int)
-	}
-	i := e.opMap[name]
-	e.opMap[name]++
-	return e.errMap[name][i]
+	val, _ := e.opMap.LoadOrStore(name, new(uint32))
+	newVal := atomic.AddUint32(val.(*uint32), 1)
+	return e.errMap[name][int(newVal-1)]
 }
 
 type testRoot struct {
