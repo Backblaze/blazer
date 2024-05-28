@@ -99,7 +99,7 @@ type memoryBuffer struct {
 	buf *bytes.Buffer
 	hsh hash.Hash
 	w   io.Writer
-	mux sync.Mutex
+	mux sync.RWMutex
 }
 
 var bufpool *sync.Pool
@@ -118,10 +118,29 @@ func newMemoryBuffer() *memoryBuffer {
 	return mb
 }
 
-func (mb *memoryBuffer) Write(p []byte) (int, error)   { return mb.w.Write(p) }
-func (mb *memoryBuffer) Len() int                      { return mb.buf.Len() }
-func (mb *memoryBuffer) Reader() (readResetter, error) { return newResetter(mb.buf.Bytes()), nil }
-func (mb *memoryBuffer) Hash() string                  { return fmt.Sprintf("%x", mb.hsh.Sum(nil)) }
+func (mb *memoryBuffer) Write(p []byte) (int, error) {
+	mb.mux.Lock()
+	defer mb.mux.Unlock()
+	return mb.w.Write(p)
+}
+
+func (mb *memoryBuffer) Len() int {
+	mb.mux.RLock()
+	defer mb.mux.RUnlock()
+	return mb.buf.Len()
+}
+
+func (mb *memoryBuffer) Reader() (readResetter, error) {
+	mb.mux.RLock()
+	defer mb.mux.RUnlock()
+	return newResetter(mb.buf.Bytes()), nil
+}
+
+func (mb *memoryBuffer) Hash() string {
+	mb.mux.RLock()
+	defer mb.mux.RUnlock()
+	return fmt.Sprintf("%x", mb.hsh.Sum(nil))
+}
 
 func (mb *memoryBuffer) Close() error {
 	mb.mux.Lock()

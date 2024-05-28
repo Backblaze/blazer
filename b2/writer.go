@@ -26,6 +26,8 @@ import (
 	"github.com/Backblaze/blazer/internal/blog"
 )
 
+var ErrClosed = errors.New("file already closed")
+
 // Writer writes data into Backblaze.  It automatically switches to the large
 // file API if the file exceeds ChunkSize bytes.  Due to that and other
 // Backblaze API details, there is a large buffer.
@@ -79,9 +81,13 @@ type Writer struct {
 	everStarted bool
 	newBuffer   func() (writeBuffer, error)
 
+	closed     bool
+	closeWrite sync.RWMutex
+
 	o    *Object
 	name string
 
+	wmux sync.RWMutex
 	cidx int
 	w    writeBuffer
 
@@ -247,6 +253,11 @@ func (w *Writer) init() {
 
 // Write satisfies the io.Writer interface.
 func (w *Writer) Write(p []byte) (int, error) {
+	w.closeWrite.RLock()
+	defer w.closeWrite.RUnlock()
+	if w.closed {
+		return 0, ErrClosed
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -395,16 +406,32 @@ func (w *Writer) sendChunk() error {
 	if err != nil {
 		return err
 	}
+
+	var cidx = -1
+	var ww writeBuffer = nil
+	w.emux.RLock()
+	defer w.emux.RUnlock()
+	if w.ctx.Err() == nil {
+		// Only claim the read lock if we need it
+		w.wmux.RLock()
+		cidx = w.cidx + 1
+		ww = w.w
+		w.wmux.RUnlock()
+	} else {
+		return w.ctx.Err()
+	}
 	select {
 	case <-w.cdone:
 		return nil
 	case w.ready <- chunk{
-		id:  w.cidx + 1,
-		buf: w.w,
+		id:  cidx,
+		buf: ww,
 	}:
 	case <-w.ctx.Done():
 		return w.ctx.Err()
 	}
+	w.wmux.Lock()
+	defer w.wmux.Unlock()
 	w.cidx++
 	v, err := w.newBuffer()
 	if err != nil {
@@ -481,6 +508,8 @@ func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 // value of Close for all writers.
 func (w *Writer) Close() error {
 	w.done.Do(func() {
+		w.closeWrite.Lock()
+		defer w.closeWrite.Unlock()
 		if !w.everStarted {
 			w.init()
 			w.setErr(w.simpleWriteFile())
@@ -488,31 +517,43 @@ func (w *Writer) Close() error {
 		}
 		defer w.o.b.c.removeWriter(w)
 		defer func() {
+			w.wmux.Lock()
+			defer w.wmux.Unlock()
 			if err := w.w.Close(); err != nil {
 				// this is non-fatal, but alarming
 				blog.V(1).Infof("close %s: %v", w.name, err)
 			}
 		}()
+		w.wmux.RLock()
+		// Don't defer the RUnlock, since we don't want to be RLocked when we call sendChunk
 		if w.cidx == 0 {
+			w.wmux.RUnlock()
 			w.setErr(w.simpleWriteFile())
 			return
 		}
 		if w.w.Len() > 0 {
+			w.wmux.RUnlock()
 			if err := w.sendChunk(); err != nil {
 				w.setErr(err)
 				return
 			}
 		}
+		defer w.wmux.RUnlock()
 		// See https://github.com/Backblaze/blazer/issues/60 for why we use a special
 		// channel for this.
 		close(w.cdone)
 		w.wg.Wait()
-		f, err := w.file.finishLargeFile(w.ctx)
+		err := w.ctx.Err()
+		var f beFileInterface = nil
+		if err == nil {
+			f, err = w.file.finishLargeFile(w.ctx)
+		}
 		if err != nil {
 			w.setErr(err)
 			return
 		}
 		w.o.f = f
+		w.closed = true
 	})
 	return w.getErr()
 }
