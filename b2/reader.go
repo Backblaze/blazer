@@ -148,10 +148,12 @@ func (r *Reader) thread() {
 				r.rcond.Broadcast()
 				return
 			}
+			r.rmux.Lock()
 			rsize, _, sha1, _ := fr.stats()
 			if len(sha1) == 40 && r.sha1 != sha1 {
 				r.sha1 = sha1
 			}
+			r.rmux.Unlock()
 			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize)}
 			r.smux.Lock()
 			r.smap[chunkID] = mr

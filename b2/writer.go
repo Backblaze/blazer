@@ -524,6 +524,7 @@ func (w *Writer) Close() error {
 				blog.V(1).Infof("close %s: %v", w.name, err)
 			}
 		}()
+		// We need the lock to dereference w.cidx and w.w.Len()
 		w.wmux.RLock()
 		// Don't defer the RUnlock, since we don't want to be RLocked when we call sendChunk
 		if w.cidx == 0 {
@@ -537,6 +538,8 @@ func (w *Writer) Close() error {
 				w.setErr(err)
 				return
 			}
+			// Get the lock back, so all code paths have it
+			w.wmux.RLock()
 		}
 		defer w.wmux.RUnlock()
 		// See https://github.com/Backblaze/blazer/issues/60 for why we use a special
