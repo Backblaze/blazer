@@ -1189,6 +1189,7 @@ func TestListKeys(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateKey(%d): %v", i, err)
 		}
+		//noinspection GoDeferInLoop
 		defer key.Delete(ctx)
 	}
 
