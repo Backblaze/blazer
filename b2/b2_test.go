@@ -545,9 +545,12 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	defer cancel()
 
 	var calls []time.Duration
+	var cmux = &sync.Mutex{}
 	ch := make(chan time.Time)
 	close(ch)
 	after = func(d time.Duration) <-chan time.Time {
+		cmux.Lock()
+		defer cmux.Unlock()
 		calls = append(calls, d)
 		return ch
 	}
