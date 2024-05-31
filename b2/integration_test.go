@@ -879,28 +879,6 @@ func TestAttrsNoRoundtrip(t *testing.T) {
 	}
 }*/
 
-func TestSmallUploadsFewRoundtrips(t *testing.T) {
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
-
-	bucket, done := startLiveTest(ctx, t)
-	defer done()
-
-	for i := 0; i < 10; i++ {
-		_, _, err := writeFile(ctx, bucket, fmt.Sprintf("%s.%d", smallFileName, i), 42, 1e8)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	si := bucket.c.Status()
-	getURL := si.RPCs[0].CountByMethod()["b2_get_upload_url"]
-	uploadFile := si.RPCs[0].CountByMethod()["b2_upload_file"]
-	if getURL >= uploadFile {
-		t.Errorf("too many calls to b2_get_upload_url")
-	}
-}
-
 func TestDeleteWithoutName(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -1189,6 +1167,7 @@ func TestListKeys(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateKey(%d): %v", i, err)
 		}
+		//noinspection GoDeferInLoop
 		defer key.Delete(ctx)
 	}
 

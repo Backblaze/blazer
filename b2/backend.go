@@ -728,12 +728,18 @@ func (b *beFilePart) number() int  { return b.b2filePart.number() }
 func (b *beFilePart) sha1() string { return b.b2filePart.sha1() }
 func (b *beFilePart) size() int64  { return b.b2filePart.size() }
 
-func (b *beKey) del(ctx context.Context) error { return b.k.del(ctx) }
-func (b *beKey) caps() []string                { return b.k.caps() }
-func (b *beKey) name() string                  { return b.k.name() }
-func (b *beKey) expires() time.Time            { return b.k.expires() }
-func (b *beKey) secret() string                { return b.k.secret() }
-func (b *beKey) id() string                    { return b.k.id() }
+func (b *beKey) del(ctx context.Context) error {
+	f := func() error {
+		return b.k.del(ctx)
+	}
+	return withBackoff(ctx, b.b2i, f)
+}
+
+func (b *beKey) caps() []string     { return b.k.caps() }
+func (b *beKey) name() string       { return b.k.name() }
+func (b *beKey) expires() time.Time { return b.k.expires() }
+func (b *beKey) secret() string     { return b.k.secret() }
+func (b *beKey) id() string         { return b.k.id() }
 
 func jitter(d time.Duration) time.Duration {
 	f := float64(d)
