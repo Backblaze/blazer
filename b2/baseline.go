@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Backblaze/blazer/base"
+	"github.com/Backblaze/blazer/internal/b2types"
 )
 
 // This file wraps the base package in a thin layer, for testing.  It should be
@@ -253,6 +254,53 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		}
 		b.b.LifecycleRules = rules
 	}
+	if len(attrs.CORSRules) > 0 {
+		rules := []b2types.CORSRule{}
+		for _, rule := range attrs.CORSRules {
+			rules = append(rules, b2types.CORSRule{
+				AllowedOrigins:    rule.AllowedOrigins,
+				AllowedHeaders:    rule.AllowedHeaders,
+				AllowedOperations: rule.AllowedOperations,
+				ExposeHeaders:     rule.ExposeHeaders,
+				MaxAgeSeconds:     rule.MaxAgeSeconds,
+			})
+		}
+		b.b.CORSRules = rules
+	}
+
+	b.b.DefaultRetention = attrs.DefaultRetention
+
+	if attrs.DefaultServerSideEncryption != nil {
+		b.b.DefaultServerSideEncryption = &b2types.ServerSideEncryption{
+			Algorithm: attrs.DefaultServerSideEncryption.Algorithm,
+			Mode:      attrs.DefaultServerSideEncryption.Mode,
+		}
+	}
+
+	b.b.FileLockEnabled = attrs.FileLockEnabled
+
+	if b.b.ReplicationConfig != nil {
+		asRepSource := b2types.AsReplicationSource{
+			SourceApplicationKeyID: attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID,
+			ReplicationRules:       make([]b2types.ReplicationRules, len(attrs.ReplicationConfig.AsReplicationSource.ReplicationRules)),
+		}
+
+		for i, rule := range attrs.ReplicationConfig.AsReplicationSource.ReplicationRules {
+			asRepSource.ReplicationRules[i] = b2types.ReplicationRules{
+				ReplicationRuleName:  rule.ReplicationRuleName,
+				DestinationBucketID:  rule.DestinationBucketID,
+				FileNamePrefix:       rule.FileNamePrefix,
+				IncludeExistingFiles: rule.IncludeExistingFiles,
+				IsEnabled:            rule.IsEnabled,
+				Priority:             rule.Priority,
+			}
+		}
+
+		b.b.ReplicationConfig = &b2types.ReplicationConfiguration{
+			AsReplicationSource: asRepSource,
+		}
+	}
+
 	newBucket, err := b.b.Update(ctx)
 	if err == nil {
 		b.b = newBucket

@@ -209,6 +209,81 @@ type BucketAttrs struct {
 	// the rules are not modified.  A bucket's rules can be removed by updating
 	// with an empty slice.
 	LifecycleRules []LifecycleRule
+
+	// The initial list (a JSON array) of CORS rules for this bucket.
+	// See CORS Rules (https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules) for an overview and the rule structure.
+	CORSRules []CORSRule
+
+	// The default Object Lock retention settings for this bucket. See Object Lock for an overview and the parameter structure.
+	// If specified, the existing default bucket retention settings will be replaced with the new settings. If not specified,
+	// the setting will remain unchanged. Setting the value requires the writeBucketRetentions capability and that the bucket is Object Lock-enabled.
+	// Object Lock: https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-native-api.
+	DefaultRetention string
+	// The default server-side encryption settings for this bucket. See Server-Side Encryption settings for new files uploaded to this bucket.
+	// This field is filtered based on application key capabilities; readBucketEncryption capability is required to access the value.
+	// See Server-Side Encryption for an overview and the parameter structure. If specified, the existing default bucket encryption settings will
+	// be replaced with the new settings. If not specified, the setting will remain unchanged. Setting the value requires the writeBucketEncryption
+	// capability. Server-Side Encryption settings: https://www.backblaze.com/docs/cloud-storage-enable-server-side-encryption-with-the-native-api.
+	DefaultServerSideEncryption *ServerSideEncryption
+
+	// If present, the Boolean value specifies whether the bucket has Object Lock enabled. Once Object Lock is enabled on a bucket, it cannot be disabled.
+	// A value of true will be accepted if you have writeBucketRetentions capability. But you cannot enable Object Lock on a restricted bucket
+	// (e.g. share buckets, snapshot) or on a bucket that contains source replication configuration.
+	// A value of false will only be accepted if the bucket does not have Object Lock enabled. After enabling Object Lock on a bucket containing files with
+	// metadata over the lower 2,048 byte limit, API requests to b2_update_file_retention and b2_update_file_legal_hold will be rejected. This is because
+	// setting file retention or legal hold on a file adds additional headers when the file is downloaded, for example, with b2_download_file_by_name.
+	// In such cases, you can use b2_copy_file with a REPLACE metadataDirective to copy the file, give it less metadata, and also specify the fileRetention
+	// and legalHold parameters. The original file can then be deleted with b2_delete_file_version.
+	// Object Lock: https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-native-api.
+	FileLockEnabled bool
+
+	// The configuration to create a Replication Rule. See Cloud Replication Rules. At least one of the asReplicationSource or asReplicationDestination
+	// parameters is required, but they can also both be present.
+	// NOTE: The first time that you configure Cloud Replication, complete the following tasks to ensure that you have the correct permission:
+	// 1. Verify your email address.
+	// 2. Have a payment history on file or make a payment.
+	ReplicationConfig *ReplicationConfiguration
+}
+
+// SetDefaultEncryption sets the bucket defaultServerSideEncryption to { "mode": "SSE-B2", "algorithm": "AES256" }
+// Must call Bucket.Update() to apply the change.
+func DefaultServerSideEncryption() *ServerSideEncryption {
+	return &ServerSideEncryption{
+		Mode:      "SSE-B2",
+		Algorithm: "AES256",
+	}
+}
+
+type ServerSideEncryption struct {
+	Mode      string `json:"mode"`
+	Algorithm string `json:"algorithm"`
+}
+
+type CORSRule struct {
+	Name              string
+	AllowedOrigins    []string
+	AllowedHeaders    []string
+	AllowedOperations []string
+	ExposeHeaders     []string
+	MaxAgeSeconds     int
+}
+
+type ReplicationConfiguration struct {
+	AsReplicationSource AsReplicationSource
+}
+
+type AsReplicationSource struct {
+	ReplicationRules       []ReplicationRules
+	SourceApplicationKeyID string
+}
+
+type ReplicationRules struct {
+	DestinationBucketID  string
+	FileNamePrefix       string
+	IncludeExistingFiles bool
+	IsEnabled            bool
+	Priority             int
+	ReplicationRuleName  string
 }
 
 // A LifecycleRule describes an object's life cycle, namely how many days after

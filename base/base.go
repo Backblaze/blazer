@@ -546,7 +546,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	headers := map[string]string{
 		"Authorization": b.authToken,
 	}
-	if err := b.opts.makeRequest(ctx, "b2_create_bucket", "POST", b.apiURI+b2types.V1api+"b2_create_bucket", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_create_bucket", "POST", b.apiURI+b2types.V3api+"b2_create_bucket", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var respRules []LifecycleRule
@@ -588,6 +588,12 @@ type Bucket struct {
 	ID             string
 	rev            int
 	b2             *B2
+
+	CORSRules                   []b2types.CORSRule
+	DefaultRetention            string
+	DefaultServerSideEncryption *b2types.ServerSideEncryption
+	FileLockEnabled             bool
+	ReplicationConfig           *b2types.ReplicationConfiguration
 }
 
 // Update wraps b2_update_bucket.
@@ -608,12 +614,18 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		Info:           b.Info,
 		LifecycleRules: rules,
 		IfRevisionIs:   b.rev,
+
+		CORSRules:                   b.CORSRules,
+		DefaultRetention:            b.DefaultRetention,
+		DefaultServerSideEncryption: b.DefaultServerSideEncryption,
+		FileLockEnabled:             b.FileLockEnabled,
+		ReplicationConfig:           b.ReplicationConfig,
 	}
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
 	b2resp := &b2types.UpdateBucketResponse{}
-	if err := b.b2.opts.makeRequest(ctx, "b2_update_bucket", "POST", b.b2.apiURI+b2types.V1api+"b2_update_bucket", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_update_bucket", "POST", b.b2.apiURI+b2types.V3api+"b2_update_bucket", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var respRules []LifecycleRule
