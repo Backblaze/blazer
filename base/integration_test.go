@@ -140,7 +140,7 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
-	// b2_update_bucket filelock configuration
+	// b2_update_bucket defaultRetention configuration
 	bucket.DefaultRetention = &b2types.Retention{
 		Mode: "governance",
 		Period: &b2types.RetentionPeriod{
@@ -159,6 +159,7 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
+	// b2_update_bucket corsRules configuration
 	bucket.CORSRules = []b2types.CORSRule{
 		{
 			Name:          "test",
@@ -188,6 +189,7 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
+	// b2_update_bucket replicationConfiguration
 	bucket.ReplicationConfig = &b2types.ReplicationConfiguration{
 		AsReplicationSource: b2types.AsReplicationSource{
 			SourceApplicationKeyID: "123456",
