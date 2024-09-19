@@ -268,7 +268,15 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.CORSRules = rules
 	}
 
-	b.b.DefaultRetention = attrs.DefaultRetention
+	if attrs.DefaultRetention != nil {
+		b.b.DefaultRetention = &b2types.Retention{
+			Mode: attrs.DefaultRetention.Mode,
+			Period: &b2types.RetentionPeriod{
+				Duration: attrs.DefaultRetention.Period.Duration,
+				Unit:     attrs.DefaultRetention.Period.Unit,
+			},
+		}
+	}
 
 	if attrs.DefaultServerSideEncryption != nil {
 		b.b.DefaultServerSideEncryption = &b2types.ServerSideEncryption{

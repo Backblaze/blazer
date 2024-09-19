@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/internal/b2types"
 	"github.com/Backblaze/blazer/x/transport"
 
 	"context"
@@ -108,6 +109,113 @@ func TestStorage(t *testing.T) {
 	}
 	if len(bucket.LifecycleRules) != 1 {
 		t.Errorf("%s: lifecycle rules: got %d rules, wanted 1", bucket.Name, len(bucket.LifecycleRules))
+	}
+
+	// b2_update_bucket enable encryption
+	bucket.DefaultServerSideEncryption = &b2types.ServerSideEncryption{
+		Mode:      "SSE-B2",
+		Algorithm: "AES256",
+	}
+
+	newBucket, err = bucket.Update(ctx)
+	if err != nil {
+		t.Errorf("%s: update bucket: %v", bucket.Name, err)
+		return
+	}
+	if newBucket.DefaultServerSideEncryption == nil {
+		t.Errorf("%s: bucket serverside encryption was nil, wanted: %v", bucket.Name, bucket.DefaultServerSideEncryption)
+		return
+	}
+
+	// b2_update_bucket filelock configuration
+	bucket.FileLockEnabled = true
+
+	newBucket, err = bucket.Update(ctx)
+	if err != nil {
+		t.Errorf("%s: update bucket: %v", bucket.Name, err)
+		return
+	}
+	if !newBucket.FileLockEnabled {
+		t.Errorf("%s: bucket fileLockEnabled was false, wanted true", bucket.Name)
+		return
+	}
+
+	// b2_update_bucket filelock configuration
+	bucket.DefaultRetention = &b2types.Retention{
+		Mode: "governance",
+		Period: &b2types.RetentionPeriod{
+			Duration: 1,
+			Unit:     "days",
+		},
+	}
+
+	newBucket, err = bucket.Update(ctx)
+	if err != nil {
+		t.Errorf("%s: update bucket: %v", bucket.Name, err)
+		return
+	}
+	if newBucket.DefaultRetention == nil {
+		t.Errorf("%s: bucket defaultRetention was nil, wanted %v", bucket.Name, bucket.DefaultRetention)
+		return
+	}
+
+	bucket.CORSRules = []b2types.CORSRule{
+		{
+			Name:          "test",
+			MaxAgeSeconds: 3600,
+			AllowedOrigins: []string{
+				"https://example.com",
+			},
+			AllowedHeaders: []string{
+				"Authorization",
+			},
+			AllowedOperations: []string{
+				"GET",
+			},
+			ExposeHeaders: []string{
+				"X-Custom-Header",
+			},
+		},
+	}
+
+	newBucket, err = bucket.Update(ctx)
+	if err != nil {
+		t.Errorf("%s: update bucket: %v", bucket.Name, err)
+		return
+	}
+	if len(newBucket.CORSRules) != 1 {
+		t.Errorf("%s: CORS rules: got %d rules, wanted 1", bucket.Name, len(bucket.CORSRules))
+		return
+	}
+
+	bucket.ReplicationConfig = &b2types.ReplicationConfiguration{
+		AsReplicationSource: b2types.AsReplicationSource{
+			SourceApplicationKeyID: "123456",
+			ReplicationRules: []b2types.ReplicationRules{
+				{
+					DestinationBucketID:  "789",
+					FileNamePrefix:       "test",
+					IncludeExistingFiles: true,
+					IsEnabled:            true,
+					Priority:             0,
+					ReplicationRuleName:  "test",
+				},
+			},
+		},
+	}
+
+	newBucket, err = bucket.Update(ctx)
+	if err != nil {
+		t.Errorf("%s: update bucket: %v", bucket.Name, err)
+		return
+	}
+	if newBucket.ReplicationConfig == nil {
+		t.Errorf("%s: bucket replicationConfiguration was nil, wanted %v", bucket.Name, bucket.ReplicationConfig)
+		return
+	}
+	if len(newBucket.ReplicationConfig.AsReplicationSource.ReplicationRules) != 1 {
+		t.Errorf("%s: CORS rules: got %d rules, wanted 1", bucket.Name, len(bucket.CORSRules))
+		return
 	}
 
 	// b2_list_buckets

@@ -93,9 +93,10 @@ type DeleteBucketRequest struct {
 }
 
 type ListBucketsRequest struct {
-	AccountID string `json:"accountId"`
-	Bucket    string `json:"bucketId,omitempty"`
-	Name      string `json:"bucketName,omitempty"`
+	AccountID   string   `json:"accountId"`
+	Bucket      string   `json:"bucketId,omitempty"`
+	Name        string   `json:"bucketName,omitempty"`
+	BucketTypes []string `json:"bucketTypes,omitempty"`
 }
 
 type ListBucketsResponse struct {
@@ -111,7 +112,7 @@ type UpdateBucketRequest struct {
 	IfRevisionIs   int               `json:"ifRevisionIs,omitempty"`
 
 	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
-	DefaultRetention            string                    `json:"defaultRetention,omitempty"`
+	DefaultRetention            *Retention                `json:"defaultRetention,omitempty"`
 	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
 	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`
 	ReplicationConfig           *ReplicationConfiguration `json:"replicationConfig,omitempty"`
@@ -310,6 +311,16 @@ type ListKeysResponse struct {
 type ServerSideEncryption struct {
 	Mode      string `json:"mode"`
 	Algorithm string `json:"algorithm"`
+}
+
+type Retention struct {
+	Mode   string           `json:"mode,omitempty"`
+	Period *RetentionPeriod `json:"period,omitempty"`
+}
+
+type RetentionPeriod struct {
+	Duration int    `json:"duration,omitempty"`
+	Unit     string `json:"unit,omitempty"`
 }
 
 type CORSRule struct {

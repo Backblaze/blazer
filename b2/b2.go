@@ -218,7 +218,7 @@ type BucketAttrs struct {
 	// If specified, the existing default bucket retention settings will be replaced with the new settings. If not specified,
 	// the setting will remain unchanged. Setting the value requires the writeBucketRetentions capability and that the bucket is Object Lock-enabled.
 	// Object Lock: https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-native-api.
-	DefaultRetention string
+	DefaultRetention *Retention
 	// The default server-side encryption settings for this bucket. See Server-Side Encryption settings for new files uploaded to this bucket.
 	// This field is filtered based on application key capabilities; readBucketEncryption capability is required to access the value.
 	// See Server-Side Encryption for an overview and the parameter structure. If specified, the existing default bucket encryption settings will
@@ -255,8 +255,8 @@ func DefaultServerSideEncryption() *ServerSideEncryption {
 }
 
 type ServerSideEncryption struct {
-	Mode      string `json:"mode"`
-	Algorithm string `json:"algorithm"`
+	Mode      string
+	Algorithm string
 }
 
 type CORSRule struct {
@@ -266,6 +266,16 @@ type CORSRule struct {
 	AllowedOperations []string
 	ExposeHeaders     []string
 	MaxAgeSeconds     int
+}
+
+type Retention struct {
+	Mode   string
+	Period *RetentionPeriod
+}
+
+type RetentionPeriod struct {
+	Duration int
+	Unit     string
 }
 
 type ReplicationConfiguration struct {

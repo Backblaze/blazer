@@ -590,7 +590,7 @@ type Bucket struct {
 	b2             *B2
 
 	CORSRules                   []b2types.CORSRule
-	DefaultRetention            string
+	DefaultRetention            *b2types.Retention
 	DefaultServerSideEncryption *b2types.ServerSideEncryption
 	FileLockEnabled             bool
 	ReplicationConfig           *b2types.ReplicationConfiguration
@@ -668,7 +668,7 @@ func (b *B2) ListBuckets(ctx context.Context, name string) ([]*Bucket, error) {
 	headers := map[string]string{
 		"Authorization": b.authToken,
 	}
-	if err := b.opts.makeRequest(ctx, "b2_list_buckets", "POST", b.apiURI+b2types.V1api+"b2_list_buckets", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_list_buckets", "POST", b.apiURI+b2types.V3api+"b2_list_buckets", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var buckets []*Bucket
