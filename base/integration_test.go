@@ -253,7 +253,7 @@ func TestStorage(t *testing.T) {
 	}
 
 	// b2_list_buckets
-	buckets, err := b2.ListBuckets(ctx, "")
+	buckets, err := b2.ListBuckets(ctx, "", "allPrivate", "allPublic")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +266,12 @@ func TestStorage(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("%s: new bucket not found", bname)
+	}
+
+	badBucketType := "badBucketType"
+	_, err = b2.ListBuckets(ctx, "", badBucketType)
+	if err == nil {
+		t.Errorf("ListBuckets with bucket type '%s' should fail", badBucketType)
 	}
 
 	buckets, err = b2.ListBuckets(ctx, bname)

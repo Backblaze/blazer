@@ -34,7 +34,7 @@ type b2RootInterface interface {
 	reauth(error) bool
 	reupload(error) bool
 	createBucket(context.Context, string, string, map[string]string, []LifecycleRule) (b2BucketInterface, error)
-	listBuckets(context.Context, string) ([]b2BucketInterface, error)
+	listBuckets(context.Context, string, ...string) ([]b2BucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error)
 	listKeys(context.Context, int, string) ([]b2KeyInterface, string, error)
 }
@@ -221,8 +221,8 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 	return &b2Bucket{bucket}, nil
 }
 
-func (b *b2Root) listBuckets(ctx context.Context, name string) ([]b2BucketInterface, error) {
-	buckets, err := b.b.ListBuckets(ctx, name)
+func (b *b2Root) listBuckets(ctx context.Context, name string, bucketTypes ...string) ([]b2BucketInterface, error) {
+	buckets, err := b.b.ListBuckets(ctx, name, bucketTypes...)
 	if err != nil {
 		return nil, err
 	}

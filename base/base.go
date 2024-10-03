@@ -681,11 +681,12 @@ func (b *Bucket) S3URL() string {
 
 // ListBuckets wraps b2_list_buckets.  If name is non-empty, only that bucket
 // will be returned if it exists; else nothing will be returned.
-func (b *B2) ListBuckets(ctx context.Context, name string) ([]*Bucket, error) {
+func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string) ([]*Bucket, error) {
 	b2req := &b2types.ListBucketsRequest{
-		AccountID: b.accountID,
-		Bucket:    b.bucket,
-		Name:      name,
+		AccountID:   b.accountID,
+		Bucket:      b.bucket,
+		Name:        name,
+		BucketTypes: bucketTypes,
 	}
 	b2resp := &b2types.ListBucketsResponse{}
 	headers := map[string]string{

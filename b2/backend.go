@@ -31,7 +31,7 @@ type beRootInterface interface {
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	reauthorizeAccount(context.Context) error
 	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (beBucketInterface, error)
-	listBuckets(context.Context, string) ([]beBucketInterface, error)
+	listBuckets(context.Context, string, ...string) ([]beBucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (beKeyInterface, error)
 	listKeys(context.Context, int, string) ([]beKeyInterface, string, error)
 }
@@ -209,11 +209,11 @@ func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[
 	return bi, nil
 }
 
-func (r *beRoot) listBuckets(ctx context.Context, name string) ([]beBucketInterface, error) {
+func (r *beRoot) listBuckets(ctx context.Context, name string, bucketTypes ...string) ([]beBucketInterface, error) {
 	var buckets []beBucketInterface
 	f := func() error {
 		g := func() error {
-			bs, err := r.b2i.listBuckets(ctx, name)
+			bs, err := r.b2i.listBuckets(ctx, name, bucketTypes...)
 			if err != nil {
 				return err
 			}
