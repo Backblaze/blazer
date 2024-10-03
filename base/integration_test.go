@@ -223,7 +223,7 @@ func TestStorage(t *testing.T) {
 	// b2_update_bucket replicationConfiguration
 	bucket.ReplicationConfiguration = &b2types.ReplicationConfiguration{
 		AsReplicationSource: &b2types.AsReplicationSource{
-			SourceApplicationKeyID: id,
+			KeyID: id,
 			ReplicationRules: []b2types.ReplicationRules{
 				{
 					DestinationBucketID:  targetBucket.ID,
