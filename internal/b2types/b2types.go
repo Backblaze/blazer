@@ -69,11 +69,11 @@ type CreateBucketResponse struct {
 	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
 	Revision       int               `json:"revision"`
 
-	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
-	DefaultRetention            string                    `json:"defaultRetention,omitempty"`
-	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
-	FileLockConfig              *FileLockConfiguration    `json:"fileLockConfiguration,omitempty"`
-	ReplicationConfig           *ReplicationConfiguration `json:"replicationConfig,omitempty"`
+	CORSRules                   []CORSRule                        `json:"corsRules,omitempty"`
+	DefaultRetention            string                            `json:"defaultRetention,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption             `json:"defaultServerSideEncryption,omitempty"`
+	FileLockConfig              *FileLockConfiguration            `json:"fileLockConfiguration,omitempty"`
+	ReplicationConfiguration    *ReplicationConfigurationResponse `json:"replicationConfiguration,omitempty"`
 }
 
 type FileLockConfiguration struct {
@@ -81,7 +81,10 @@ type FileLockConfiguration struct {
 	Val                      struct {
 		DefaultRetention struct {
 			Mode   *string `json:"mode"`
-			Period *string `json:"period"`
+			Period struct {
+				Duration int     `json:"duration"`
+				Unit     *string `json:"unit"`
+			} `json:"period"`
 		} `json:"defaultRetention"`
 		IsFileLockEnabled bool `json:"isFileLockEnabled"`
 	} `json:"value"`
@@ -115,7 +118,7 @@ type UpdateBucketRequest struct {
 	DefaultRetention            *Retention                `json:"defaultRetention,omitempty"`
 	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
 	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`
-	ReplicationConfig           *ReplicationConfiguration `json:"replicationConfig,omitempty"`
+	ReplicationConfiguration    *ReplicationConfiguration `json:"replicationConfiguration,omitempty"`
 }
 
 type UpdateBucketResponse CreateBucketResponse
@@ -332,13 +335,18 @@ type CORSRule struct {
 	MaxAgeSeconds     int      `json:"maxAgeSeconds,omitempty"`
 }
 
+type ReplicationConfigurationResponse struct {
+	IsClientAuthorizedToRead bool                      `json:"isClientAuthorizedToRead,omitempty"`
+	Value                    *ReplicationConfiguration `json:"value,omitempty"`
+}
+
 type ReplicationConfiguration struct {
-	AsReplicationSource AsReplicationSource `json:"asReplicationSource"`
+	AsReplicationSource *AsReplicationSource `json:"asReplicationSource,omitempty"`
 }
 
 type AsReplicationSource struct {
-	ReplicationRules       []ReplicationRules `json:"replicationRules"`
-	SourceApplicationKeyID string             `json:"sourceApplicationKeyId"`
+	ReplicationRules       []ReplicationRules `json:"replicationRules,omitempty"`
+	SourceApplicationKeyID string             `json:"sourceApplicationKeyId,omitempty"`
 }
 
 type ReplicationRules struct {

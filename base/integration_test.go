@@ -41,9 +41,10 @@ const (
 )
 
 const (
-	bucketName    = "base-tests"
-	smallFileName = "TeenyTiny"
-	largeFileName = "BigBytes"
+	bucketName       = "base-tests"
+	targetBucketName = "replication-target"
+	smallFileName    = "TeenyTiny"
+	largeFileName    = "BigBytes"
 )
 
 type zReader struct{}
@@ -159,10 +160,26 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
+	// Need to set retention mode back to null, since we'll be deleting files soon, and removing the object lock
+	// is not yet implemented in blazer
+	bucket.DefaultRetention = &b2types.Retention{
+		Mode: "", // "" maps to null because of omitEmpty
+	}
+
+	newBucket, err = bucket.Update(ctx)
+	if err != nil {
+		t.Errorf("%s: update bucket: %v", bucket.Name, err)
+		return
+	}
+	if newBucket.DefaultRetention != nil {
+		t.Errorf("%s: bucket defaultRetention was %v, wanted nil", bucket.Name, bucket.DefaultRetention)
+		return
+	}
+
 	// b2_update_bucket corsRules configuration
 	bucket.CORSRules = []b2types.CORSRule{
 		{
-			Name:          "test",
+			Name:          "test1234",
 			MaxAgeSeconds: 3600,
 			AllowedOrigins: []string{
 				"https://example.com",
@@ -171,7 +188,7 @@ func TestStorage(t *testing.T) {
 				"Authorization",
 			},
 			AllowedOperations: []string{
-				"GET",
+				"b2_upload_file",
 			},
 			ExposeHeaders: []string{
 				"X-Custom-Header",
@@ -189,18 +206,32 @@ func TestStorage(t *testing.T) {
 		return
 	}
 
+	// Need a real bucket ID etc. to create a replication rule
+	targetName := id + "-" + targetBucketName
+	targetBucket, err := b2.CreateBucket(ctx, targetName, "", m, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		// b2_delete_bucket
+		if err := targetBucket.DeleteBucket(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+
 	// b2_update_bucket replicationConfiguration
-	bucket.ReplicationConfig = &b2types.ReplicationConfiguration{
-		AsReplicationSource: b2types.AsReplicationSource{
-			SourceApplicationKeyID: "123456",
+	bucket.ReplicationConfiguration = &b2types.ReplicationConfiguration{
+		AsReplicationSource: &b2types.AsReplicationSource{
+			SourceApplicationKeyID: id,
 			ReplicationRules: []b2types.ReplicationRules{
 				{
-					DestinationBucketID:  "789",
+					DestinationBucketID:  targetBucket.ID,
 					FileNamePrefix:       "test",
 					IncludeExistingFiles: true,
 					IsEnabled:            true,
 					Priority:             0,
-					ReplicationRuleName:  "test",
+					ReplicationRuleName:  "test1234",
 				},
 			},
 		},
@@ -211,12 +242,13 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
-	if newBucket.ReplicationConfig == nil {
-		t.Errorf("%s: bucket replicationConfiguration was nil, wanted %v", bucket.Name, bucket.ReplicationConfig)
+	if newBucket.ReplicationConfiguration == nil {
+		t.Logf("newBucket: %v", newBucket)
+		t.Errorf("%s: bucket replicationConfiguration was nil, wanted %v", bucket.Name, bucket.ReplicationConfiguration)
 		return
 	}
-	if len(newBucket.ReplicationConfig.AsReplicationSource.ReplicationRules) != 1 {
-		t.Errorf("%s: CORS rules: got %d rules, wanted 1", bucket.Name, len(bucket.CORSRules))
+	if len(newBucket.ReplicationConfiguration.AsReplicationSource.ReplicationRules) != 1 {
+		t.Errorf("%s: replication rules: got %d rules, wanted 1", bucket.Name, len(bucket.CORSRules))
 		return
 	}
 
