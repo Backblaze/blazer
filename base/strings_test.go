@@ -1,7 +1,6 @@
 package base
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -34,19 +33,17 @@ func TestEncodeDecode(t *testing.T) {
 	}
 }
 
-// hook for go-fuzz: https://github.com/dvyukov/go-fuzz
-func Fuzz(data []byte) int {
-	orig := string(data)
-	escaped := escape(orig)
+func Fuzz(f *testing.F) {
+	f.Fuzz(func(t *testing.T, orig string) {
+		escaped := escape(orig)
 
-	unescaped, err := unescape(escaped)
-	if err != nil {
-		return 0
-	}
+		unescaped, err := unescape(escaped)
+		if err != nil {
+			t.Errorf("Can't unescape escaped string %q", escaped)
+		}
 
-	if unescaped != orig {
-		panic(fmt.Sprintf("unescaped: \"%#v\", != orig: \"%#v\"", unescaped, orig))
-	}
-
-	return 1
+		if unescaped != orig {
+			t.Errorf("Before: %q, after: %q", orig, unescaped)
+		}
+	})
 }

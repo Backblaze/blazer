@@ -26,6 +26,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -311,10 +312,18 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 	default:
 		method := req.Header.Get("X-Blazer-Method")
 		blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		// The following code will work regardless of whether err is an x509.UnknownAuthorityError
+		// (Go 1.19 and earlier) or a tls.CertificateVerificationError that wraps an
+		// x509.UnknownAuthorityError (Go 1.20 and later).
+		// See https://go.dev/doc/go1.20#cryptotlspkgcryptotls
 		switch err.(type) {
 		case x509.UnknownAuthorityError:
 			return nil, err
 		}
+		if errors.As(err, &x509.UnknownAuthorityError{}) {
+			return nil, err
+		}
+
 		return nil, b2err{
 			msg:   err.Error(),
 			retry: 1,
@@ -546,7 +555,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	headers := map[string]string{
 		"Authorization": b.authToken,
 	}
-	if err := b.opts.makeRequest(ctx, "b2_create_bucket", "POST", b.apiURI+b2types.V1api+"b2_create_bucket", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_create_bucket", "POST", b.apiURI+b2types.V3api+"b2_create_bucket", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var respRules []LifecycleRule
@@ -588,6 +597,12 @@ type Bucket struct {
 	ID             string
 	rev            int
 	b2             *B2
+
+	CORSRules                   []b2types.CORSRule
+	DefaultRetention            *b2types.Retention
+	DefaultServerSideEncryption *b2types.ServerSideEncryption
+	FileLockEnabled             bool
+	ReplicationConfiguration    *b2types.ReplicationConfiguration
 }
 
 // Update wraps b2_update_bucket.
@@ -608,12 +623,18 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		Info:           b.Info,
 		LifecycleRules: rules,
 		IfRevisionIs:   b.rev,
+
+		CORSRules:                   b.CORSRules,
+		DefaultRetention:            b.DefaultRetention,
+		DefaultServerSideEncryption: b.DefaultServerSideEncryption,
+		FileLockEnabled:             b.FileLockEnabled,
+		ReplicationConfiguration:    b.ReplicationConfiguration,
 	}
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
 	b2resp := &b2types.UpdateBucketResponse{}
-	if err := b.b2.opts.makeRequest(ctx, "b2_update_bucket", "POST", b.b2.apiURI+b2types.V1api+"b2_update_bucket", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_update_bucket", "POST", b.b2.apiURI+b2types.V3api+"b2_update_bucket", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var respRules []LifecycleRule
@@ -624,14 +645,28 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
 		})
 	}
-	return &Bucket{
-		Name:           b.Name,
-		Type:           b2resp.Type,
-		Info:           b2resp.Info,
-		LifecycleRules: respRules,
-		ID:             b2resp.BucketID,
-		b2:             b.b2,
-	}, nil
+	updated := &Bucket{
+		Name:                        b.Name,
+		Type:                        b2resp.Type,
+		Info:                        b2resp.Info,
+		LifecycleRules:              respRules,
+		ID:                          b2resp.BucketID,
+		b2:                          b.b2,
+		CORSRules:                   b2resp.CORSRules,
+		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption,
+		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
+		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
+	}
+	if b2resp.FileLockConfig.Val.DefaultRetention.Mode != nil {
+		updated.DefaultRetention = &b2types.Retention{}
+		updated.DefaultRetention.Mode = *b2resp.FileLockConfig.Val.DefaultRetention.Mode
+		updated.DefaultRetention.Period = &b2types.RetentionPeriod{
+			Duration: b2resp.FileLockConfig.Val.DefaultRetention.Period.Duration,
+			Unit:     *b2resp.FileLockConfig.Val.DefaultRetention.Period.Unit,
+		}
+	}
+
+	return updated, nil
 }
 
 // BaseURL returns the base part of the download URLs.
@@ -656,7 +691,7 @@ func (b *B2) ListBuckets(ctx context.Context, name string) ([]*Bucket, error) {
 	headers := map[string]string{
 		"Authorization": b.authToken,
 	}
-	if err := b.opts.makeRequest(ctx, "b2_list_buckets", "POST", b.apiURI+b2types.V1api+"b2_list_buckets", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_list_buckets", "POST", b.apiURI+b2types.V3api+"b2_list_buckets", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var buckets []*Bucket

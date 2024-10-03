@@ -20,6 +20,7 @@ package b2types
 
 const (
 	V1api = "/b2api/v1/"
+	V3api = "/b2api/v3/"
 )
 
 type ErrorMessage struct {
@@ -67,6 +68,26 @@ type CreateBucketResponse struct {
 	Info           map[string]string `json:"bucketInfo"`
 	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
 	Revision       int               `json:"revision"`
+
+	CORSRules                   []CORSRule                        `json:"corsRules,omitempty"`
+	DefaultRetention            string                            `json:"defaultRetention,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption             `json:"defaultServerSideEncryption,omitempty"`
+	FileLockConfig              *FileLockConfiguration            `json:"fileLockConfiguration,omitempty"`
+	ReplicationConfiguration    *ReplicationConfigurationResponse `json:"replicationConfiguration,omitempty"`
+}
+
+type FileLockConfiguration struct {
+	IsClientAuthorizedToRead bool `json:"isClientAuthorizedToRead"`
+	Val                      struct {
+		DefaultRetention struct {
+			Mode   *string `json:"mode"`
+			Period struct {
+				Duration int     `json:"duration"`
+				Unit     *string `json:"unit"`
+			} `json:"period"`
+		} `json:"defaultRetention"`
+		IsFileLockEnabled bool `json:"isFileLockEnabled"`
+	} `json:"value"`
 }
 
 type DeleteBucketRequest struct {
@@ -75,9 +96,10 @@ type DeleteBucketRequest struct {
 }
 
 type ListBucketsRequest struct {
-	AccountID string `json:"accountId"`
-	Bucket    string `json:"bucketId,omitempty"`
-	Name      string `json:"bucketName,omitempty"`
+	AccountID   string   `json:"accountId"`
+	Bucket      string   `json:"bucketId,omitempty"`
+	Name        string   `json:"bucketName,omitempty"`
+	BucketTypes []string `json:"bucketTypes,omitempty"`
 }
 
 type ListBucketsResponse struct {
@@ -91,6 +113,12 @@ type UpdateBucketRequest struct {
 	Info           map[string]string `json:"bucketInfo,omitempty"`
 	LifecycleRules []LifecycleRule   `json:"lifecycleRules,omitempty"`
 	IfRevisionIs   int               `json:"ifRevisionIs,omitempty"`
+
+	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
+	DefaultRetention            *Retention                `json:"defaultRetention,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
+	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`
+	ReplicationConfiguration    *ReplicationConfiguration `json:"replicationConfiguration,omitempty"`
 }
 
 type UpdateBucketResponse CreateBucketResponse
@@ -281,4 +309,51 @@ type ListKeysRequest struct {
 type ListKeysResponse struct {
 	Keys []Key  `json:"keys"`
 	Next string `json:"nextApplicationKeyId"`
+}
+
+type ServerSideEncryption struct {
+	Mode      string `json:"mode"`
+	Algorithm string `json:"algorithm"`
+}
+
+type Retention struct {
+	Mode   string           `json:"mode,omitempty"`
+	Period *RetentionPeriod `json:"period,omitempty"`
+}
+
+type RetentionPeriod struct {
+	Duration int    `json:"duration,omitempty"`
+	Unit     string `json:"unit,omitempty"`
+}
+
+type CORSRule struct {
+	Name              string   `json:"corsRuleName,omitempty"`
+	AllowedOrigins    []string `json:"allowedOrigins,omitempty"`
+	AllowedHeaders    []string `json:"allowedHeaders,omitempty"`
+	AllowedOperations []string `json:"allowedOperations,omitempty"`
+	ExposeHeaders     []string `json:"exposeHeaders,omitempty"`
+	MaxAgeSeconds     int      `json:"maxAgeSeconds,omitempty"`
+}
+
+type ReplicationConfigurationResponse struct {
+	IsClientAuthorizedToRead bool                      `json:"isClientAuthorizedToRead,omitempty"`
+	Value                    *ReplicationConfiguration `json:"value,omitempty"`
+}
+
+type ReplicationConfiguration struct {
+	AsReplicationSource *AsReplicationSource `json:"asReplicationSource,omitempty"`
+}
+
+type AsReplicationSource struct {
+	ReplicationRules       []ReplicationRules `json:"replicationRules,omitempty"`
+	SourceApplicationKeyID string             `json:"sourceApplicationKeyId,omitempty"`
+}
+
+type ReplicationRules struct {
+	DestinationBucketID  string `json:"destinationBucketId"`
+	FileNamePrefix       string `json:"fileNamePrefix"`
+	IncludeExistingFiles bool   `json:"includeExistingFiles"`
+	IsEnabled            bool   `json:"isEnabled"`
+	Priority             int    `json:"priority"`
+	ReplicationRuleName  string `json:"replicationRuleName"`
 }
