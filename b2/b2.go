@@ -421,8 +421,8 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 }
 
 // ListBuckets returns all the available buckets.
-func (c *Client) ListBuckets(ctx context.Context) ([]*Bucket, error) {
-	bs, err := c.backend.listBuckets(ctx, "")
+func (c *Client) ListBuckets(ctx context.Context, bucketTypes ...string) ([]*Bucket, error) {
+	bs, err := c.backend.listBuckets(ctx, "", bucketTypes...)
 	if err != nil {
 		return nil, err
 	}
