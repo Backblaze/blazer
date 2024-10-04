@@ -21,8 +21,6 @@ agree to the following for your present and future Contributions.
    users of the Backblaze open source software, You reserve all right, title, and
    interest in and to your Contributions.
 
-### Code reviews
-
 ## Bug Reports & Feature Requests
 
 Bug reports and feature requests are really helpful. Head over to
