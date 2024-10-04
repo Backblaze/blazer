@@ -187,6 +187,7 @@ func (t *testBucket) listFileNames(ctx context.Context, count int, cont, pfx, de
 		b = append(b, &testFile{
 			n:     f[i],
 			s:     int64(len(t.files[f[i]])),
+			a:     "upload",
 			files: t.files,
 		})
 		if i+1 < len(f) {
@@ -251,6 +252,7 @@ func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ s
 	return &testFile{
 		n:     name,
 		s:     int64(len(t.files[name])),
+		a:     "upload",
 		files: t.files,
 	}, nil
 }
@@ -273,6 +275,7 @@ func (t *testLargeFile) finishLargeFile(context.Context) (b2FileInterface, error
 	return &testFile{
 		n:     t.name,
 		s:     int64(len(total)),
+		a:     "upload",
 		files: t.files,
 	}, nil
 }

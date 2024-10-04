@@ -245,7 +245,7 @@ type BucketAttrs struct {
 	ReplicationConfig *ReplicationConfiguration
 }
 
-// SetDefaultEncryption sets the bucket defaultServerSideEncryption to { "mode": "SSE-B2", "algorithm": "AES256" }
+// DefaultServerSideEncryption sets the bucket defaultServerSideEncryption to { "mode": "SSE-B2", "algorithm": "AES256" }
 // Must call Bucket.Update() to apply the change.
 func DefaultServerSideEncryption() *ServerSideEncryption {
 	return &ServerSideEncryption{
@@ -663,12 +663,36 @@ func (o *Object) ensure(ctx context.Context) error {
 	return nil
 }
 
-// Delete removes the given object.
+// Delete removes the given object, if it is a regular file or hide marker
 func (o *Object) Delete(ctx context.Context) error {
 	if err := o.ensure(ctx); err != nil {
 		return err
 	}
-	return o.f.deleteFileVersion(ctx)
+	status := o.f.status()
+	if status == "upload" || status == "hide" {
+		return o.f.deleteFileVersion(ctx)
+	} else {
+		return fmt.Errorf("%s is not a regular file or hide marker: %s", o.name, status)
+	}
+}
+
+// Cancel cancels a large file upload
+func (o *Object) Cancel(ctx context.Context) error {
+	if err := o.ensure(ctx); err != nil {
+		return err
+	}
+	status := o.f.status()
+	if status == "start" {
+		// b2.List allows you to iterate through b2.Object structs, which each contain a beFileInterface.
+		// However, we need a beLargeFileInterface to call b2.cancel, so just create a new beLargeFileInterface
+		// that contains all the same fields as the beFileInterface.
+		// This isn't great, but the alternative, making large files a kind of file, or having files and
+		// large files have a common parent, seems to introduce unworkable complexity
+		lf := o.f.AsLargeFile()
+		return lf.cancel(ctx)
+	} else {
+		return fmt.Errorf("%s is not an unfinished large file: %s", o.name, status)
+	}
 }
 
 // Hide hides the object from name-based listing.

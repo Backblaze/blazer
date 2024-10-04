@@ -27,3 +27,9 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+# Binaries
+cleanup
+simple
+b2keys
+bonfire

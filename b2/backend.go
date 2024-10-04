@@ -86,6 +86,7 @@ type beFileInterface interface {
 	getFileInfo(context.Context) (beFileInfoInterface, error)
 	listParts(context.Context, int, int) ([]beFilePartInterface, int, error)
 	compileParts(int64, map[int]string) beLargeFileInterface
+	AsLargeFile() beLargeFileInterface
 }
 
 type beFile struct {
@@ -618,6 +619,17 @@ func (b *beFile) compileParts(size int64, seen map[int]string) beLargeFileInterf
 	return &beLargeFile{
 		b2largeFile: b.b2file.compileParts(size, seen),
 		ri:          b.ri,
+	}
+}
+
+// AsLargeFile returns a beLargeFileInterface with the same fields as this beFile
+func (b *beFile) AsLargeFile() beLargeFileInterface {
+	b2file := b.b2file.(*b2File)
+	return &beLargeFile{
+		b2largeFile: &b2LargeFile{
+			b: b2file.b.AsLargeFile(),
+		},
+		ri: b.ri,
 	}
 }
 

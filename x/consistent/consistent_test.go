@@ -3,6 +3,7 @@ package consistent
 import (
 	"context"
 	"io/ioutil"
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -18,6 +19,16 @@ const (
 	apiKey     = "B2_SECRET_KEY"
 	bucketName = "consistobucket"
 )
+
+// consistent is an experimental package, not currently maintained, with some tests that are flaky.
+// Skip all tests in the package unless the env var BLAZER_TEST_CONSISTENT is set.
+func TestMain(m *testing.M) {
+	if os.Getenv("BLAZER_TEST_CONSISTENT") == "" {
+		log.Print("Skipping x/consistent/consistent_test.go. Set BLAZER_TEST_CONSISTENT to include these tests.")
+	} else {
+		m.Run()
+	}
+}
 
 func TestOperationLive(t *testing.T) {
 	ctx := context.Background()

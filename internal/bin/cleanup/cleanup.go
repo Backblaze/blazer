@@ -43,7 +43,7 @@ func main() {
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
-			fmt.Println("removing", name)
+			fmt.Println("removing bucket", name)
 			if err := killBucket(ctx, client, name); err != nil {
 				fmt.Println(err)
 			}
@@ -63,7 +63,20 @@ func killBucket(ctx context.Context, client *b2.Client, name string) error {
 	defer bucket.Delete(ctx)
 	iter := bucket.List(ctx, b2.ListHidden())
 	for iter.Next() {
-		if err := iter.Object().Delete(ctx); err != nil {
+		o := iter.Object()
+		fmt.Println("deleting file", o.Name())
+		if err := o.Delete(ctx); err != nil {
+			fmt.Println(err)
+		}
+	}
+	if err = iter.Err(); err != nil {
+		return err
+	}
+	iter = bucket.List(ctx, b2.ListUnfinished())
+	for iter.Next() {
+		o := iter.Object()
+		fmt.Println("canceling file", o.Name())
+		if err := o.Cancel(ctx); err != nil {
 			fmt.Println(err)
 		}
 	}
