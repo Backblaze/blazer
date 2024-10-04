@@ -19,7 +19,6 @@ package b2types
 // file.  Wouldn't that be amazing?  That would be amazing.
 
 const (
-	V1api = "/b2api/v1/"
 	V3api = "/b2api/v3/"
 )
 
@@ -29,22 +28,38 @@ type ErrorMessage struct {
 	Msg    string `json:"message"`
 }
 
+type StorageAPIInfo struct {
+	AbsMinPartSize int      `json:"absoluteMinimumPartSize"`
+	URI            string   `json:"apiUrl"`
+	Bucket         string   `json:"bucketId"`
+	Name           string   `json:"bucketName"`
+	Capabilities   []string `json:"capabilities"`
+	DownloadURI    string   `json:"downloadUrl"`
+	Type           string   `json:"storageApi"`
+	Prefix         string   `json:"namePrefix"`
+	PartSize       int      `json:"recommendedPartSize"`
+	S3URI          string   `json:"s3ApiUrl"`
+}
+
+type GroupsAPIInfo struct {
+	Capabilities []string `json:"capabilities"`
+	URI          string   `json:"groupsApiUrl"`
+	Type         string   `json:"storageApi"`
+}
+
+type APIInfo struct {
+	StorageAPIInfo *StorageAPIInfo `json:"storageApi,omitempty"`
+	GroupsAPIInfo  *GroupsAPIInfo  `json:"groupsApi,omitempty"`
+}
+
 type AuthorizeAccountResponse struct {
-	AccountID      string    `json:"accountId"`
-	AuthToken      string    `json:"authorizationToken"`
-	URI            string    `json:"apiUrl"`
-	S3URI          string    `json:"s3ApiUrl"`
-	DownloadURI    string    `json:"downloadUrl"`
-	MinPartSize    int       `json:"minimumPartSize"`
-	PartSize       int       `json:"recommendedPartSize"`
-	AbsMinPartSize int       `json:"absoluteMinimumPartSize"`
-	Allowed        Allowance `json:"allowed"`
+	AccountID     string   `json:"accountId"`
+	KeyExpiration int64    `json:"applicationKeyExpirationTimestamp"`
+	APIInfo       *APIInfo `json:"apiInfo"`
+	AuthToken     string   `json:"authorizationToken"`
 }
 
 type Allowance struct {
-	Capabilities []string `json:"capabilities"`
-	Bucket       string   `json:"bucketId"`
-	Prefix       string   `json:"namePrefix"`
 }
 
 type LifecycleRule struct {
@@ -341,12 +356,17 @@ type ReplicationConfigurationResponse struct {
 }
 
 type ReplicationConfiguration struct {
-	AsReplicationSource *AsReplicationSource `json:"asReplicationSource,omitempty"`
+	AsReplicationSource      *AsReplicationSource      `json:"asReplicationSource,omitempty"`
+	AsReplicationDestination *AsReplicationDestination `json:"asReplicationDestination,omitempty"`
 }
 
 type AsReplicationSource struct {
-	ReplicationRules       []ReplicationRules `json:"replicationRules,omitempty"`
-	SourceApplicationKeyID string             `json:"sourceApplicationKeyId,omitempty"`
+	ReplicationRules []ReplicationRules `json:"replicationRules,omitempty"`
+	KeyID            string             `json:"sourceApplicationKeyId,omitempty"`
+}
+
+type AsReplicationDestination struct {
+	SourceToDestinationKeyMapping map[string]string `json:"sourceToDestinationKeyMapping,omitempty"`
 }
 
 type ReplicationRules struct {

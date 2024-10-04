@@ -289,8 +289,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 
 	if b.b.ReplicationConfiguration != nil {
 		asRepSource := b2types.AsReplicationSource{
-			SourceApplicationKeyID: attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID,
-			ReplicationRules:       make([]b2types.ReplicationRules, len(attrs.ReplicationConfig.AsReplicationSource.ReplicationRules)),
+			KeyID:            attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID,
+			ReplicationRules: make([]b2types.ReplicationRules, len(attrs.ReplicationConfig.AsReplicationSource.ReplicationRules)),
 		}
 
 		for i, rule := range attrs.ReplicationConfig.AsReplicationSource.ReplicationRules {
