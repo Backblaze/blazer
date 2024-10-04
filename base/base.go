@@ -772,7 +772,12 @@ type File struct {
 // File returns a bare File struct, but with the appropriate id and b2
 // interfaces.
 func (b *Bucket) File(id, name string) *File {
-	return &File{ID: id, b2: b.b2, Name: name}
+	return &File{
+		Name:   name,
+		Status: "upload", // Default to regular file
+		ID:     id,
+		b2:     b.b2,
+	}
 }
 
 // UploadFile wraps b2_upload_file.
@@ -1024,6 +1029,7 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 	for _, f := range b2resp.Files {
 		files = append(files, &File{
 			Name:      f.Name,
+			Status:    f.Action,
 			Timestamp: millitime(f.Timestamp),
 			b2:        b.b2,
 			ID:        f.FileID,
@@ -1291,6 +1297,14 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 	return f.Info, nil
 }
 
+// AsLargeFile return a LargeFile with the same fields as this File
+func (f *File) AsLargeFile() *LargeFile {
+	return &LargeFile{
+		ID: f.ID,
+		b2: f.b2,
+	}
+}
+
 // Key is a B2 application key.
 type Key struct {
 	ID           string
@@ -1356,11 +1370,10 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 	var keys []*Key
 	for _, key := range b2resp.Keys {
 		keys = append(keys, &Key{
-			Name:         key.Name,
-			ID:           key.ID,
-			Capabilities: key.Capabilities,
-			Expires:      millitime(key.Expires),
-			b2:           b,
+			Name:    key.Name,
+			ID:      key.ID,
+			Expires: millitime(key.Expires),
+			b2:      b,
 		})
 	}
 	return keys, b2resp.Next, nil

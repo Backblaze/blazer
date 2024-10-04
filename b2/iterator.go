@@ -33,17 +33,18 @@ func (b *Bucket) List(ctx context.Context, opts ...ListOption) *ObjectIterator {
 	return o
 }
 
-// ObjectIterator abtracts away the tricky bits of iterating over a bucket's
+// ObjectIterator abstracts away the tricky bits of iterating over a bucket's
 // contents.
 //
 // It is intended to be called in a loop:
-//  for iter.Next() {
-//    obj := iter.Object()
-//    // act on obj
-//  }
-//  if err := iter.Err(); err != nil {
-//    // handle err
-//  }
+//
+//	for iter.Next() {
+//	  obj := iter.Object()
+//	  // act on obj
+//	}
+//	if err := iter.Err(); err != nil {
+//	  // handle err
+//	}
 type ObjectIterator struct {
 	bucket *Bucket
 	ctx    context.Context
@@ -155,7 +156,7 @@ type objectIteratorOptions struct {
 	locker     sync.Locker
 }
 
-// A ListOption alters the default behavor of List.
+// A ListOption alters the default behavior of List.
 type ListOption func(*objectIteratorOptions)
 
 // ListHidden will include hidden objects in the output.
@@ -257,11 +258,15 @@ func (b *Bucket) listObjects(ctx context.Context, count int, c *cursor) ([]*Obje
 	}
 	var objects []*Object
 	for _, f := range fs {
-		objects = append(objects, &Object{
-			name: f.name(),
-			f:    f,
-			b:    b,
-		})
+		// b2_list_file_versions returns unfinished large files ("start"), but we're only interested in
+		// regular ("upload") and hidden ("hide") files.
+		if f.status() == "upload" || f.status() == "hide" {
+			objects = append(objects, &Object{
+				name: f.name(),
+				f:    f,
+				b:    b,
+			})
+		}
 	}
 	var rtnErr error
 	if len(objects) == 0 || next == nil {

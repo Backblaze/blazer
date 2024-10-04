@@ -1340,6 +1340,15 @@ func startLiveTest(ctx context.Context, t *testing.T) (*Bucket, func()) {
 		if err := iter.Err(); err != nil && !IsNotExist(err) {
 			t.Errorf("%#v", err)
 		}
+		iter = bucket.List(ctx, ListUnfinished())
+		for iter.Next() {
+			if err := iter.Object().Cancel(ctx); err != nil {
+				t.Error(err)
+			}
+		}
+		if err := iter.Err(); err != nil && !IsNotExist(err) {
+			t.Errorf("%#v", err)
+		}
 		if err := bucket.Delete(ctx); err != nil && !IsNotExist(err) {
 			t.Error(err)
 		}
