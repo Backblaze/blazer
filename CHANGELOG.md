@@ -9,19 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Nothing at present
 
+## [0.7.0] - 2024-10-04
+
+### Added
+
+- Can now specify bucket type when listing buckets
+- Can now get and set default encryption configuration, object lock, CORS rules, etc on bucket ([djenriquez](https://github.com/djenriquez))
+- Can now get the S3 API URL from a bucket ([celskeggs](https://github.com/celskeggs))
+
+### Fixed
+
+- The `cleanup` utility now successfully deletes test files and buckets after an interrupted test run
+
+### Changed
+
+- Migrated to Backblaze B2 Native API v3 
+
 ## [0.6.1] - 2023-10-16
 
 ### Added
 
-- `go.mod` file, license report
+- `go.mod` file, license report ([tzeejay](https://github.com/tzeejay))
 
 ### Fixed
 
-- Resolve import errors 
+- Resolve import errors ([tzeejay](https://github.com/tzeejay))
 
 ### Changed
 
-- Reference license report from README
+- Reference license report from README ([tzeejay](https://github.com/tzeejay))
 
 ## [0.6.0] - 2023-09-26
 
