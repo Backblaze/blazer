@@ -15,6 +15,12 @@ const (
 	apiKey = "B2_SECRET_KEY"
 )
 
+var bucketNameSuffixes = [...]string{
+	"consistobucket",
+	"base-tests",
+	"replication-target",
+}
+
 func main() {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
@@ -33,9 +39,13 @@ func main() {
 	for _, bucket := range buckets {
 		if strings.HasPrefix(bucket.Name(), fmt.Sprintf("%s-b2-tests-", id)) {
 			kill = append(kill, bucket.Name())
-		}
-		if bucket.Name() == fmt.Sprintf("%s-consistobucket", id) || bucket.Name() == fmt.Sprintf("%s-base-tests", id) {
-			kill = append(kill, bucket.Name())
+		} else {
+			for _, suffix := range bucketNameSuffixes {
+				if bucket.Name() == fmt.Sprintf("%s-%s", id, suffix) {
+					kill = append(kill, bucket.Name())
+					break
+				}
+			}
 		}
 	}
 	var wg sync.WaitGroup
