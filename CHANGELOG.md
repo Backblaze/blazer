@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Nothing at present
 
+## [0.7.1] - 2024-10-07
+
+### Fixed
+
+- The `cleanup` utility now deletes the `replication-target` test bucket
+
+### Changed
+
+- Bumped dependencies in response to dependabot alerts
+
 ## [0.7.0] - 2024-10-04
 
 ### Added
