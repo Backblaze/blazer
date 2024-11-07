@@ -1105,6 +1105,46 @@ func TestWriterReturnsError(t *testing.T) {
 	}
 }
 
+func TestWriterLimitNewUploadAttempts(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	concurrentUploads := 4
+	retryCount := 5
+	errorCount := concurrentUploads * (retryCount + 1)
+
+	errorMap := make(map[int]error, errorCount)
+	for i := 0; i < errorCount; i++ {
+		errorMap[i] = testError{reupload: true}
+	}
+
+	client := &Client{
+		backend: &beRoot{
+			b2i: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadPart": errorMap,
+					},
+				},
+			},
+		},
+	}
+
+	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := bucket.Object("test").NewWriter(ctx)
+	r := io.LimitReader(zReader{}, 1e7)
+	w.ChunkSize = 1e4
+	w.ConcurrentUploads = concurrentUploads
+	if _, err := io.Copy(w, r); err == nil {
+		t.Fatalf("io.Copy: should have returned an error")
+	}
+}
+
 func TestFileBuffer(t *testing.T) {
 	r := io.LimitReader(zReader{}, 1e8)
 	w, err := newFileBuffer("")
