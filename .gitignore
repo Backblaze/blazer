@@ -27,6 +27,6 @@ _testmain.go
 *.prof
 
 # Binaries
-cleanup
-simple
-b2keys
+/cleanup
+/simple
+/b2keys
