@@ -175,7 +175,7 @@ func mkErr(resp *http.Response) error {
 
 // MaxRetries returns an appropriate amount of retries, given a method
 // and an error if any was returned by the server.
-func MaxRetries(err error) int {
+func MaxRetries(err error) uint {
 	e, ok := err.(b2err)
 	if !ok {
 		return 0

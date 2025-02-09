@@ -41,7 +41,7 @@ var gmux = &sync.Mutex{}
 type testError struct {
 	retry      bool
 	backoff    time.Duration
-	maxRetries int
+	maxRetries uint
 	reauth     bool
 	reupload   bool
 }
@@ -80,21 +80,29 @@ func (t *testRoot) backoff(err error) time.Duration {
 	if !ok {
 		return 0
 	}
-	if !t.transient(err) {
+	if !t.retry(err) {
 		return 0
 	}
 	return e.backoff
 }
 
-func (t *testRoot) maxRetries(err error) int {
+func (t *testRoot) maxRetries(err error) uint {
 	e, ok := err.(testError)
 	if !ok {
 		return 0
 	}
-	if !t.transient(err) {
+	if !t.retry(err) {
 		return 0
 	}
 	return e.maxRetries
+}
+
+func (t *testRoot) retry(err error) bool {
+	e, ok := err.(testError)
+	if !ok {
+		return false
+	}
+	return e.retry || e.reupload || e.backoff > 0
 }
 
 func (t *testRoot) reauth(err error) bool {
@@ -111,14 +119,6 @@ func (t *testRoot) reupload(err error) bool {
 		return false
 	}
 	return e.reupload
-}
-
-func (t *testRoot) transient(err error) bool {
-	e, ok := err.(testError)
-	if !ok {
-		return false
-	}
-	return e.retry || e.reupload || e.backoff > 0
 }
 
 func (t *testRoot) createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error) {
