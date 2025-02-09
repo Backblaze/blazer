@@ -39,14 +39,15 @@ const (
 var gmux = &sync.Mutex{}
 
 type testError struct {
-	retry    bool
-	backoff  time.Duration
-	reauth   bool
-	reupload bool
+	retry      bool
+	backoff    time.Duration
+	maxRetries int
+	reauth     bool
+	reupload   bool
 }
 
 func (t testError) Error() string {
-	return fmt.Sprintf("retry %v; backoff %v; reauth %v; reupload %v", t.retry, t.backoff, t.reauth, t.reupload)
+	return fmt.Sprintf("retry %v; backoff %v; maxRetries %v; reauth %v; reupload %v", t.retry, t.backoff, t.maxRetries, t.reauth, t.reupload)
 }
 
 type errCont struct {
@@ -79,7 +80,21 @@ func (t *testRoot) backoff(err error) time.Duration {
 	if !ok {
 		return 0
 	}
+	if !t.transient(err) {
+		return 0
+	}
 	return e.backoff
+}
+
+func (t *testRoot) maxRetries(err error) int {
+	e, ok := err.(testError)
+	if !ok {
+		return 0
+	}
+	if !t.transient(err) {
+		return 0
+	}
+	return e.maxRetries
 }
 
 func (t *testRoot) reauth(err error) bool {
@@ -493,8 +508,8 @@ func TestBackoff(t *testing.T) {
 				errs: &errCont{
 					errMap: map[string]map[int]error{
 						"createBucket": {
-							0: testError{backoff: time.Second},
-							1: testError{backoff: 2 * time.Second},
+							0: testError{backoff: time.Second, maxRetries: 5},
+							1: testError{backoff: 2 * time.Second, maxRetries: 5},
 						},
 					},
 				},
@@ -507,7 +522,7 @@ func TestBackoff(t *testing.T) {
 				errs: &errCont{
 					errMap: map[string]map[int]error{
 						"getUploadURL": {
-							0: testError{retry: true},
+							0: testError{retry: true, maxRetries: 5},
 						},
 					},
 				},
@@ -563,8 +578,8 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 		errs: &errCont{
 			errMap: map[string]map[int]error{
 				"createBucket": {
-					0: testError{retry: true},
-					1: testError{retry: true},
+					0: testError{retry: true, maxRetries: 5},
+					1: testError{retry: true, maxRetries: 5},
 				},
 			},
 		},
@@ -580,6 +595,70 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	if len(calls) != 2 {
 		t.Errorf("wrong number of backoff calls; got %d, want 2", len(calls))
 	}
+}
+
+func TestBackoffWithMaxRetriesReached(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		calls = append(calls, d)
+		return ch
+	}
+
+	table := []struct {
+		root *testRoot
+		want int
+	}{
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"createBucket": {
+							0: testError{retry: true, maxRetries: 2},
+							1: testError{retry: true, maxRetries: 2},
+							2: testError{retry: true, maxRetries: 2},
+						},
+					},
+				},
+			},
+			want: 2,
+		},
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"createBucket": {
+							0: testError{retry: true, maxRetries: 0},
+						},
+					},
+				},
+			},
+			want: 0,
+		},
+	}
+
+	for _, ent := range table {
+		client := &Client{
+			backend: &beRoot{
+				b2i: ent.root,
+			},
+		}
+		if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err == nil {
+			t.Fatalf("bucket should err")
+		}
+		if len(calls) != ent.want {
+			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		}
+		calls = nil
+	}
+
 }
 
 type badTransport struct{}

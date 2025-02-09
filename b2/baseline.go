@@ -31,6 +31,7 @@ type b2RootInterface interface {
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	transient(error) bool
 	backoff(error) time.Duration
+	maxRetries(error) int
 	reauth(error) bool
 	reupload(error) bool
 	createBucket(context.Context, string, string, map[string]string, []LifecycleRule) (b2BucketInterface, error)
@@ -186,11 +187,15 @@ func (b *b2Root) authorizeAccount(ctx context.Context, account, key string, c cl
 	return nil
 }
 
-func (*b2Root) backoff(err error) time.Duration {
-	if base.Action(err) != base.Retry {
+func (b *b2Root) backoff(err error) time.Duration {
+	if !b.transient(err) {
 		return 0
 	}
 	return base.Backoff(err)
+}
+
+func (b *b2Root) maxRetries(err error) int {
+	return base.MaxRetries(err)
 }
 
 func (*b2Root) reauth(err error) bool {

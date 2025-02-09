@@ -25,6 +25,7 @@ import (
 
 type beRootInterface interface {
 	backoff(error) time.Duration
+	maxRetries(error) int
 	reauth(error) bool
 	transient(error) bool
 	reupload(error) bool
@@ -167,6 +168,7 @@ type beKey struct {
 }
 
 func (r *beRoot) backoff(err error) time.Duration { return r.b2i.backoff(err) }
+func (r *beRoot) maxRetries(err error) int        { return r.b2i.maxRetries(err) }
 func (r *beRoot) reauth(err error) bool           { return r.b2i.reauth(err) }
 func (r *beRoot) reupload(err error) bool         { return r.b2i.reupload(err) }
 func (r *beRoot) transient(err error) bool        { return r.b2i.transient(err) }
@@ -771,11 +773,19 @@ var after = time.After
 
 func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error {
 	backoff := 500 * time.Millisecond
+	retries := -1
 	for {
 		err := f()
 		if !ri.transient(err) {
 			return err
 		}
+		if retries == -1 {
+			retries = ri.maxRetries(err)
+		}
+		if retries < 1 {
+			return err
+		}
+		retries -= 1
 		bo := ri.backoff(err)
 		if bo > 0 {
 			backoff = bo
