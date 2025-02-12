@@ -27,6 +27,7 @@ import (
 type beRootInterface interface {
 	backoff(error) time.Duration
 	maxRetries(error) uint
+	maxReuploads(error) uint
 	retry(error) bool
 	reauth(error) bool
 	reupload(error) bool
@@ -170,6 +171,7 @@ type beKey struct {
 
 func (r *beRoot) backoff(err error) time.Duration { return r.b2i.backoff(err) }
 func (r *beRoot) maxRetries(err error) uint       { return r.b2i.maxRetries(err) }
+func (r *beRoot) maxReuploads(err error) uint     { return r.b2i.maxReuploads(err) }
 func (r *beRoot) retry(err error) bool            { return r.b2i.retry(err) }
 func (r *beRoot) reauth(err error) bool           { return r.b2i.reauth(err) }
 func (r *beRoot) reupload(err error) bool         { return r.b2i.reupload(err) }
@@ -762,8 +764,6 @@ func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error 
 	return retry.Do(
 		ctx,
 		f,
-		retry.Attempts(1),
-		retry.Delay(0),
 		retry.DynamicAttampts(func(attempt uint, attempts uint, err error) uint {
 			if attempt == 1 {
 				return ri.maxRetries(err) + 1

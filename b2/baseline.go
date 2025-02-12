@@ -31,6 +31,7 @@ type b2RootInterface interface {
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	backoff(error) time.Duration
 	maxRetries(error) uint
+	maxReuploads(error) uint
 	retry(error) bool
 	reauth(error) bool
 	reupload(error) bool
@@ -196,6 +197,10 @@ func (b *b2Root) backoff(err error) time.Duration {
 
 func (b *b2Root) maxRetries(err error) uint {
 	return base.MaxRetries(err)
+}
+
+func (b *b2Root) maxReuploads(err error) uint {
+	return base.MaxReuploads(err)
 }
 
 func (*b2Root) retry(err error) bool {

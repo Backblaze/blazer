@@ -25,7 +25,7 @@ type DynamicAttemptsFunc func(attempt uint, attempts uint, err error) uint
 type DynamicDelayFunc func(attempt uint, delay time.Duration, err error) time.Duration
 
 // Function signature of "on retry" function
-type OnRetryFunc func(attempt uint, err error)
+type OnRetryFunc func(attempt uint, err error) error
 
 // Function signature of "retry if" function
 type RetryIfFunc func(attempt uint, err error) bool

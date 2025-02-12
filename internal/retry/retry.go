@@ -57,7 +57,9 @@ func Do(ctx context.Context, retryableFunc RetryableFunc, opts ...Option) error 
 		if !config.retryIf(n, err) {
 			return err
 		}
-		config.onRetry(n, err)
+		if err := config.onRetry(n, err); err != nil {
+			return err
+		}
 
 		config.delay = config.dynamicDelay(n, config.delay, err)
 		select {
@@ -90,7 +92,7 @@ func newDefaultRetryConfig() *Config {
 		dynamicAttempts: func(attempt uint, attempts uint, err error) uint { return attempts },
 		dynamicDelay:    func(attempt uint, delay time.Duration, err error) time.Duration { return delay },
 
-		onRetry: func(attempt uint, err error) {},
+		onRetry: func(attempt uint, err error) error { return nil },
 		retryIf: func(attempt uint, err error) bool { return true },
 
 		after: time.After,

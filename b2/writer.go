@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/Backblaze/blazer/internal/blog"
+	"github.com/Backblaze/blazer/internal/retry"
 )
 
 var ErrClosed = errors.New("file already closed")
@@ -314,21 +315,43 @@ func (w *Writer) simpleWriteFile() error {
 	mr := &meteredReader{r: r, size: w.w.Len()}
 	w.registerChunk(1, mr)
 	defer w.completeChunk(1)
-redo:
-	f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info)
-	if err != nil {
-		if w.o.b.r.reupload(err) {
+
+	err = retry.Do(
+		w.ctx,
+		func() error {
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info)
+			if err != nil {
+				return err
+			}
+			w.o.f = f
+			return nil
+		},
+		retry.DynamicAttampts(func(attempt uint, attempts uint, err error) uint {
+			if attempt == 1 {
+				return w.o.b.r.maxReuploads(err) + 1
+			}
+			return attempts
+		}),
+		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
+			return retry.Backoff(delay)
+		}),
+		retry.RetryIf(func(attempt uint, err error) bool {
+			return w.o.b.r.reupload(err)
+		}),
+		retry.OnRetry(func(attempt uint, err error) error {
 			blog.V(2).Infof("b2 writer: %v; retrying", err)
 			u, err := w.o.b.b.getUploadURL(w.ctx)
 			if err != nil {
 				return err
 			}
 			ue = u
-			goto redo
-		}
+			return nil
+		}),
+		retry.WithAfter(after),
+	)
+	if err != nil {
 		return err
 	}
-	w.o.f = f
 	return nil
 }
 

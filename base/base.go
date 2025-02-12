@@ -173,6 +173,19 @@ func mkErr(resp *http.Response) error {
 	}
 }
 
+// MaxReuploads returns an appropriate amount of retries for reuploading,
+// given a method and an error if any was returned by the server.
+func MaxReuploads(err error) uint {
+	e, ok := err.(b2err)
+	if !ok {
+		return 0
+	}
+	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
+		return 5
+	}
+	return 0
+}
+
 // MaxRetries returns an appropriate amount of retries, given a method
 // and an error if any was returned by the server.
 func MaxRetries(err error) uint {

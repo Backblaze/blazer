@@ -39,15 +39,16 @@ const (
 var gmux = &sync.Mutex{}
 
 type testError struct {
-	retry      bool
-	backoff    time.Duration
-	maxRetries uint
-	reauth     bool
-	reupload   bool
+	retry        bool
+	backoff      time.Duration
+	maxRetries   uint
+	maxReuploads uint
+	reauth       bool
+	reupload     bool
 }
 
 func (t testError) Error() string {
-	return fmt.Sprintf("retry %v; backoff %v; maxRetries %v; reauth %v; reupload %v", t.retry, t.backoff, t.maxRetries, t.reauth, t.reupload)
+	return fmt.Sprintf("retry %v; backoff %v; maxRetries %v; reauth %v; reupload %v; maxReuploads %v", t.retry, t.backoff, t.maxRetries, t.reauth, t.reupload, t.maxReuploads)
 }
 
 type errCont struct {
@@ -95,6 +96,17 @@ func (t *testRoot) maxRetries(err error) uint {
 		return 0
 	}
 	return e.maxRetries
+}
+
+func (t *testRoot) maxReuploads(err error) uint {
+	e, ok := err.(testError)
+	if !ok {
+		return 0
+	}
+	if !t.retry(err) {
+		return 0
+	}
+	return e.maxReuploads
 }
 
 func (t *testRoot) retry(err error) bool {
