@@ -178,7 +178,7 @@ func mkErr(resp *http.Response) error {
 func MaxReuploads(err error) uint {
 	e, ok := err.(b2err)
 	if !ok {
-		return 0
+		return 5
 	}
 	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
 		return 5

@@ -1160,7 +1160,7 @@ func TestListKeys(t *testing.T) {
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
-	n := 20
+	n := 10 // less than 16 to avoid "b2_create_key: 429: 15 calls per PT10S allowed for: API_CREATE_KEY_CALLED"
 
 	for i := 0; i < n; i++ {
 		key, err := bucket.CreateKey(ctx, fmt.Sprintf("%d-list-key-test", i), Capabilities("listBuckets"))

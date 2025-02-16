@@ -145,15 +145,6 @@ func (w *Writer) completeChunk(id int) {
 
 var gid int32
 
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(d):
-		return nil
-	}
-}
-
 func (w *Writer) thread() {
 	w.wg.Add(1)
 	go func() {
@@ -189,38 +180,49 @@ func (w *Writer) thread() {
 			}
 			mr := &meteredReader{r: r, size: cnk.buf.Len()}
 			w.registerChunk(cnk.id, mr)
-			sleep := time.Millisecond * 15
-		redo:
-			n, err := fc.uploadPart(w.ctx, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
-			if n != cnk.buf.Len() || err != nil {
-				if w.o.b.r.reupload(err) {
-					if err := sleepCtx(w.ctx, sleep); err != nil {
-						w.setErr(err)
-						w.completeChunk(cnk.id)
-						cnk.buf.Close() // TODO: log error
+			err = retry.Do(
+				w.ctx,
+				func() error {
+					n, err := fc.uploadPart(w.ctx, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
+					if err != nil {
+						return err
 					}
-					sleep *= 2
-					if sleep > time.Second*15 {
-						sleep = time.Second * 15
+					if n != cnk.buf.Len() {
+						return fmt.Errorf("wrote %d of %d", n, cnk.buf.Len())
 					}
-					blog.V(1).Infof("b2 writer: wrote %d of %d: error: %v; retrying", n, cnk.buf.Len(), err)
+					return nil
+				},
+				retry.DynamicAttampts(func(attempt uint, attempts uint, err error) uint {
+					if attempt == 1 {
+						return w.o.b.r.maxReuploads(err) + 1
+					}
+					return attempts
+				}),
+				retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
+					return retry.Backoff(delay)
+				}),
+				retry.RetryIf(func(attempt uint, err error) bool {
+					return w.o.b.r.reupload(err)
+				}),
+				retry.OnRetry(func(attempt uint, err error) error {
+					blog.V(1).Infof("b2 writer: error: %v; retrying", err)
 					f, err := w.file.getUploadPartURL(w.ctx)
 					if err != nil {
-						w.setErr(err)
-						w.completeChunk(cnk.id)
-						cnk.buf.Close() // TODO: log error
-						return
+						return err
 					}
 					fc = f
-					goto redo
-				}
+					return nil
+				}),
+				retry.WithAfter(after),
+			)
+			if err != nil {
 				w.setErr(err)
 				w.completeChunk(cnk.id)
-				cnk.buf.Close() // TODO: log error
+				cnk.buf.Close()
 				return
 			}
 			w.completeChunk(cnk.id)
-			cnk.buf.Close() // TODO: log error
+			cnk.buf.Close()
 			blog.V(2).Infof("chunk %d handled", cnk.id)
 		}
 	}()
@@ -352,6 +354,7 @@ func (w *Writer) simpleWriteFile() error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
