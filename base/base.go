@@ -178,7 +178,7 @@ func mkErr(resp *http.Response) error {
 func MaxReuploads(err error) uint {
 	e, ok := err.(b2err)
 	if !ok {
-		return 5
+		return 5 // for non b2err errors (e.g. chunk size mismatch), try to reupload 5 times
 	}
 	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
 		return 5
@@ -191,7 +191,7 @@ func MaxReuploads(err error) uint {
 func MaxRetries(err error) uint {
 	e, ok := err.(b2err)
 	if !ok {
-		return 0
+		return 0 // for non b2err errors, don't retry
 	}
 	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
 		return 20
