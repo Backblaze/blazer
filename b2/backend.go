@@ -764,7 +764,7 @@ func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error 
 	return retry.Do(
 		ctx,
 		f,
-		retry.DynamicAttampts(func(attempt uint, attempts uint, err error) uint {
+		retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
 			if attempt == 1 {
 				return ri.maxRetries(err) + 1
 			}

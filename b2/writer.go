@@ -192,7 +192,7 @@ func (w *Writer) thread() {
 					}
 					return nil
 				},
-				retry.DynamicAttampts(func(attempt uint, attempts uint, err error) uint {
+				retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
 					if attempt == 1 {
 						return w.o.b.r.maxReuploads(err) + 1
 					}
@@ -328,7 +328,7 @@ func (w *Writer) simpleWriteFile() error {
 			w.o.f = f
 			return nil
 		},
-		retry.DynamicAttampts(func(attempt uint, attempts uint, err error) uint {
+		retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
 			if attempt == 1 {
 				return w.o.b.r.maxReuploads(err) + 1
 			}

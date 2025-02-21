@@ -30,14 +30,14 @@ type RetryableFunc func() error
 func Do(ctx context.Context, retryableFunc RetryableFunc, opts ...Option) error {
 	var n uint
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Set config
 	config := newDefaultRetryConfig()
 	for _, opt := range opts {
 		opt(config)
-	}
-
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 
 	for {

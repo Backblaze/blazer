@@ -70,7 +70,7 @@ func Delay(delay time.Duration) Option {
 }
 
 // DynamicAttempts dynamically set the number of attempts
-func DynamicAttampts(dynamicAttempts DynamicAttemptsFunc) Option {
+func DynamicAttempts(dynamicAttempts DynamicAttemptsFunc) Option {
 	if dynamicAttempts == nil {
 		return emptyOption
 	}
