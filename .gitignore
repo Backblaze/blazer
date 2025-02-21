@@ -30,3 +30,5 @@ _testmain.go
 /cleanup
 /simple
 /b2keys
+
+.go-version
