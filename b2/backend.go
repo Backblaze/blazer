@@ -17,16 +17,19 @@ package b2
 import (
 	"context"
 	"io"
-	"math/rand"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/retry"
 )
 
 // This file wraps the baseline interfaces with backoff and retry semantics.
 
 type beRootInterface interface {
 	backoff(error) time.Duration
+	maxRetries(error) uint
+	maxReuploads(error) uint
+	retry(error) bool
 	reauth(error) bool
-	transient(error) bool
 	reupload(error) bool
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	reauthorizeAccount(context.Context) error
@@ -167,9 +170,11 @@ type beKey struct {
 }
 
 func (r *beRoot) backoff(err error) time.Duration { return r.b2i.backoff(err) }
+func (r *beRoot) maxRetries(err error) uint       { return r.b2i.maxRetries(err) }
+func (r *beRoot) maxReuploads(err error) uint     { return r.b2i.maxReuploads(err) }
+func (r *beRoot) retry(err error) bool            { return r.b2i.retry(err) }
 func (r *beRoot) reauth(err error) bool           { return r.b2i.reauth(err) }
 func (r *beRoot) reupload(err error) bool         { return r.b2i.reupload(err) }
-func (r *beRoot) transient(err error) bool        { return r.b2i.transient(err) }
 
 func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c clientOptions) error {
 	f := func() error {
@@ -753,41 +758,34 @@ func (b *beKey) expires() time.Time { return b.k.expires() }
 func (b *beKey) secret() string     { return b.k.secret() }
 func (b *beKey) id() string         { return b.k.id() }
 
-func jitter(d time.Duration) time.Duration {
-	f := float64(d)
-	f /= 50
-	f += f * (rand.Float64() - 0.5)
-	return time.Duration(f)
-}
-
-func getBackoff(d time.Duration) time.Duration {
-	if d > 30*time.Second {
-		return 30*time.Second + jitter(d)
-	}
-	return d*2 + jitter(d*2)
-}
-
 var after = time.After
 
 func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error {
-	backoff := 500 * time.Millisecond
-	for {
-		err := f()
-		if !ri.transient(err) {
-			return err
-		}
-		bo := ri.backoff(err)
-		if bo > 0 {
-			backoff = bo
-		} else {
-			backoff = getBackoff(backoff)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-after(backoff):
-		}
-	}
+	return retry.Do(
+		ctx,
+		f,
+		retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
+			if attempt == 1 {
+				return ri.maxRetries(err) + 1
+			}
+			return attempts
+		}),
+		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
+			bo := ri.backoff(err)
+			if bo > 0 {
+				return bo
+			} else {
+				if attempt == 1 {
+					return retry.Backoff(500 * time.Millisecond)
+				}
+				return retry.Backoff(delay)
+			}
+		}),
+		retry.RetryIf(func(attempt uint, err error) bool {
+			return ri.retry(err)
+		}),
+		retry.WithAfter(after),
+	)
 }
 
 func withReauth(ctx context.Context, ri beRootInterface, f func() error) error {

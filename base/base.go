@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package base provides a very low-level interface on top of the B2 v1 API.
+// Package base provides a very low-level interface on top of the B2 API.
 // It is not intended to be used directly.
 //
 // It currently lacks support for the following APIs:
@@ -171,6 +171,34 @@ func mkErr(resp *http.Response) error {
 		msgCode: msg.Code,
 		method:  resp.Request.Header.Get("X-Blazer-Method"),
 	}
+}
+
+// MaxReuploads returns an appropriate amount of retries for reuploading,
+// given a method and an error if any was returned by the server.
+func MaxReuploads(err error) uint {
+	e, ok := err.(b2err)
+	if !ok {
+		return 5 // for non b2err errors (e.g. chunk size mismatch), try to reupload 5 times
+	}
+	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
+		return 5
+	}
+	return 0
+}
+
+// MaxRetries returns an appropriate amount of retries, given a method
+// and an error if any was returned by the server.
+func MaxRetries(err error) uint {
+	e, ok := err.(b2err)
+	if !ok {
+		return 0 // for non b2err errors, don't retry
+	}
+	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
+		return 20
+	} else if e.method == "b2_download_file_by_id" || e.method == "b2_download_file_by_name" {
+		return 20
+	}
+	return 5
 }
 
 // Backoff returns an appropriate amount of time to wait, given an error, if

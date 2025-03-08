@@ -39,14 +39,16 @@ const (
 var gmux = &sync.Mutex{}
 
 type testError struct {
-	retry    bool
-	backoff  time.Duration
-	reauth   bool
-	reupload bool
+	retry        bool
+	backoff      time.Duration
+	maxRetries   uint
+	maxReuploads uint
+	reauth       bool
+	reupload     bool
 }
 
 func (t testError) Error() string {
-	return fmt.Sprintf("retry %v; backoff %v; reauth %v; reupload %v", t.retry, t.backoff, t.reauth, t.reupload)
+	return fmt.Sprintf("retry %v; backoff %v; maxRetries %v; reauth %v; reupload %v; maxReuploads %v", t.retry, t.backoff, t.maxRetries, t.reauth, t.reupload, t.maxReuploads)
 }
 
 type errCont struct {
@@ -79,7 +81,40 @@ func (t *testRoot) backoff(err error) time.Duration {
 	if !ok {
 		return 0
 	}
+	if !t.retry(err) {
+		return 0
+	}
 	return e.backoff
+}
+
+func (t *testRoot) maxRetries(err error) uint {
+	e, ok := err.(testError)
+	if !ok {
+		return 0
+	}
+	if !t.retry(err) {
+		return 0
+	}
+	return e.maxRetries
+}
+
+func (t *testRoot) maxReuploads(err error) uint {
+	e, ok := err.(testError)
+	if !ok {
+		return 0
+	}
+	if !t.reupload(err) {
+		return 0
+	}
+	return e.maxReuploads
+}
+
+func (t *testRoot) retry(err error) bool {
+	e, ok := err.(testError)
+	if !ok {
+		return false
+	}
+	return e.retry || e.reupload || e.backoff > 0
 }
 
 func (t *testRoot) reauth(err error) bool {
@@ -96,14 +131,6 @@ func (t *testRoot) reupload(err error) bool {
 		return false
 	}
 	return e.reupload
-}
-
-func (t *testRoot) transient(err error) bool {
-	e, ok := err.(testError)
-	if !ok {
-		return false
-	}
-	return e.retry || e.reupload || e.backoff > 0
 }
 
 func (t *testRoot) createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error) {
@@ -160,6 +187,7 @@ func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	}
 	return &testURL{
 		files: t.files,
+		errs:  t.errs,
 	}, nil
 }
 
@@ -237,11 +265,15 @@ func (t *testBucket) file(id, name string) b2FileInterface { return nil }
 
 type testURL struct {
 	files map[string]string
+	errs  *errCont
 }
 
 func (t *testURL) reload(context.Context) error { return nil }
 
 func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string) (b2FileInterface, error) {
+	if err := t.errs.getError("uploadFile"); err != nil {
+		return nil, err
+	}
 	buf := &bytes.Buffer{}
 	if _, err := io.Copy(buf, r); err != nil {
 		return nil, err
@@ -493,8 +525,8 @@ func TestBackoff(t *testing.T) {
 				errs: &errCont{
 					errMap: map[string]map[int]error{
 						"createBucket": {
-							0: testError{backoff: time.Second},
-							1: testError{backoff: 2 * time.Second},
+							0: testError{backoff: time.Second, maxRetries: 5},
+							1: testError{backoff: 2 * time.Second, maxRetries: 5},
 						},
 					},
 				},
@@ -507,7 +539,7 @@ func TestBackoff(t *testing.T) {
 				errs: &errCont{
 					errMap: map[string]map[int]error{
 						"getUploadURL": {
-							0: testError{retry: true},
+							0: testError{retry: true, maxRetries: 5},
 						},
 					},
 				},
@@ -563,8 +595,8 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 		errs: &errCont{
 			errMap: map[string]map[int]error{
 				"createBucket": {
-					0: testError{retry: true},
-					1: testError{retry: true},
+					0: testError{retry: true, maxRetries: 5},
+					1: testError{retry: true, maxRetries: 5},
 				},
 			},
 		},
@@ -578,7 +610,470 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 		t.Errorf("bucket should not err, got %v", err)
 	}
 	if len(calls) != 2 {
-		t.Errorf("wrong number of backoff calls; got %d, want 2", len(calls))
+		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	}
+}
+
+func TestBackoffWithMaxRetriesReached(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		calls = append(calls, d)
+		return ch
+	}
+
+	table := []struct {
+		root *testRoot
+		want int
+	}{
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"createBucket": {
+							0: testError{retry: true, maxRetries: 2},
+							1: testError{retry: true, maxRetries: 2},
+							2: testError{retry: true, maxRetries: 2},
+						},
+					},
+				},
+			},
+			want: 2,
+		},
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"createBucket": {
+							0: testError{retry: true, maxRetries: 0},
+						},
+					},
+				},
+			},
+			want: 0,
+		},
+	}
+
+	for _, ent := range table {
+		client := &Client{
+			backend: &beRoot{
+				b2i: ent.root,
+			},
+		}
+		if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err == nil {
+			t.Fatalf("bucket should err")
+		}
+		if len(calls) != ent.want {
+			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		}
+		calls = nil
+	}
+}
+
+func TestReuploadFile(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		calls = append(calls, d)
+		return ch
+	}
+
+	table := []struct {
+		root *testRoot
+		want int
+	}{
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadFile": {
+							0: testError{reupload: true, maxReuploads: 2},
+							1: testError{reupload: true, maxReuploads: 2},
+							2: testError{reupload: true, maxReuploads: 2},
+						},
+					},
+				},
+			},
+			want: 2,
+		},
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadFile": {
+							0: testError{reupload: true, maxReuploads: 0},
+						},
+					},
+				},
+			},
+			want: 0,
+		},
+	}
+
+	for _, ent := range table {
+		client := &Client{
+			backend: &beRoot{
+				b2i: ent.root,
+			},
+		}
+		b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := b.Object("foo")
+		w := o.NewWriter(ctx)
+		r := io.LimitReader(zReader{}, 1e4)
+		if _, err := io.Copy(w, r); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err == nil {
+			t.Fatalf("writer should have returned an error")
+		}
+
+		if len(calls) != ent.want {
+			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		}
+		calls = nil
+	}
+}
+
+func TestReuploadFileWithoutReuploadAfter(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	var cmux = &sync.Mutex{}
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		cmux.Lock()
+		defer cmux.Unlock()
+		calls = append(calls, d)
+		return ch
+	}
+
+	root := &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs: &errCont{
+			errMap: map[string]map[int]error{
+				"uploadFile": {
+					0: testError{reupload: true, maxReuploads: 5},
+					1: testError{reupload: true, maxReuploads: 5},
+				},
+			},
+		},
+	}
+	client := &Client{
+		backend: &beRoot{
+			b2i: root,
+		},
+	}
+	b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := b.Object("foo")
+	w := o.NewWriter(ctx)
+	r := io.LimitReader(zReader{}, 1e4)
+	if _, err := io.Copy(w, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("writer should have not returned an error")
+	}
+
+	if len(calls) != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	}
+}
+
+func TestReuploadFileWithMaxReuploadsReached(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		calls = append(calls, d)
+		return ch
+	}
+
+	table := []struct {
+		root *testRoot
+		want int
+	}{
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadFile": {
+							0: testError{reupload: true, maxReuploads: 2},
+							1: testError{reupload: true, maxReuploads: 2},
+							2: testError{reupload: true, maxReuploads: 2},
+						},
+					},
+				},
+			},
+			want: 2,
+		},
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadFile": {
+							0: testError{reupload: true, maxReuploads: 0},
+						},
+					},
+				},
+			},
+			want: 0,
+		},
+	}
+
+	for _, ent := range table {
+		client := &Client{
+			backend: &beRoot{
+				b2i: ent.root,
+			},
+		}
+		b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := b.Object("foo")
+		w := o.NewWriter(ctx)
+		r := io.LimitReader(zReader{}, 1e4)
+		if _, err := io.Copy(w, r); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err == nil {
+			t.Fatalf("writer should have returned an error")
+		}
+
+		if len(calls) != ent.want {
+			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		}
+		calls = nil
+	}
+}
+
+func TestReuploadPart(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		calls = append(calls, d)
+		return ch
+	}
+
+	table := []struct {
+		root *testRoot
+		want int
+	}{
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadPart": {
+							0: testError{reupload: true, maxReuploads: 2},
+							1: testError{reupload: true, maxReuploads: 2},
+							2: testError{reupload: true, maxReuploads: 2},
+						},
+					},
+				},
+			},
+			want: 2,
+		},
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadPart": {
+							0: testError{reupload: true, maxReuploads: 0},
+						},
+					},
+				},
+			},
+			want: 0,
+		},
+	}
+
+	for _, ent := range table {
+		client := &Client{
+			backend: &beRoot{
+				b2i: ent.root,
+			},
+		}
+		b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := b.Object("foo")
+		w := o.NewWriter(ctx)
+		w.ChunkSize = 1e4
+		w.ConcurrentUploads = 2
+		r := io.LimitReader(zReader{}, 1e5)
+		if _, err := io.Copy(w, r); err == nil {
+			t.Fatalf("writer should have returned an error: %v", err)
+		}
+		w.Close()
+
+		if len(calls) != ent.want {
+			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		}
+		calls = nil
+	}
+}
+
+func TestReuploadPartWithoutReuploadAfter(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	var cmux = &sync.Mutex{}
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		cmux.Lock()
+		defer cmux.Unlock()
+		calls = append(calls, d)
+		return ch
+	}
+
+	root := &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs: &errCont{
+			errMap: map[string]map[int]error{
+				"uploadPart": {
+					0: testError{reupload: true, maxReuploads: 5},
+					1: testError{reupload: true, maxReuploads: 5},
+				},
+			},
+		},
+	}
+	client := &Client{
+		backend: &beRoot{
+			b2i: root,
+		},
+	}
+	b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := b.Object("foo")
+	w := o.NewWriter(ctx)
+	w.ChunkSize = 1e4
+	w.ConcurrentUploads = 2
+	r := io.LimitReader(zReader{}, 1e5)
+	if _, err := io.Copy(w, r); err != nil {
+		t.Fatalf("writer should have not returned an error")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calls) != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	}
+}
+
+func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var calls []time.Duration
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		calls = append(calls, d)
+		return ch
+	}
+
+	table := []struct {
+		root *testRoot
+		want int
+	}{
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadPart": {
+							0: testError{reupload: true, maxReuploads: 2},
+							1: testError{reupload: true, maxReuploads: 2},
+							2: testError{reupload: true, maxReuploads: 2},
+						},
+					},
+				},
+			},
+			want: 2,
+		},
+		{
+			root: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadPart": {
+							0: testError{reupload: true, maxReuploads: 0},
+						},
+					},
+				},
+			},
+			want: 0,
+		},
+	}
+
+	for _, ent := range table {
+		client := &Client{
+			backend: &beRoot{
+				b2i: ent.root,
+			},
+		}
+		b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := b.Object("foo")
+		w := o.NewWriter(ctx)
+		w.ChunkSize = 1e4
+		w.ConcurrentUploads = 2
+		r := io.LimitReader(zReader{}, 1e5)
+		if _, err := io.Copy(w, r); err == nil {
+			t.Fatalf("writer should have returned an error")
+		}
+		w.Close()
+
+		if len(calls) != ent.want {
+			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		}
+		calls = nil
 	}
 }
 
@@ -806,6 +1301,46 @@ func TestWriterReturnsError(t *testing.T) {
 	r := io.LimitReader(zReader{}, 1e7)
 	w.ChunkSize = 1e4
 	w.ConcurrentUploads = 4
+	if _, err := io.Copy(w, r); err == nil {
+		t.Fatalf("io.Copy: should have returned an error")
+	}
+}
+
+func TestWriterLimitNewUploadAttempts(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	concurrentUploads := 4
+	retryCount := 5
+	errorCount := concurrentUploads * (retryCount + 1)
+
+	errorMap := make(map[int]error, errorCount)
+	for i := 0; i < errorCount; i++ {
+		errorMap[i] = testError{reupload: true}
+	}
+
+	client := &Client{
+		backend: &beRoot{
+			b2i: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs: &errCont{
+					errMap: map[string]map[int]error{
+						"uploadPart": errorMap,
+					},
+				},
+			},
+		},
+	}
+
+	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := bucket.Object("test").NewWriter(ctx)
+	r := io.LimitReader(zReader{}, 1e7)
+	w.ChunkSize = 1e4
+	w.ConcurrentUploads = concurrentUploads
 	if _, err := io.Copy(w, r); err == nil {
 		t.Fatalf("io.Copy: should have returned an error")
 	}
