@@ -268,6 +268,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		rules := []b2types.CORSRule{}
 		for _, rule := range attrs.CORSRules {
 			rules = append(rules, b2types.CORSRule{
+				Name: 			   rule.Name,
 				AllowedOrigins:    rule.AllowedOrigins,
 				AllowedHeaders:    rule.AllowedHeaders,
 				AllowedOperations: rule.AllowedOperations,
