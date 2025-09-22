@@ -27,12 +27,12 @@ ctx := context.Background()
 // b2_authorize_account
 b2, err := b2.NewClient(ctx, id, key)
 if err != nil {
-	log.Fatalln(e)
+	log.Fatalln(err)
 }
 
 buckets, err := b2.ListBuckets(ctx)
 if err != nil {
-	log.Fatalln(e)
+	log.Fatalln(err)
 }
 ```
 

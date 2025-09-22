@@ -303,19 +303,19 @@ func TestAttrs(t *testing.T) {
 	defer done()
 
 	attrlist := []*Attrs{
-		&Attrs{
+		{
 			ContentType: "jpeg/stream",
 			Info: map[string]string{
 				"one": "a",
 				"two": "b",
 			},
 		},
-		&Attrs{
+		{
 			ContentType:  "application/MAGICFACE",
 			LastModified: time.Unix(1464370149, 142000000),
 			Info:         map[string]string{}, // can't be nil
 		},
-		&Attrs{
+		{
 			ContentType: "arbitrarystring",
 			Info: map[string]string{
 				"spaces":  "string with spaces",
