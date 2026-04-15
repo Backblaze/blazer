@@ -310,8 +310,8 @@ type B2 struct {
 	downloadURI string
 	minPartSize int
 	opts        *b2Options
-	bucket      string // restricted to this bucket if present
-	pfx         string // restricted to objects with this prefix if present
+	buckets     []string // restricted to these buckets if non-empty
+	pfx         string   // restricted to objects with this prefix if present
 }
 
 // Update replaces the B2 object with a new one, in-place.
@@ -482,7 +482,7 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 	for _, f := range opts {
 		f(b2opts)
 	}
-	if err := b2opts.makeRequest(ctx, "b2_authorize_account", "GET", b2opts.getAPIBase()+b2types.V3api+"b2_authorize_account", nil, b2resp, headers, nil); err != nil {
+	if err := b2opts.makeRequest(ctx, "b2_authorize_account", "GET", b2opts.getAPIBase()+b2types.V4api+"b2_authorize_account", nil, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &B2{
@@ -492,7 +492,7 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		s3URI:       b2resp.APIInfo.StorageAPIInfo.S3URI,
 		downloadURI: b2resp.APIInfo.StorageAPIInfo.DownloadURI,
 		minPartSize: b2resp.APIInfo.StorageAPIInfo.AbsMinPartSize,
-		bucket:      b2resp.APIInfo.StorageAPIInfo.Bucket,
+		buckets:     b2resp.APIInfo.StorageAPIInfo.BucketIDs,
 		pfx:         b2resp.APIInfo.StorageAPIInfo.Prefix,
 		opts:        b2opts,
 	}, nil
@@ -586,7 +586,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	headers := map[string]string{
 		"Authorization": b.authToken,
 	}
-	if err := b.opts.makeRequest(ctx, "b2_create_bucket", "POST", b.apiURI+b2types.V3api+"b2_create_bucket", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_create_bucket", "POST", b.apiURI+b2types.V4api+"b2_create_bucket", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var respRules []LifecycleRule
@@ -617,7 +617,7 @@ func (b *Bucket) DeleteBucket(ctx context.Context) error {
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	return b.b2.opts.makeRequest(ctx, "b2_delete_bucket", "POST", b.b2.apiURI+b2types.V3api+"b2_delete_bucket", b2req, nil, headers, nil)
+	return b.b2.opts.makeRequest(ctx, "b2_delete_bucket", "POST", b.b2.apiURI+b2types.V4api+"b2_delete_bucket", b2req, nil, headers, nil)
 }
 
 // Bucket holds B2 bucket details.
@@ -669,7 +669,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		"Authorization": b.b2.authToken,
 	}
 	b2resp := &b2types.UpdateBucketResponse{}
-	if err := b.b2.opts.makeRequest(ctx, "b2_update_bucket", "POST", b.b2.apiURI+b2types.V3api+"b2_update_bucket", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_update_bucket", "POST", b.b2.apiURI+b2types.V4api+"b2_update_bucket", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var respRules []LifecycleRule
@@ -717,9 +717,17 @@ func (b *Bucket) S3URL() string {
 // ListBuckets wraps b2_list_buckets.  If name is non-empty, only that bucket
 // will be returned if it exists; else nothing will be returned.
 func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string) ([]*Bucket, error) {
+	// b2_list_buckets only accepts a single bucketId filter. When the key is
+	// restricted to exactly one bucket we pass it explicitly; otherwise we
+	// omit the filter and rely on B2's server-side enforcement of the key's
+	// allowed bucket list.
+	var filterBucketID string
+	if len(b.buckets) == 1 {
+		filterBucketID = b.buckets[0]
+	}
 	b2req := &b2types.ListBucketsRequest{
 		AccountID:   b.accountID,
-		Bucket:      b.bucket,
+		Bucket:      filterBucketID,
 		Name:        name,
 		BucketTypes: bucketTypes,
 	}
@@ -727,7 +735,7 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 	headers := map[string]string{
 		"Authorization": b.authToken,
 	}
-	if err := b.opts.makeRequest(ctx, "b2_list_buckets", "POST", b.apiURI+b2types.V3api+"b2_list_buckets", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_list_buckets", "POST", b.apiURI+b2types.V4api+"b2_list_buckets", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	var buckets []*Bucket
@@ -783,7 +791,7 @@ func (b *Bucket) GetUploadURL(ctx context.Context) (*URL, error) {
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	if err := b.b2.opts.makeRequest(ctx, "b2_get_upload_url", "POST", b.b2.apiURI+b2types.V3api+"b2_get_upload_url", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_get_upload_url", "POST", b.b2.apiURI+b2types.V4api+"b2_get_upload_url", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &URL{
@@ -851,7 +859,7 @@ func (f *File) DeleteFileVersion(ctx context.Context) error {
 	headers := map[string]string{
 		"Authorization": f.b2.authToken,
 	}
-	return f.b2.opts.makeRequest(ctx, "b2_delete_file_version", "POST", f.b2.apiURI+b2types.V3api+"b2_delete_file_version", b2req, nil, headers, nil)
+	return f.b2.opts.makeRequest(ctx, "b2_delete_file_version", "POST", f.b2.apiURI+b2types.V4api+"b2_delete_file_version", b2req, nil, headers, nil)
 }
 
 // LargeFile holds information necessary to implement B2 large file support.
@@ -876,7 +884,7 @@ func (b *Bucket) StartLargeFile(ctx context.Context, name, contentType string, i
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	if err := b.b2.opts.makeRequest(ctx, "b2_start_large_file", "POST", b.b2.apiURI+b2types.V3api+"b2_start_large_file", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_start_large_file", "POST", b.b2.apiURI+b2types.V4api+"b2_start_large_file", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &LargeFile{
@@ -894,7 +902,7 @@ func (l *LargeFile) CancelLargeFile(ctx context.Context) error {
 	headers := map[string]string{
 		"Authorization": l.b2.authToken,
 	}
-	return l.b2.opts.makeRequest(ctx, "b2_cancel_large_file", "POST", l.b2.apiURI+b2types.V3api+"b2_cancel_large_file", b2req, nil, headers, nil)
+	return l.b2.opts.makeRequest(ctx, "b2_cancel_large_file", "POST", l.b2.apiURI+b2types.V4api+"b2_cancel_large_file", b2req, nil, headers, nil)
 }
 
 // FilePart is a piece of a started, but not finished, large file upload.
@@ -915,7 +923,7 @@ func (f *File) ListParts(ctx context.Context, next, count int) ([]*FilePart, int
 	headers := map[string]string{
 		"Authorization": f.b2.authToken,
 	}
-	if err := f.b2.opts.makeRequest(ctx, "b2_list_parts", "POST", f.b2.apiURI+b2types.V3api+"b2_list_parts", b2req, b2resp, headers, nil); err != nil {
+	if err := f.b2.opts.makeRequest(ctx, "b2_list_parts", "POST", f.b2.apiURI+b2types.V4api+"b2_list_parts", b2req, b2resp, headers, nil); err != nil {
 		return nil, 0, err
 	}
 	var parts []*FilePart
@@ -970,7 +978,7 @@ func (l *LargeFile) GetUploadPartURL(ctx context.Context) (*FileChunk, error) {
 	headers := map[string]string{
 		"Authorization": l.b2.authToken,
 	}
-	if err := l.b2.opts.makeRequest(ctx, "b2_get_upload_part_url", "POST", l.b2.apiURI+b2types.V3api+"b2_get_upload_part_url", b2req, b2resp, headers, nil); err != nil {
+	if err := l.b2.opts.makeRequest(ctx, "b2_get_upload_part_url", "POST", l.b2.apiURI+b2types.V4api+"b2_get_upload_part_url", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &FileChunk{
@@ -1033,7 +1041,7 @@ func (l *LargeFile) FinishLargeFile(ctx context.Context) (*File, error) {
 	headers := map[string]string{
 		"Authorization": l.b2.authToken,
 	}
-	if err := l.b2.opts.makeRequest(ctx, "b2_finish_large_file", "POST", l.b2.apiURI+b2types.V3api+"b2_finish_large_file", b2req, b2resp, headers, nil); err != nil {
+	if err := l.b2.opts.makeRequest(ctx, "b2_finish_large_file", "POST", l.b2.apiURI+b2types.V4api+"b2_finish_large_file", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &File{
@@ -1057,7 +1065,7 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	if err := b.b2.opts.makeRequest(ctx, "b2_list_unfinished_large_files", "POST", b.b2.apiURI+b2types.V3api+"b2_list_unfinished_large_files", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_list_unfinished_large_files", "POST", b.b2.apiURI+b2types.V4api+"b2_list_unfinished_large_files", b2req, b2resp, headers, nil); err != nil {
 		return nil, "", err
 	}
 	cont := b2resp.Continuation
@@ -1096,7 +1104,7 @@ func (b *Bucket) ListFileNames(ctx context.Context, count int, continuation, pre
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	if err := b.b2.opts.makeRequest(ctx, "b2_list_file_names", "POST", b.b2.apiURI+b2types.V3api+"b2_list_file_names", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_list_file_names", "POST", b.b2.apiURI+b2types.V4api+"b2_list_file_names", b2req, b2resp, headers, nil); err != nil {
 		return nil, "", err
 	}
 	cont := b2resp.Continuation
@@ -1141,7 +1149,7 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	if err := b.b2.opts.makeRequest(ctx, "b2_list_file_versions", "POST", b.b2.apiURI+b2types.V3api+"b2_list_file_versions", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_list_file_versions", "POST", b.b2.apiURI+b2types.V4api+"b2_list_file_versions", b2req, b2resp, headers, nil); err != nil {
 		return nil, "", "", err
 	}
 	var files []*File
@@ -1180,7 +1188,7 @@ func (b *Bucket) GetDownloadAuthorization(ctx context.Context, prefix string, va
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	if err := b.b2.opts.makeRequest(ctx, "b2_get_download_authorization", "POST", b.b2.apiURI+b2types.V3api+"b2_get_download_authorization", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_get_download_authorization", "POST", b.b2.apiURI+b2types.V4api+"b2_get_download_authorization", b2req, b2resp, headers, nil); err != nil {
 		return "", err
 	}
 	return b2resp.Token, nil
@@ -1281,7 +1289,7 @@ func (b *Bucket) HideFile(ctx context.Context, name string) (*File, error) {
 	headers := map[string]string{
 		"Authorization": b.b2.authToken,
 	}
-	if err := b.b2.opts.makeRequest(ctx, "b2_hide_file", "POST", b.b2.apiURI+b2types.V3api+"b2_hide_file", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_hide_file", "POST", b.b2.apiURI+b2types.V4api+"b2_hide_file", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &File{
@@ -1314,7 +1322,7 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 	headers := map[string]string{
 		"Authorization": f.b2.authToken,
 	}
-	if err := f.b2.opts.makeRequest(ctx, "b2_get_file_info", "POST", f.b2.apiURI+b2types.V3api+"b2_get_file_info", b2req, b2resp, headers, nil); err != nil {
+	if err := f.b2.opts.makeRequest(ctx, "b2_get_file_info", "POST", f.b2.apiURI+b2types.V4api+"b2_get_file_info", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	f.Status = b2resp.Action
@@ -1351,9 +1359,14 @@ type Key struct {
 	b2           *B2
 }
 
-// CreateKey wraps b2_create_key.
+// CreateKey wraps b2_create_key on the v3 endpoint and produces a legacy
+// single-bucket application key: if bucketID is non-empty the key is
+// restricted to that one bucket, otherwise it is unrestricted.  Keys
+// created this way are compatible with clients that still speak the B2
+// native API v3.  To create a Multi-Bucket Application Key, use
+// CreateKeyMultiBucket.
 func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid time.Duration, bucketID string, prefix string) (*Key, error) {
-	b2req := &b2types.CreateKeyRequest{
+	b2req := &b2types.CreateKeyRequestV3{
 		AccountID:    b.accountID,
 		Capabilities: caps,
 		Name:         name,
@@ -1361,11 +1374,32 @@ func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid ti
 		BucketID:     bucketID,
 		Prefix:       prefix,
 	}
+	return b.doCreateKey(ctx, b2types.V3api, b2req)
+}
+
+// CreateKeyMultiBucket wraps b2_create_key on the v4 endpoint and produces
+// a Multi-Bucket Application Key scoped to the given bucket IDs.  Keys
+// produced by this method cannot be used by clients that only speak the B2
+// native API v3.  If backward compatibility with v3-only clients matters,
+// create one key per bucket with CreateKey instead.
+func (b *B2) CreateKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (*Key, error) {
+	b2req := &b2types.CreateKeyRequestV4{
+		AccountID:    b.accountID,
+		Capabilities: caps,
+		Name:         name,
+		Valid:        int(valid.Seconds()),
+		BucketIDs:    bucketIDs,
+		Prefix:       prefix,
+	}
+	return b.doCreateKey(ctx, b2types.V4api, b2req)
+}
+
+func (b *B2) doCreateKey(ctx context.Context, apiVersion string, b2req interface{}) (*Key, error) {
 	b2resp := &b2types.CreateKeyResponse{}
 	headers := map[string]string{
 		"Authorization": b.authToken,
 	}
-	if err := b.opts.makeRequest(ctx, "b2_create_key", "POST", b.apiURI+b2types.V3api+"b2_create_key", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_create_key", "POST", b.apiURI+apiVersion+"b2_create_key", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &Key{
@@ -1386,7 +1420,7 @@ func (k *Key) Delete(ctx context.Context) error {
 	headers := map[string]string{
 		"Authorization": k.b2.authToken,
 	}
-	return k.b2.opts.makeRequest(ctx, "b2_delete_key", "POST", k.b2.apiURI+b2types.V3api+"b2_delete_key", b2req, nil, headers, nil)
+	return k.b2.opts.makeRequest(ctx, "b2_delete_key", "POST", k.b2.apiURI+b2types.V4api+"b2_delete_key", b2req, nil, headers, nil)
 }
 
 // ListKeys wraps b2_list_keys.
@@ -1400,7 +1434,7 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 		"Authorization": b.authToken,
 	}
 	b2resp := &b2types.ListKeysResponse{}
-	if err := b.opts.makeRequest(ctx, "b2_list_keys", "POST", b.apiURI+b2types.V3api+"b2_list_keys", b2req, b2resp, headers, nil); err != nil {
+	if err := b.opts.makeRequest(ctx, "b2_list_keys", "POST", b.apiURI+b2types.V4api+"b2_list_keys", b2req, b2resp, headers, nil); err != nil {
 		return nil, "", err
 	}
 	var keys []*Key

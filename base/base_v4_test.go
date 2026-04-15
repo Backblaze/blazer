@@ -1,0 +1,205 @@
+// Copyright 2026, the Blazer authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package base
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+// v4AuthJSON returns an authorizeAccount response body in the v4 shape.  The
+// apiUrl points back at the test server so follow-up calls (CreateKey, etc.)
+// hit the same handler.
+func v4AuthJSON(apiURL string, bucketIDs, bucketNames []string, namePrefix string) string {
+	resp := map[string]any{
+		"accountId":                         "account-id",
+		"authorizationToken":                "auth-token",
+		"applicationKeyExpirationTimestamp": 0,
+		"apiInfo": map[string]any{
+			"storageApi": map[string]any{
+				"absoluteMinimumPartSize": 5000000,
+				"apiUrl":                  apiURL,
+				"bucketIds":               bucketIDs,
+				"bucketNames":             bucketNames,
+				"capabilities":            []string{"readFiles", "writeFiles"},
+				"downloadUrl":             apiURL,
+				"storageApi":              "storage",
+				"namePrefix":              namePrefix,
+				"recommendedPartSize":     100000000,
+				"s3ApiUrl":                apiURL,
+			},
+		},
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+func TestAuthorizeAccountV4(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/b2api/v4/b2_authorize_account" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method: %s", r.Method)
+		}
+		fmt.Fprint(w, v4AuthJSON(srv.URL, []string{"buck-a", "buck-b"}, []string{"name-a", "name-b"}, "restic/"))
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatalf("AuthorizeAccount: %v", err)
+	}
+	if want := []string{"buck-a", "buck-b"}; !reflect.DeepEqual(b.buckets, want) {
+		t.Errorf("buckets = %v, want %v", b.buckets, want)
+	}
+	if b.pfx != "restic/" {
+		t.Errorf("pfx = %q, want %q", b.pfx, "restic/")
+	}
+	if b.apiURI != srv.URL {
+		t.Errorf("apiURI = %q, want %q", b.apiURI, srv.URL)
+	}
+	if b.accountID != "account-id" {
+		t.Errorf("accountID = %q, want %q", b.accountID, "account-id")
+	}
+}
+
+func TestAuthorizeAccountV4UnrestrictedKey(t *testing.T) {
+	// Unrestricted keys return null/empty arrays for bucketIds/bucketNames.
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatalf("AuthorizeAccount: %v", err)
+	}
+	if len(b.buckets) != 0 {
+		t.Errorf("buckets = %v, want empty", b.buckets)
+	}
+	if b.pfx != "" {
+		t.Errorf("pfx = %q, want empty", b.pfx)
+	}
+}
+
+// createKeyFixture wires up a test server that first handles authorize_account
+// then records and responds to a single b2_create_key request.  It returns the
+// authorized B2, plus pointers to captured request metadata the caller can
+// inspect after making the create_key call.
+type createKeyFixture struct {
+	b2         *B2
+	srv        *httptest.Server
+	lastPath   string
+	lastBody   map[string]any
+	lastMethod string
+}
+
+func newCreateKeyFixture(t *testing.T) *createKeyFixture {
+	t.Helper()
+	f := &createKeyFixture{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/b2api/v4/b2_authorize_account":
+			fmt.Fprint(w, v4AuthJSON(f.srv.URL, nil, nil, ""))
+		case strings.HasSuffix(r.URL.Path, "/b2_create_key"):
+			f.lastPath = r.URL.Path
+			f.lastMethod = r.Method
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read body: %v", err)
+			}
+			f.lastBody = map[string]any{}
+			if err := json.Unmarshal(body, &f.lastBody); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			// Minimal Key response.
+			fmt.Fprint(w, `{"applicationKeyId":"k","applicationKey":"s","accountId":"a","capabilities":[],"keyName":"n","expirationTimestamp":0}`)
+		default:
+			t.Errorf("unexpected request path: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(f.srv.URL))
+	if err != nil {
+		t.Fatalf("AuthorizeAccount: %v", err)
+	}
+	f.b2 = b
+	return f
+}
+
+func (f *createKeyFixture) close() { f.srv.Close() }
+
+func TestCreateKeyUsesV3Endpoint(t *testing.T) {
+	f := newCreateKeyFixture(t)
+	defer f.close()
+
+	if _, err := f.b2.CreateKey(context.Background(), "keyname", []string{"readFiles"}, 0, "buck-single", "prefix/"); err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	if want := "/b2api/v3/b2_create_key"; f.lastPath != want {
+		t.Errorf("path = %q, want %q", f.lastPath, want)
+	}
+	if f.lastMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", f.lastMethod)
+	}
+	if got, want := f.lastBody["bucketId"], "buck-single"; got != want {
+		t.Errorf("request body bucketId = %v, want %q", got, want)
+	}
+	if _, ok := f.lastBody["bucketIds"]; ok {
+		t.Errorf("request body unexpectedly contained bucketIds: %v", f.lastBody["bucketIds"])
+	}
+}
+
+func TestCreateKeyMultiBucketUsesV4Endpoint(t *testing.T) {
+	f := newCreateKeyFixture(t)
+	defer f.close()
+
+	if _, err := f.b2.CreateKeyMultiBucket(context.Background(), "keyname", []string{"readFiles"}, 0, []string{"buck-a", "buck-b"}, "prefix/"); err != nil {
+		t.Fatalf("CreateKeyMultiBucket: %v", err)
+	}
+	if want := "/b2api/v4/b2_create_key"; f.lastPath != want {
+		t.Errorf("path = %q, want %q", f.lastPath, want)
+	}
+	if f.lastMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", f.lastMethod)
+	}
+	got, ok := f.lastBody["bucketIds"].([]any)
+	if !ok {
+		t.Fatalf("request body bucketIds missing or wrong type: %v", f.lastBody["bucketIds"])
+	}
+	want := []any{"buck-a", "buck-b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request body bucketIds = %v, want %v", got, want)
+	}
+	if _, ok := f.lastBody["bucketId"]; ok {
+		t.Errorf("request body unexpectedly contained bucketId: %v", f.lastBody["bucketId"])
+	}
+}

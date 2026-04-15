@@ -20,6 +20,7 @@ package b2types
 
 const (
 	V3api = "/b2api/v3/"
+	V4api = "/b2api/v4/"
 )
 
 type ErrorMessage struct {
@@ -31,8 +32,8 @@ type ErrorMessage struct {
 type StorageAPIInfo struct {
 	AbsMinPartSize int      `json:"absoluteMinimumPartSize"`
 	URI            string   `json:"apiUrl"`
-	Bucket         string   `json:"bucketId"`
-	Name           string   `json:"bucketName"`
+	BucketIDs      []string `json:"bucketIds"`
+	BucketNames    []string `json:"bucketNames"`
 	Capabilities   []string `json:"capabilities"`
 	DownloadURI    string   `json:"downloadUrl"`
 	Type           string   `json:"storageApi"`
@@ -289,7 +290,10 @@ type ListUnfinishedLargeFilesResponse struct {
 	Continuation string                `json:"nextFileId"`
 }
 
-type CreateKeyRequest struct {
+// CreateKeyRequestV3 is the b2_create_key request body for the v3 endpoint,
+// which accepts only a single bucket restriction and produces a legacy
+// single-bucket application key.
+type CreateKeyRequestV3 struct {
 	AccountID    string   `json:"accountId"`
 	Capabilities []string `json:"capabilities"`
 	Name         string   `json:"keyName"`
@@ -298,6 +302,23 @@ type CreateKeyRequest struct {
 	Prefix       string   `json:"namePrefix,omitempty"`
 }
 
+// CreateKeyRequestV4 is the b2_create_key request body for the v4 endpoint,
+// which takes a list of bucket IDs and produces a Multi-Bucket Application
+// Key.
+type CreateKeyRequestV4 struct {
+	AccountID    string   `json:"accountId"`
+	Capabilities []string `json:"capabilities"`
+	Name         string   `json:"keyName"`
+	Valid        int      `json:"validDurationInSeconds,omitempty"`
+	BucketIDs    []string `json:"bucketIds,omitempty"`
+	Prefix       string   `json:"namePrefix,omitempty"`
+}
+
+// Key is the response body for b2_create_key, b2_list_keys, and
+// b2_delete_key across both API versions.  The v3 endpoint returns a
+// singular bucketId; v4 returns a bucketIds array for Multi-Bucket
+// Application Keys.  Both tagged fields are present so this one struct
+// can decode either shape; exactly one will be populated per response.
 type Key struct {
 	ID           string   `json:"applicationKeyId"`
 	Secret       string   `json:"applicationKey"`
@@ -305,7 +326,8 @@ type Key struct {
 	Capabilities []string `json:"capabilities"`
 	Name         string   `json:"keyName"`
 	Expires      int64    `json:"expirationTimestamp"`
-	BucketID     string   `json:"bucketId"`
+	BucketID     string   `json:"bucketId,omitempty"`
+	BucketIDs    []string `json:"bucketIds,omitempty"`
 	Prefix       string   `json:"namePrefix"`
 }
 
