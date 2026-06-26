@@ -485,15 +485,28 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 	if err := b2opts.makeRequest(ctx, "b2_authorize_account", "GET", b2opts.getAPIBase()+b2types.V4api+"b2_authorize_account", nil, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
+	storageAPI := b2resp.APIInfo.StorageAPIInfo
+	// For restricted keys, the v4 authorize-account response carries the key's
+	// scope under apiInfo.storageApi.allowed: a list of {id, name} buckets and
+	// an optional name prefix. Unrestricted (master) keys have a nil/empty
+	// allowed, leaving buckets and pfx empty.
+	var buckets []string
+	var pfx string
+	if allowed := storageAPI.Allowed; allowed != nil {
+		for _, b := range allowed.Buckets {
+			buckets = append(buckets, b.ID)
+		}
+		pfx = allowed.Prefix
+	}
 	return &B2{
 		accountID:   b2resp.AccountID,
 		authToken:   b2resp.AuthToken,
-		apiURI:      b2resp.APIInfo.StorageAPIInfo.URI,
-		s3URI:       b2resp.APIInfo.StorageAPIInfo.S3URI,
-		downloadURI: b2resp.APIInfo.StorageAPIInfo.DownloadURI,
-		minPartSize: b2resp.APIInfo.StorageAPIInfo.AbsMinPartSize,
-		buckets:     b2resp.APIInfo.StorageAPIInfo.BucketIDs,
-		pfx:         b2resp.APIInfo.StorageAPIInfo.Prefix,
+		apiURI:      storageAPI.URI,
+		s3URI:       storageAPI.S3URI,
+		downloadURI: storageAPI.DownloadURI,
+		minPartSize: storageAPI.AbsMinPartSize,
+		buckets:     buckets,
+		pfx:         pfx,
 		opts:        b2opts,
 	}, nil
 }

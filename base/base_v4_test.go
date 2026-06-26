@@ -29,24 +29,39 @@ import (
 // v4AuthJSON returns an authorizeAccount response body in the v4 shape.  The
 // apiUrl points back at the test server so follow-up calls (CreateKey, etc.)
 // hit the same handler.
+//
+// A restricted key's scope is nested under apiInfo.storageApi.allowed: buckets
+// is a list of {id, name} objects and namePrefix an optional string.  bucketIDs
+// and bucketNames are zipped into that list (they must be the same length).
+// When bucketIDs is empty the key is treated as unrestricted and allowed is
+// omitted entirely, matching B2's response for master keys.
 func v4AuthJSON(apiURL string, bucketIDs, bucketNames []string, namePrefix string) string {
+	storageAPI := map[string]any{
+		"absoluteMinimumPartSize": 5000000,
+		"apiUrl":                  apiURL,
+		"capabilities":            []string{"readFiles", "writeFiles"},
+		"downloadUrl":             apiURL,
+		"storageApi":              "storage",
+		"recommendedPartSize":     100000000,
+		"s3ApiUrl":                apiURL,
+	}
+	if len(bucketIDs) > 0 || namePrefix != "" {
+		buckets := make([]map[string]any, len(bucketIDs))
+		for i, id := range bucketIDs {
+			buckets[i] = map[string]any{"id": id, "name": bucketNames[i]}
+		}
+		storageAPI["allowed"] = map[string]any{
+			"buckets":      buckets,
+			"capabilities": []string{"readFiles", "writeFiles"},
+			"namePrefix":   namePrefix,
+		}
+	}
 	resp := map[string]any{
 		"accountId":                         "account-id",
 		"authorizationToken":                "auth-token",
 		"applicationKeyExpirationTimestamp": 0,
 		"apiInfo": map[string]any{
-			"storageApi": map[string]any{
-				"absoluteMinimumPartSize": 5000000,
-				"apiUrl":                  apiURL,
-				"bucketIds":               bucketIDs,
-				"bucketNames":             bucketNames,
-				"capabilities":            []string{"readFiles", "writeFiles"},
-				"downloadUrl":             apiURL,
-				"storageApi":              "storage",
-				"namePrefix":              namePrefix,
-				"recommendedPartSize":     100000000,
-				"s3ApiUrl":                apiURL,
-			},
+			"storageApi": storageAPI,
 		},
 	}
 	b, err := json.Marshal(resp)
@@ -106,6 +121,66 @@ func TestAuthorizeAccountV4UnrestrictedKey(t *testing.T) {
 	}
 	if b.pfx != "" {
 		t.Errorf("pfx = %q, want empty", b.pfx)
+	}
+}
+
+// TestAuthorizeAccountV4ReadsAllowedNesting guards against regressing to the v3
+// shape, where the key's scope sat at the storageApi top level.  In v4 the scope
+// lives under storageApi.allowed; a response with top-level bucketIds/namePrefix
+// (and an empty allowed) must yield no restrictions.
+func TestAuthorizeAccountV4ReadsAllowedNesting(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Deliberately place scope at the (wrong) v3 top level and leave
+		// allowed absent.  A correct v4 parser ignores these.
+		resp := map[string]any{
+			"accountId":          "account-id",
+			"authorizationToken": "auth-token",
+			"apiInfo": map[string]any{
+				"storageApi": map[string]any{
+					"apiUrl":      srv.URL,
+					"downloadUrl": srv.URL,
+					"s3ApiUrl":    srv.URL,
+					// v3-style fields that v4 no longer emits:
+					"bucketIds":   []string{"buck-a"},
+					"bucketNames": []string{"name-a"},
+					"namePrefix":  "restic/",
+				},
+			},
+		}
+		b, _ := json.Marshal(resp)
+		fmt.Fprint(w, string(b))
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatalf("AuthorizeAccount: %v", err)
+	}
+	if len(b.buckets) != 0 {
+		t.Errorf("buckets = %v, want empty (top-level bucketIds must be ignored in v4)", b.buckets)
+	}
+	if b.pfx != "" {
+		t.Errorf("pfx = %q, want empty (top-level namePrefix must be ignored in v4)", b.pfx)
+	}
+}
+
+// TestAuthorizeAccountV4SingleBucketRestrictedKey covers the headline regression:
+// a bucket-restricted key whose scope is nested under storageApi.allowed must be
+// surfaced so the client knows which bucket it may use.
+func TestAuthorizeAccountV4SingleBucketRestrictedKey(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, v4AuthJSON(srv.URL, []string{"buck-a"}, []string{"name-a"}, ""))
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatalf("AuthorizeAccount: %v", err)
+	}
+	if want := []string{"buck-a"}; !reflect.DeepEqual(b.buckets, want) {
+		t.Errorf("buckets = %v, want %v", b.buckets, want)
 	}
 }
 

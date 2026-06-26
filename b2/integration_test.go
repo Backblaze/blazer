@@ -1131,6 +1131,82 @@ func TestListBucketContentsWithKey(t *testing.T) {
 	}
 }
 
+// TestMultiBucketKeyListsAllowedBuckets exercises the headline v4-only feature
+// end to end against live B2: it mints a Multi-Bucket Application Key scoped to
+// two buckets, authorizes with it (which only succeeds on v4), and confirms the
+// key can list within each allowed bucket.  If the v4 authorize response's
+// allowed scope were parsed incorrectly, the authorized client would not learn
+// its bucket scope and these list calls would fail with 401.
+func TestMultiBucketKeyListsAllowedBuckets(t *testing.T) {
+	ctx := context.Background()
+	bucket1, done := startLiveTest(ctx, t)
+	defer done()
+	client := bucket1.c
+
+	id := os.Getenv(apiID)
+	bucket2, err := client.NewBucket(ctx, fmt.Sprintf("%s-%s-mb-%s", id, bucketName, uniq), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		iter := bucket2.List(ctx, ListHidden())
+		for iter.Next() {
+			if err := iter.Object().Delete(ctx); err != nil {
+				t.Error(err)
+			}
+		}
+		if err := iter.Err(); err != nil && !IsNotExist(err) {
+			t.Error(err)
+		}
+		if err := bucket2.Delete(ctx); err != nil && !IsNotExist(err) {
+			t.Error(err)
+		}
+	}()
+
+	if _, _, err := writeFile(ctx, bucket1, "a", 1e5, 1e8); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := writeFile(ctx, bucket2, "b", 1e5, 1e8); err != nil {
+		t.Fatal(err)
+	}
+
+	key, err := client.CreateKey(ctx, "multiBucketKey",
+		Capabilities("listBuckets", "listFiles", "readFiles"),
+		BucketIDs(bucket1.b.id(), bucket2.b.id()))
+	if err != nil {
+		t.Fatalf("CreateKey(BucketIDs): %v", err)
+	}
+	defer func() {
+		if err := key.Delete(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	// Authorizing with a multi-bucket key only works against v4.
+	mbClient, err := NewClient(ctx, key.ID(), key.Secret())
+	if err != nil {
+		t.Fatalf("NewClient with multi-bucket key: %v", err)
+	}
+
+	for _, b := range []*Bucket{bucket1, bucket2} {
+		ob, err := mbClient.Bucket(ctx, b.Name())
+		if err != nil {
+			t.Fatalf("Bucket(%s) via multi-bucket key: %v", b.Name(), err)
+		}
+		iter := ob.List(ctx)
+		var n int
+		for iter.Next() {
+			n++
+		}
+		if err := iter.Err(); err != nil {
+			t.Errorf("list %s via multi-bucket key: %v", b.Name(), err)
+		}
+		if n == 0 {
+			t.Errorf("list %s via multi-bucket key: got 0 objects, want >= 1", b.Name())
+		}
+	}
+}
+
 func TestCreateDeleteKey(t *testing.T) {
 	ctx := context.Background()
 	bucket, done := startLiveTest(ctx, t)

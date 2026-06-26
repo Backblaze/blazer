@@ -32,14 +32,30 @@ type ErrorMessage struct {
 type StorageAPIInfo struct {
 	AbsMinPartSize int      `json:"absoluteMinimumPartSize"`
 	URI            string   `json:"apiUrl"`
-	BucketIDs      []string `json:"bucketIds"`
-	BucketNames    []string `json:"bucketNames"`
 	Capabilities   []string `json:"capabilities"`
 	DownloadURI    string   `json:"downloadUrl"`
 	Type           string   `json:"storageApi"`
-	Prefix         string   `json:"namePrefix"`
 	PartSize       int      `json:"recommendedPartSize"`
 	S3URI          string   `json:"s3ApiUrl"`
+	// Allowed carries the key's scope (bucket and prefix restrictions). In the
+	// v4 authorize-account response it is nil/empty for unrestricted (master)
+	// keys and populated for bucket- or prefix-restricted keys.
+	Allowed *Allowed `json:"allowed"`
+}
+
+// Allowed is the scope of the application key used to authorize, as returned
+// under apiInfo.storageApi.allowed by b2_authorize_account in the v4 API.
+type Allowed struct {
+	Buckets      []AllowedBucket `json:"buckets"`
+	Capabilities []string        `json:"capabilities"`
+	Prefix       string          `json:"namePrefix"`
+}
+
+// AllowedBucket is a single bucket a key is restricted to. Name may be empty if
+// the bucket no longer exists or the key lacks listBuckets.
+type AllowedBucket struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type GroupsAPIInfo struct {
