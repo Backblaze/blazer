@@ -1131,12 +1131,9 @@ func TestListBucketContentsWithKey(t *testing.T) {
 	}
 }
 
-// TestMultiBucketKeyListsAllowedBuckets exercises the headline v4-only feature
-// end to end against live B2: it mints a Multi-Bucket Application Key scoped to
-// two buckets, authorizes with it (which only succeeds on v4), and confirms the
-// key can list within each allowed bucket.  If the v4 authorize response's
-// allowed scope were parsed incorrectly, the authorized client would not learn
-// its bucket scope and these list calls would fail with 401.
+// TestMultiBucketKeyListsAllowedBuckets exercises the v4-only feature live:
+// mint a Multi-Bucket key over two buckets, authorize with it (v4 only), and
+// list within each. A misparsed allowed scope would surface as a 401 here.
 func TestMultiBucketKeyListsAllowedBuckets(t *testing.T) {
 	ctx := context.Background()
 	bucket1, done := startLiveTest(ctx, t)

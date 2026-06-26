@@ -1557,9 +1557,8 @@ func TestCreateKeyDispatch(t *testing.T) {
 	})
 
 	t.Run("BucketCreateKey routes to createKey", func(t *testing.T) {
-		// testBucket.id() returns "" so we can't assert the propagated
-		// bucket id here; the important invariant is that Bucket.CreateKey
-		// never takes the multi-bucket path.
+		// testBucket.id() is "", so we only assert that Bucket.CreateKey
+		// avoids the multi-bucket path, not the propagated bucket id.
 		client, root := newClient()
 		bucket, err := client.NewBucket(ctx, "b", &BucketAttrs{Type: Private})
 		if err != nil {

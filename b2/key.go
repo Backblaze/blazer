@@ -90,23 +90,18 @@ func Prefix(prefix string) KeyOption {
 	}
 }
 
-// BucketIDs restricts the requested application key to the given set of
-// bucket IDs.  This produces a Multi-Bucket Application Key and is only
-// valid on (*Client).CreateKey; bucket-scoped keys created via
-// (*Bucket).CreateKey already derive their bucket ID from the bucket.
-//
-// Keys created with more than one bucket ID can only be used with the B2
-// native API v4.
+// BucketIDs scopes the key to the given bucket IDs, producing a Multi-Bucket
+// Application Key. Valid only on (*Client).CreateKey, and usable only against
+// B2 native API v4.
 func BucketIDs(ids ...string) KeyOption {
 	return func(k *keyOptions) {
 		k.bucketIDs = append(k.bucketIDs, ids...)
 	}
 }
 
-// CreateKey creates an application key that is valid either for all buckets
-// in this project, or for an explicit set of buckets when the BucketIDs
-// option is supplied.  The key's secret will only be accessible on the
-// object returned from this call.
+// CreateKey creates an application key for all buckets in the project, or for
+// the buckets named by the BucketIDs option. The secret is only accessible on
+// the returned Key.
 func (c *Client) CreateKey(ctx context.Context, name string, opts ...KeyOption) (*Key, error) {
 	var ko keyOptions
 	for _, o := range opts {

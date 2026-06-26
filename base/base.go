@@ -486,10 +486,8 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		return nil, err
 	}
 	storageAPI := b2resp.APIInfo.StorageAPIInfo
-	// For restricted keys, the v4 authorize-account response carries the key's
-	// scope under apiInfo.storageApi.allowed: a list of {id, name} buckets and
-	// an optional name prefix. Unrestricted (master) keys have a nil/empty
-	// allowed, leaving buckets and pfx empty.
+	// A restricted key's scope lives under storageApi.allowed; it's nil for
+	// unrestricted keys, leaving buckets and pfx empty.
 	var buckets []string
 	var pfx string
 	if allowed := storageAPI.Allowed; allowed != nil {
@@ -730,10 +728,9 @@ func (b *Bucket) S3URL() string {
 // ListBuckets wraps b2_list_buckets.  If name is non-empty, only that bucket
 // will be returned if it exists; else nothing will be returned.
 func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string) ([]*Bucket, error) {
-	// b2_list_buckets only accepts a single bucketId filter. When the key is
-	// restricted to exactly one bucket we pass it explicitly; otherwise we
-	// omit the filter and rely on B2's server-side enforcement of the key's
-	// allowed bucket list.
+	// b2_list_buckets filters on at most one bucketId, so only a single-bucket
+	// key can be pre-filtered here; multi-bucket keys rely on B2's server-side
+	// scope enforcement.
 	var filterBucketID string
 	if len(b.buckets) == 1 {
 		filterBucketID = b.buckets[0]
@@ -1372,12 +1369,9 @@ type Key struct {
 	b2           *B2
 }
 
-// CreateKey wraps b2_create_key on the v3 endpoint and produces a legacy
-// single-bucket application key: if bucketID is non-empty the key is
-// restricted to that one bucket, otherwise it is unrestricted.  Keys
-// created this way are compatible with clients that still speak the B2
-// native API v3.  To create a Multi-Bucket Application Key, use
-// CreateKeyMultiBucket.
+// CreateKey wraps v3 b2_create_key, producing a single-bucket key (or, with an
+// empty bucketID, an unrestricted one) that v3-only clients can still use. For
+// a Multi-Bucket Application Key, use CreateKeyMultiBucket.
 func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid time.Duration, bucketID string, prefix string) (*Key, error) {
 	b2req := &b2types.CreateKeyRequestV3{
 		AccountID:    b.accountID,
@@ -1390,11 +1384,9 @@ func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid ti
 	return b.doCreateKey(ctx, b2types.V3api, b2req)
 }
 
-// CreateKeyMultiBucket wraps b2_create_key on the v4 endpoint and produces
-// a Multi-Bucket Application Key scoped to the given bucket IDs.  Keys
-// produced by this method cannot be used by clients that only speak the B2
-// native API v3.  If backward compatibility with v3-only clients matters,
-// create one key per bucket with CreateKey instead.
+// CreateKeyMultiBucket wraps v4 b2_create_key, producing a Multi-Bucket
+// Application Key. Such keys are unusable by v3-only clients; for v3
+// compatibility, create one CreateKey per bucket instead.
 func (b *B2) CreateKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (*Key, error) {
 	b2req := &b2types.CreateKeyRequestV4{
 		AccountID:    b.accountID,

@@ -26,15 +26,9 @@ import (
 	"testing"
 )
 
-// v4AuthJSON returns an authorizeAccount response body in the v4 shape.  The
-// apiUrl points back at the test server so follow-up calls (CreateKey, etc.)
-// hit the same handler.
-//
-// A restricted key's scope is nested under apiInfo.storageApi.allowed: buckets
-// is a list of {id, name} objects and namePrefix an optional string.  bucketIDs
-// and bucketNames are zipped into that list (they must be the same length).
-// When bucketIDs is empty the key is treated as unrestricted and allowed is
-// omitted entirely, matching B2's response for master keys.
+// v4AuthJSON builds a v4-shaped authorizeAccount response whose apiUrl points
+// back at the test server. bucketIDs/bucketNames (equal length) are zipped into
+// allowed.buckets; an empty scope omits allowed, as B2 does for master keys.
 func v4AuthJSON(apiURL string, bucketIDs, bucketNames []string, namePrefix string) string {
 	storageAPI := map[string]any{
 		"absoluteMinimumPartSize": 5000000,
@@ -105,7 +99,7 @@ func TestAuthorizeAccountV4(t *testing.T) {
 }
 
 func TestAuthorizeAccountV4UnrestrictedKey(t *testing.T) {
-	// Unrestricted keys return null/empty arrays for bucketIds/bucketNames.
+	// Unrestricted keys carry no allowed block.
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
@@ -124,15 +118,12 @@ func TestAuthorizeAccountV4UnrestrictedKey(t *testing.T) {
 	}
 }
 
-// TestAuthorizeAccountV4ReadsAllowedNesting guards against regressing to the v3
-// shape, where the key's scope sat at the storageApi top level.  In v4 the scope
-// lives under storageApi.allowed; a response with top-level bucketIds/namePrefix
-// (and an empty allowed) must yield no restrictions.
+// TestAuthorizeAccountV4ReadsAllowedNesting pins the fix: v4 scope lives under
+// storageApi.allowed, so top-level v3-style bucketIds/namePrefix are ignored.
 func TestAuthorizeAccountV4ReadsAllowedNesting(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Deliberately place scope at the (wrong) v3 top level and leave
-		// allowed absent.  A correct v4 parser ignores these.
+		// Scope at the (wrong) v3 top level, with no allowed block.
 		resp := map[string]any{
 			"accountId":          "account-id",
 			"authorizationToken": "auth-token",
@@ -165,9 +156,8 @@ func TestAuthorizeAccountV4ReadsAllowedNesting(t *testing.T) {
 	}
 }
 
-// TestAuthorizeAccountV4SingleBucketRestrictedKey covers the headline regression:
-// a bucket-restricted key whose scope is nested under storageApi.allowed must be
-// surfaced so the client knows which bucket it may use.
+// TestAuthorizeAccountV4SingleBucketRestrictedKey checks the headline case: a
+// restricted key's nested scope is surfaced so the client knows its bucket.
 func TestAuthorizeAccountV4SingleBucketRestrictedKey(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,10 +174,8 @@ func TestAuthorizeAccountV4SingleBucketRestrictedKey(t *testing.T) {
 	}
 }
 
-// createKeyFixture wires up a test server that first handles authorize_account
-// then records and responds to a single b2_create_key request.  It returns the
-// authorized B2, plus pointers to captured request metadata the caller can
-// inspect after making the create_key call.
+// createKeyFixture serves authorize_account, then captures the single
+// b2_create_key request (path, method, body) for the caller to inspect.
 type createKeyFixture struct {
 	b2         *B2
 	srv        *httptest.Server

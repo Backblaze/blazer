@@ -37,22 +37,20 @@ type StorageAPIInfo struct {
 	Type           string   `json:"storageApi"`
 	PartSize       int      `json:"recommendedPartSize"`
 	S3URI          string   `json:"s3ApiUrl"`
-	// Allowed carries the key's scope (bucket and prefix restrictions). In the
-	// v4 authorize-account response it is nil/empty for unrestricted (master)
-	// keys and populated for bucket- or prefix-restricted keys.
+	// Allowed holds the key's scope; nil for unrestricted (master) keys.
 	Allowed *Allowed `json:"allowed"`
 }
 
-// Allowed is the scope of the application key used to authorize, as returned
-// under apiInfo.storageApi.allowed by b2_authorize_account in the v4 API.
+// Allowed is the authorizing key's scope, from apiInfo.storageApi.allowed in
+// the v4 b2_authorize_account response.
 type Allowed struct {
 	Buckets      []AllowedBucket `json:"buckets"`
 	Capabilities []string        `json:"capabilities"`
 	Prefix       string          `json:"namePrefix"`
 }
 
-// AllowedBucket is a single bucket a key is restricted to. Name may be empty if
-// the bucket no longer exists or the key lacks listBuckets.
+// AllowedBucket is a bucket a key is restricted to. Name is empty if the bucket
+// no longer exists or the key lacks listBuckets.
 type AllowedBucket struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -306,9 +304,7 @@ type ListUnfinishedLargeFilesResponse struct {
 	Continuation string                `json:"nextFileId"`
 }
 
-// CreateKeyRequestV3 is the b2_create_key request body for the v3 endpoint,
-// which accepts only a single bucket restriction and produces a legacy
-// single-bucket application key.
+// CreateKeyRequestV3 is the v3 b2_create_key body: a single bucket restriction.
 type CreateKeyRequestV3 struct {
 	AccountID    string   `json:"accountId"`
 	Capabilities []string `json:"capabilities"`
@@ -318,9 +314,7 @@ type CreateKeyRequestV3 struct {
 	Prefix       string   `json:"namePrefix,omitempty"`
 }
 
-// CreateKeyRequestV4 is the b2_create_key request body for the v4 endpoint,
-// which takes a list of bucket IDs and produces a Multi-Bucket Application
-// Key.
+// CreateKeyRequestV4 is the v4 b2_create_key body: a list of bucket IDs.
 type CreateKeyRequestV4 struct {
 	AccountID    string   `json:"accountId"`
 	Capabilities []string `json:"capabilities"`
@@ -330,11 +324,9 @@ type CreateKeyRequestV4 struct {
 	Prefix       string   `json:"namePrefix,omitempty"`
 }
 
-// Key is the response body for b2_create_key, b2_list_keys, and
-// b2_delete_key across both API versions.  The v3 endpoint returns a
-// singular bucketId; v4 returns a bucketIds array for Multi-Bucket
-// Application Keys.  Both tagged fields are present so this one struct
-// can decode either shape; exactly one will be populated per response.
+// Key is the b2_create_key/b2_list_keys/b2_delete_key response for both API
+// versions: v3 returns a singular bucketId, v4 a bucketIds array. Both tags are
+// present so one struct decodes either; exactly one is populated per response.
 type Key struct {
 	ID           string   `json:"applicationKeyId"`
 	Secret       string   `json:"applicationKey"`
