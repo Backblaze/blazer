@@ -1540,6 +1540,19 @@ func TestCreateKeyDispatch(t *testing.T) {
 		}
 	})
 
+	t.Run("ClientCreateKey with one BucketID routes to createKey", func(t *testing.T) {
+		client, root := newClient()
+		if _, err := client.CreateKey(ctx, "kn", BucketIDs("buck-a")); err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKey" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKey")
+		}
+		if root.lastKeyBucketID != "buck-a" {
+			t.Errorf("lastKeyBucketID = %q, want %q", root.lastKeyBucketID, "buck-a")
+		}
+	})
+
 	t.Run("ClientCreateKey with BucketIDs routes to createKeyMultiBucket", func(t *testing.T) {
 		client, root := newClient()
 		if _, err := client.CreateKey(ctx, "kn", BucketIDs("buck-a", "buck-b"), Prefix("p/")); err != nil {

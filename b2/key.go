@@ -90,9 +90,10 @@ func Prefix(prefix string) KeyOption {
 	}
 }
 
-// BucketIDs scopes the key to the given bucket IDs, producing a Multi-Bucket
-// Application Key. Valid only on (*Client).CreateKey, and usable only against
-// B2 native API v4.
+// BucketIDs scopes the key to the given bucket IDs. A single ID produces a
+// legacy single-bucket key; two or more produce a Multi-Bucket Application
+// Key, which is usable only against B2 native API v4. Valid only on
+// (*Client).CreateKey.
 func BucketIDs(ids ...string) KeyOption {
 	return func(k *keyOptions) {
 		k.bucketIDs = append(k.bucketIDs, ids...)
@@ -114,10 +115,15 @@ func (c *Client) CreateKey(ctx context.Context, name string, opts ...KeyOption) 
 		ki  beKeyInterface
 		err error
 	)
-	if len(ko.bucketIDs) > 0 {
-		ki, err = c.backend.createKeyMultiBucket(ctx, name, ko.caps, ko.lifetime, ko.bucketIDs, ko.prefix)
-	} else {
+	switch len(ko.bucketIDs) {
+	case 0:
 		ki, err = c.backend.createKey(ctx, name, ko.caps, ko.lifetime, "", ko.prefix)
+	case 1:
+		// Single-bucket keys stay on the v3 endpoint: a v4-minted key cannot
+		// authorize against v3, so this keeps them usable by v3-only clients.
+		ki, err = c.backend.createKey(ctx, name, ko.caps, ko.lifetime, ko.bucketIDs[0], ko.prefix)
+	default:
+		ki, err = c.backend.createKeyMultiBucket(ctx, name, ko.caps, ko.lifetime, ko.bucketIDs, ko.prefix)
 	}
 	if err != nil {
 		return nil, err
