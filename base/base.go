@@ -322,6 +322,8 @@ func (b *B2) Update(n *B2) {
 	b.downloadURI = n.downloadURI
 	b.minPartSize = n.minPartSize
 	b.opts = n.opts
+	b.buckets = n.buckets
+	b.pfx = n.pfx
 }
 
 type httpReply struct {

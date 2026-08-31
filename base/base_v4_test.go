@@ -178,6 +178,24 @@ func TestAuthorizeAccountV4SingleBucketRestrictedKey(t *testing.T) {
 	}
 }
 
+// TestUpdateCarriesScope guards re-auth: a re-authorized B2 must keep the
+// key's bucket and prefix restrictions, or scope-aware calls like ListBuckets
+// silently regress to unrestricted behavior.
+func TestUpdateCarriesScope(t *testing.T) {
+	b := &B2{}
+	b.Update(&B2{
+		accountID: "account-id",
+		buckets:   []string{"buck-a", "buck-b"},
+		pfx:       "restic/",
+	})
+	if want := []string{"buck-a", "buck-b"}; !reflect.DeepEqual(b.buckets, want) {
+		t.Errorf("buckets = %v, want %v", b.buckets, want)
+	}
+	if b.pfx != "restic/" {
+		t.Errorf("pfx = %q, want %q", b.pfx, "restic/")
+	}
+}
+
 // TestListBucketsFansOutForMultiBucketKeys pins the fan-out: b2_list_buckets
 // rejects any unfiltered request from a restricted key with 401 and accepts at
 // most one bucketId filter, so a multi-bucket key must issue one filtered
