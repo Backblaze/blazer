@@ -728,16 +728,33 @@ func (b *Bucket) S3URL() string {
 // ListBuckets wraps b2_list_buckets.  If name is non-empty, only that bucket
 // will be returned if it exists; else nothing will be returned.
 func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string) ([]*Bucket, error) {
-	// b2_list_buckets filters on at most one bucketId, so only a single-bucket
-	// key can be pre-filtered here; multi-bucket keys rely on B2's server-side
-	// scope enforcement.
+	// b2_list_buckets does not narrow results to a restricted key's scope: it
+	// rejects any unfiltered request from such a key with 401, and accepts at
+	// most one bucketId filter per request. A single-bucket key can send its
+	// bucket as the filter; a multi-bucket key with no name filter has to fan
+	// out one request per allowed bucket and merge the results.
+	if name == "" && len(b.buckets) > 1 {
+		var buckets []*Bucket
+		for _, id := range b.buckets {
+			bs, err := b.listBuckets(ctx, id, "", bucketTypes)
+			if err != nil {
+				return nil, err
+			}
+			buckets = append(buckets, bs...)
+		}
+		return buckets, nil
+	}
 	var filterBucketID string
 	if len(b.buckets) == 1 {
 		filterBucketID = b.buckets[0]
 	}
+	return b.listBuckets(ctx, filterBucketID, name, bucketTypes)
+}
+
+func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes []string) ([]*Bucket, error) {
 	b2req := &b2types.ListBucketsRequest{
 		AccountID:   b.accountID,
-		Bucket:      filterBucketID,
+		Bucket:      bucketID,
 		Name:        name,
 		BucketTypes: bucketTypes,
 	}

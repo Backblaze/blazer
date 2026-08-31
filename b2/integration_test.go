@@ -1185,6 +1185,21 @@ func TestMultiBucketKeyListsAllowedBuckets(t *testing.T) {
 		t.Fatalf("NewClient with multi-bucket key: %v", err)
 	}
 
+	// An unfiltered b2_list_buckets is rejected for restricted keys, so this
+	// exercises the per-bucket fan-out.
+	listed, err := mbClient.ListBuckets(ctx)
+	if err != nil {
+		t.Fatalf("ListBuckets via multi-bucket key: %v", err)
+	}
+	got := map[string]bool{}
+	for _, b := range listed {
+		got[b.Name()] = true
+	}
+	want := map[string]bool{bucket1.Name(): true, bucket2.Name(): true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ListBuckets via multi-bucket key = %v, want %v", got, want)
+	}
+
 	for _, b := range []*Bucket{bucket1, bucket2} {
 		ob, err := mbClient.Bucket(ctx, b.Name())
 		if err != nil {

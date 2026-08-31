@@ -174,6 +174,62 @@ func TestAuthorizeAccountV4SingleBucketRestrictedKey(t *testing.T) {
 	}
 }
 
+// TestListBucketsFansOutForMultiBucketKeys pins the fan-out: b2_list_buckets
+// rejects any unfiltered request from a restricted key with 401 and accepts at
+// most one bucketId filter, so a multi-bucket key must issue one filtered
+// request per allowed bucket and merge the results.
+func TestListBucketsFansOutForMultiBucketKeys(t *testing.T) {
+	bucketNames := map[string]string{"buck-a": "name-a", "buck-b": "name-b"}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/b2api/v4/b2_authorize_account":
+			fmt.Fprint(w, v4AuthJSON(srv.URL, []string{"buck-a", "buck-b"}, []string{"name-a", "name-b"}, ""))
+		case strings.HasSuffix(r.URL.Path, "/b2_list_buckets"):
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read body: %v", err)
+			}
+			req := map[string]any{}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			id, _ := req["bucketId"].(string)
+			if id == "" {
+				// Live B2 rejects unfiltered listing from restricted keys.
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"status": 401, "code": "unauthorized", "message": ""}`)
+				return
+			}
+			name, ok := bucketNames[id]
+			if !ok {
+				t.Errorf("filtered list for unexpected bucketId %q", id)
+			}
+			fmt.Fprintf(w, `{"buckets": [{"bucketId": %q, "bucketName": %q, "bucketType": "allPrivate"}]}`, id, name)
+		default:
+			t.Errorf("unexpected request path: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatalf("AuthorizeAccount: %v", err)
+	}
+	buckets, err := b.ListBuckets(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListBuckets: %v", err)
+	}
+	var names []string
+	for _, bucket := range buckets {
+		names = append(names, bucket.Name)
+	}
+	if want := []string{"name-a", "name-b"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("ListBuckets = %v, want %v", names, want)
+	}
+}
+
 // createKeyFixture serves authorize_account, then captures the single
 // b2_create_key request (path, method, body) for the caller to inspect.
 type createKeyFixture struct {
