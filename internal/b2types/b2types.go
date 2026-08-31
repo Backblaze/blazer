@@ -37,7 +37,8 @@ type StorageAPIInfo struct {
 	Type           string   `json:"storageApi"`
 	PartSize       int      `json:"recommendedPartSize"`
 	S3URI          string   `json:"s3ApiUrl"`
-	// Allowed holds the key's scope; nil for unrestricted (master) keys.
+	// Allowed holds the key's scope. Master keys carry an Allowed whose
+	// Buckets and Prefix are null rather than omitting the field.
 	Allowed *Allowed `json:"allowed"`
 }
 

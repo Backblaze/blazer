@@ -486,8 +486,9 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		return nil, err
 	}
 	storageAPI := b2resp.APIInfo.StorageAPIInfo
-	// A restricted key's scope lives under storageApi.allowed; it's nil for
-	// unrestricted keys, leaving buckets and pfx empty.
+	// A restricted key's scope lives under storageApi.allowed. Master keys
+	// carry an allowed with null buckets and namePrefix, leaving buckets and
+	// pfx empty; the nil check also tolerates an absent allowed.
 	var buckets []string
 	var pfx string
 	if allowed := storageAPI.Allowed; allowed != nil {

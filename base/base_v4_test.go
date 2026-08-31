@@ -28,8 +28,17 @@ import (
 
 // v4AuthJSON builds a v4-shaped authorizeAccount response whose apiUrl points
 // back at the test server. bucketIDs/bucketNames (equal length) are zipped into
-// allowed.buckets; an empty scope omits allowed, as B2 does for master keys.
+// allowed.buckets. allowed is always present; an empty scope carries null
+// buckets and namePrefix, the shape B2 returns for master keys.
 func v4AuthJSON(apiURL string, bucketIDs, bucketNames []string, namePrefix string) string {
+	var buckets []map[string]any // nil marshals to null, the master-key shape
+	for i, id := range bucketIDs {
+		buckets = append(buckets, map[string]any{"id": id, "name": bucketNames[i]})
+	}
+	var prefix any // null when unset
+	if namePrefix != "" {
+		prefix = namePrefix
+	}
 	storageAPI := map[string]any{
 		"absoluteMinimumPartSize": 5000000,
 		"apiUrl":                  apiURL,
@@ -38,17 +47,11 @@ func v4AuthJSON(apiURL string, bucketIDs, bucketNames []string, namePrefix strin
 		"storageApi":              "storage",
 		"recommendedPartSize":     100000000,
 		"s3ApiUrl":                apiURL,
-	}
-	if len(bucketIDs) > 0 || namePrefix != "" {
-		buckets := make([]map[string]any, len(bucketIDs))
-		for i, id := range bucketIDs {
-			buckets[i] = map[string]any{"id": id, "name": bucketNames[i]}
-		}
-		storageAPI["allowed"] = map[string]any{
+		"allowed": map[string]any{
 			"buckets":      buckets,
 			"capabilities": []string{"readFiles", "writeFiles"},
-			"namePrefix":   namePrefix,
-		}
+			"namePrefix":   prefix,
+		},
 	}
 	resp := map[string]any{
 		"accountId":                         "account-id",
@@ -99,7 +102,8 @@ func TestAuthorizeAccountV4(t *testing.T) {
 }
 
 func TestAuthorizeAccountV4UnrestrictedKey(t *testing.T) {
-	// Unrestricted keys carry no allowed block.
+	// Master keys still carry an allowed block, but with null buckets and
+	// namePrefix.
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
