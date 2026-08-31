@@ -38,6 +38,7 @@ type b2RootInterface interface {
 	createBucket(context.Context, string, string, map[string]string, []LifecycleRule) (b2BucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]b2BucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error)
+	createKeyMultiBucket(context.Context, string, []string, time.Duration, []string, string) (b2KeyInterface, error)
 	listKeys(context.Context, int, string) ([]b2KeyInterface, string, error)
 }
 
@@ -335,6 +336,14 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 
 func (b *b2Root) createKey(ctx context.Context, name string, caps []string, valid time.Duration, bucketID string, prefix string) (b2KeyInterface, error) {
 	k, err := b.b.CreateKey(ctx, name, caps, valid, bucketID, prefix)
+	if err != nil {
+		return nil, err
+	}
+	return &b2Key{k}, nil
+}
+
+func (b *b2Root) createKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (b2KeyInterface, error) {
+	k, err := b.b.CreateKeyMultiBucket(ctx, name, caps, valid, bucketIDs, prefix)
 	if err != nil {
 		return nil, err
 	}

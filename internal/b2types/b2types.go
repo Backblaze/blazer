@@ -20,6 +20,7 @@ package b2types
 
 const (
 	V3api = "/b2api/v3/"
+	V4api = "/b2api/v4/"
 )
 
 type ErrorMessage struct {
@@ -31,14 +32,29 @@ type ErrorMessage struct {
 type StorageAPIInfo struct {
 	AbsMinPartSize int      `json:"absoluteMinimumPartSize"`
 	URI            string   `json:"apiUrl"`
-	Bucket         string   `json:"bucketId"`
-	Name           string   `json:"bucketName"`
 	Capabilities   []string `json:"capabilities"`
 	DownloadURI    string   `json:"downloadUrl"`
 	Type           string   `json:"storageApi"`
-	Prefix         string   `json:"namePrefix"`
 	PartSize       int      `json:"recommendedPartSize"`
 	S3URI          string   `json:"s3ApiUrl"`
+	// Allowed holds the key's scope. Master keys carry an Allowed whose
+	// Buckets and Prefix are null rather than omitting the field.
+	Allowed *Allowed `json:"allowed"`
+}
+
+// Allowed is the authorizing key's scope, from apiInfo.storageApi.allowed in
+// the v4 b2_authorize_account response.
+type Allowed struct {
+	Buckets      []AllowedBucket `json:"buckets"`
+	Capabilities []string        `json:"capabilities"`
+	Prefix       string          `json:"namePrefix"`
+}
+
+// AllowedBucket is a bucket a key is restricted to. Name is empty only if the
+// bucket no longer exists.
+type AllowedBucket struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type GroupsAPIInfo struct {
@@ -287,7 +303,8 @@ type ListUnfinishedLargeFilesResponse struct {
 	Continuation string                `json:"nextFileId"`
 }
 
-type CreateKeyRequest struct {
+// CreateKeyRequestV3 is the v3 b2_create_key body: a single bucket restriction.
+type CreateKeyRequestV3 struct {
 	AccountID    string   `json:"accountId"`
 	Capabilities []string `json:"capabilities"`
 	Name         string   `json:"keyName"`
@@ -296,6 +313,19 @@ type CreateKeyRequest struct {
 	Prefix       string   `json:"namePrefix,omitempty"`
 }
 
+// CreateKeyRequestV4 is the v4 b2_create_key body: a list of bucket IDs.
+type CreateKeyRequestV4 struct {
+	AccountID    string   `json:"accountId"`
+	Capabilities []string `json:"capabilities"`
+	Name         string   `json:"keyName"`
+	Valid        int      `json:"validDurationInSeconds,omitempty"`
+	BucketIDs    []string `json:"bucketIds,omitempty"`
+	Prefix       string   `json:"namePrefix,omitempty"`
+}
+
+// Key is the b2_create_key/b2_list_keys/b2_delete_key response for both API
+// versions: v3 returns a singular bucketId, v4 a bucketIds array. Both tags are
+// present so one struct decodes either; exactly one is populated per response.
 type Key struct {
 	ID           string   `json:"applicationKeyId"`
 	Secret       string   `json:"applicationKey"`
@@ -303,7 +333,8 @@ type Key struct {
 	Capabilities []string `json:"capabilities"`
 	Name         string   `json:"keyName"`
 	Expires      int64    `json:"expirationTimestamp"`
-	BucketID     string   `json:"bucketId"`
+	BucketID     string   `json:"bucketId,omitempty"`
+	BucketIDs    []string `json:"bucketIds,omitempty"`
 	Prefix       string   `json:"namePrefix"`
 }
 

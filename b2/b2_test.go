@@ -22,6 +22,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -69,6 +70,11 @@ type testRoot struct {
 	errs      *errCont
 	auths     int
 	bucketMap map[string]map[string]string
+
+	lastKeyMethod    string
+	lastKeyBucketID  string
+	lastKeyBucketIDs []string
+	lastKeyPrefix    string
 }
 
 func (t *testRoot) authorizeAccount(context.Context, string, string, clientOptions) error {
@@ -133,7 +139,16 @@ func (t *testRoot) reupload(err error) bool {
 	return e.reupload
 }
 
-func (t *testRoot) createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error) {
+func (t *testRoot) createKey(_ context.Context, _ string, _ []string, _ time.Duration, bucketID, prefix string) (b2KeyInterface, error) {
+	t.lastKeyMethod = "createKey"
+	t.lastKeyBucketID = bucketID
+	t.lastKeyPrefix = prefix
+	return nil, nil
+}
+func (t *testRoot) createKeyMultiBucket(_ context.Context, _ string, _ []string, _ time.Duration, bucketIDs []string, prefix string) (b2KeyInterface, error) {
+	t.lastKeyMethod = "createKeyMultiBucket"
+	t.lastKeyBucketIDs = bucketIDs
+	t.lastKeyPrefix = prefix
 	return nil, nil
 }
 func (t *testRoot) listKeys(context.Context, int, string) ([]b2KeyInterface, string, error) {
@@ -1453,4 +1468,85 @@ func readFile(ctx context.Context, obj *Object, sha string, chunk, concur int) e
 		return fmt.Errorf("bad hash: got %s, want %s", rsha, sha)
 	}
 	return nil
+}
+
+func TestCreateKeyDispatch(t *testing.T) {
+	ctx := context.Background()
+
+	newClient := func() (*Client, *testRoot) {
+		root := &testRoot{
+			bucketMap: make(map[string]map[string]string),
+			errs:      &errCont{},
+		}
+		return &Client{backend: &beRoot{b2i: root}}, root
+	}
+
+	t.Run("ClientCreateKey routes to createKey", func(t *testing.T) {
+		client, root := newClient()
+		if _, err := client.CreateKey(ctx, "kn"); err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKey" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKey")
+		}
+		if root.lastKeyBucketID != "" {
+			t.Errorf("lastKeyBucketID = %q, want empty", root.lastKeyBucketID)
+		}
+	})
+
+	t.Run("ClientCreateKey with one BucketID routes to createKey", func(t *testing.T) {
+		client, root := newClient()
+		if _, err := client.CreateKey(ctx, "kn", BucketIDs("buck-a")); err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKey" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKey")
+		}
+		if root.lastKeyBucketID != "buck-a" {
+			t.Errorf("lastKeyBucketID = %q, want %q", root.lastKeyBucketID, "buck-a")
+		}
+	})
+
+	t.Run("ClientCreateKey with BucketIDs routes to createKeyMultiBucket", func(t *testing.T) {
+		client, root := newClient()
+		if _, err := client.CreateKey(ctx, "kn", BucketIDs("buck-a", "buck-b"), Prefix("p/")); err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKeyMultiBucket" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKeyMultiBucket")
+		}
+		if got, want := root.lastKeyBucketIDs, []string{"buck-a", "buck-b"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("lastKeyBucketIDs = %v, want %v", got, want)
+		}
+		if root.lastKeyPrefix != "p/" {
+			t.Errorf("lastKeyPrefix = %q, want %q", root.lastKeyPrefix, "p/")
+		}
+	})
+
+	t.Run("BucketCreateKey routes to createKey", func(t *testing.T) {
+		// testBucket.id() is "", so we only assert that Bucket.CreateKey
+		// avoids the multi-bucket path, not the propagated bucket id.
+		client, root := newClient()
+		bucket, err := client.NewBucket(ctx, "b", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatalf("NewBucket: %v", err)
+		}
+		if _, err := bucket.CreateKey(ctx, "kn", Capabilities("listFiles")); err != nil {
+			t.Fatalf("Bucket.CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKey" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKey")
+		}
+	})
+
+	t.Run("BucketCreateKey rejects BucketIDs", func(t *testing.T) {
+		client, _ := newClient()
+		bucket, err := client.NewBucket(ctx, "b2", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatalf("NewBucket: %v", err)
+		}
+		if _, err := bucket.CreateKey(ctx, "kn", BucketIDs("x")); err == nil {
+			t.Errorf("Bucket.CreateKey with BucketIDs: want error, got nil")
+		}
+	})
 }

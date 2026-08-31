@@ -36,6 +36,7 @@ type beRootInterface interface {
 	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (beBucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]beBucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (beKeyInterface, error)
+	createKeyMultiBucket(context.Context, string, []string, time.Duration, []string, string) (beKeyInterface, error)
 	listKeys(context.Context, int, string) ([]beKeyInterface, string, error)
 }
 
@@ -244,6 +245,28 @@ func (r *beRoot) createKey(ctx context.Context, name string, caps []string, vali
 	f := func() error {
 		g := func() error {
 			got, err := r.b2i.createKey(ctx, name, caps, valid, bucketID, prefix)
+			if err != nil {
+				return err
+			}
+			k = &beKey{
+				b2i: r,
+				k:   got,
+			}
+			return nil
+		}
+		return withReauth(ctx, r, g)
+	}
+	if err := withBackoff(ctx, r, f); err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
+func (r *beRoot) createKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (beKeyInterface, error) {
+	var k *beKey
+	f := func() error {
+		g := func() error {
+			got, err := r.b2i.createKeyMultiBucket(ctx, name, caps, valid, bucketIDs, prefix)
 			if err != nil {
 				return err
 			}

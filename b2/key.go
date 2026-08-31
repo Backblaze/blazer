@@ -52,9 +52,10 @@ func (k *Key) Secret() string { return k.k.secret() }
 func (k *Key) ID() string { return k.k.id() }
 
 type keyOptions struct {
-	caps     []string
-	prefix   string
-	lifetime time.Duration
+	caps      []string
+	prefix    string
+	lifetime  time.Duration
+	bucketIDs []string
 }
 
 // KeyOption specifies desired properties for application keys.
@@ -89,18 +90,41 @@ func Prefix(prefix string) KeyOption {
 	}
 }
 
-// CreateKey creates a global application key that is valid for all buckets in
-// this project.  The key's secret will only be accessible on the object
-// returned from this call.
+// BucketIDs scopes the key to the given bucket IDs. A single ID produces a
+// legacy single-bucket key; two or more produce a Multi-Bucket Application
+// Key, which is usable only against B2 native API v4. Valid only on
+// (*Client).CreateKey.
+func BucketIDs(ids ...string) KeyOption {
+	return func(k *keyOptions) {
+		k.bucketIDs = append(k.bucketIDs, ids...)
+	}
+}
+
+// CreateKey creates an application key for all buckets in the project, or for
+// the buckets named by the BucketIDs option. The secret is only accessible on
+// the returned Key.
 func (c *Client) CreateKey(ctx context.Context, name string, opts ...KeyOption) (*Key, error) {
 	var ko keyOptions
 	for _, o := range opts {
 		o(&ko)
 	}
-	if ko.prefix != "" {
-		return nil, errors.New("Prefix is not a valid option for global application keys")
+	if ko.prefix != "" && len(ko.bucketIDs) == 0 {
+		return nil, errors.New("Prefix requires at least one bucket; use BucketIDs or create the key via (*Bucket).CreateKey")
 	}
-	ki, err := c.backend.createKey(ctx, name, ko.caps, ko.lifetime, "", "")
+	var (
+		ki  beKeyInterface
+		err error
+	)
+	switch len(ko.bucketIDs) {
+	case 0:
+		ki, err = c.backend.createKey(ctx, name, ko.caps, ko.lifetime, "", ko.prefix)
+	case 1:
+		// Single-bucket keys stay on the v3 endpoint: a v4-minted key cannot
+		// authorize against v3, so this keeps them usable by v3-only clients.
+		ki, err = c.backend.createKey(ctx, name, ko.caps, ko.lifetime, ko.bucketIDs[0], ko.prefix)
+	default:
+		ki, err = c.backend.createKeyMultiBucket(ctx, name, ko.caps, ko.lifetime, ko.bucketIDs, ko.prefix)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +168,9 @@ func (b *Bucket) CreateKey(ctx context.Context, name string, opts ...KeyOption) 
 	var ko keyOptions
 	for _, o := range opts {
 		o(&ko)
+	}
+	if len(ko.bucketIDs) > 0 {
+		return nil, errors.New("BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key")
 	}
 	ki, err := b.r.createKey(ctx, name, ko.caps, ko.lifetime, b.b.id(), ko.prefix)
 	if err != nil {
