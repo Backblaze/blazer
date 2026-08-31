@@ -50,8 +50,8 @@ type Allowed struct {
 	Prefix       string          `json:"namePrefix"`
 }
 
-// AllowedBucket is a bucket a key is restricted to. Name is empty if the bucket
-// no longer exists or the key lacks listBuckets.
+// AllowedBucket is a bucket a key is restricted to. Name is empty only if the
+// bucket no longer exists.
 type AllowedBucket struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
