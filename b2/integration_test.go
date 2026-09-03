@@ -759,7 +759,7 @@ func TestBucketDefaultEncryption(t *testing.T) {
 		attrs *BucketAttrs
 	}{
 		{name: "sse-omitted", attrs: nil},
-		{name: "sse-explicit", attrs: &BucketAttrs{DefaultServerSideEncryption: DefaultServerSideEncryption()}},
+		{name: "sse-explicit", attrs: &BucketAttrs{DefaultServerSideEncryption: SSEB2WithAES256()}},
 	}
 	for _, ent := range table {
 		t.Run(ent.name, func(t *testing.T) {
@@ -772,7 +772,7 @@ func TestBucketDefaultEncryption(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Attrs: %v", err)
 			}
-			want := DefaultServerSideEncryption()
+			want := SSEB2WithAES256()
 			if !reflect.DeepEqual(attrs.DefaultServerSideEncryption, want) {
 				t.Errorf("Attrs().DefaultServerSideEncryption = %+v, want %+v", attrs.DefaultServerSideEncryption, want)
 			}

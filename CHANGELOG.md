@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Nothing at present
+### Changed
+
+- B2 now applies SSE-B2 (AES256) as the default server-side encryption to every bucket. A nil `BucketAttrs.DefaultServerSideEncryption` passed to `Client.NewBucket` or `Bucket.Update` leaves the default to the server; any other setting than SSE-B2 with AES256 is rejected before the request is sent.
+- `base.CreateBucket` takes the bucket's default server-side encryption as an additional argument.
+
+### Fixed
+
+- `base.Bucket.DefaultServerSideEncryption` is decoded from the `{isClientAuthorizedToRead, value}` object B2 returns. It was read as a flat object, so `Bucket.Update` sent an empty encryption mode and failed.
+
+### Deprecated
+
+- `b2.DefaultServerSideEncryption()`, use `b2.SSEB2WithAES256()` instead.
 
 ## [0.7.2] - 2025-01-23
 
