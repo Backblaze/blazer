@@ -140,7 +140,7 @@ func (t *testRoot) listKeys(context.Context, int, string) ([]b2KeyInterface, str
 	return nil, "", nil
 }
 
-func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule) (b2BucketInterface, error) {
+func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule, _ *ServerSideEncryption) (b2BucketInterface, error) {
 	if err := t.errs.getError("createBucket"); err != nil {
 		return nil, err
 	}

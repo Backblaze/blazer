@@ -408,7 +408,7 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if attrs == nil {
 		attrs = &BucketAttrs{Type: Private}
 	}
-	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules)
+	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption)
 	if err != nil {
 		return nil, err
 	}

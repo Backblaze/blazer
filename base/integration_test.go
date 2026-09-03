@@ -78,7 +78,7 @@ func TestStorage(t *testing.T) {
 		},
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", m, rules)
+	bucket, err := b2.CreateBucket(ctx, bname, "", m, rules, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: lifecycle rules: got %d rules, wanted 1", bucket.Name, len(bucket.LifecycleRules))
 	}
 
-	// b2_update_bucket enable encryption
+	// b2_update_bucket with an explicit default encryption
 	bucket.DefaultServerSideEncryption = &b2types.ServerSideEncryption{
 		Mode:      "SSE-B2",
 		Algorithm: "AES256",
@@ -123,9 +123,8 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
-	if newBucket.DefaultServerSideEncryption == nil {
-		t.Errorf("%s: bucket serverside encryption was nil, wanted: %v", bucket.Name, bucket.DefaultServerSideEncryption)
-		return
+	if sse := newBucket.DefaultServerSideEncryption; sse == nil || sse.Mode != "SSE-B2" || sse.Algorithm != "AES256" {
+		t.Errorf("%s: DefaultServerSideEncryption = %+v, want SSE-B2/AES256", bucket.Name, sse)
 	}
 
 	// b2_update_bucket filelock configuration
@@ -208,7 +207,7 @@ func TestStorage(t *testing.T) {
 
 	// Need a real bucket ID etc. to create a replication rule
 	targetName := id + "-" + targetBucketName
-	targetBucket, err := b2.CreateBucket(ctx, targetName, "", m, rules)
+	targetBucket, err := b2.CreateBucket(ctx, targetName, "", m, rules, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +451,7 @@ func TestUploadAuthAfterConnectionHang(t *testing.T) {
 		t.Fatal(err)
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +514,7 @@ func TestCancelledContextCancelsHTTPRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +560,7 @@ func TestDeadlineExceededContextCancelsHTTPRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,7 +778,7 @@ func TestUploadDownloadFilenameEscaping(t *testing.T) {
 
 	// b2_create_bucket
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
