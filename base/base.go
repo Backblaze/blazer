@@ -559,8 +559,9 @@ type LifecycleRule struct {
 	DaysHiddenUntilDeleted int
 }
 
-// CreateBucket wraps b2_create_bucket.
-func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (*Bucket, error) {
+// CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
+// server-side encryption to the server.
+func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption) (*Bucket, error) {
 	if btype != "allPublic" {
 		btype = "allPrivate"
 	}
@@ -578,6 +579,8 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		Type:           btype,
 		Info:           info,
 		LifecycleRules: b2rules,
+
+		DefaultServerSideEncryption: sse,
 	}
 	b2resp := &b2types.CreateBucketResponse{}
 	headers := map[string]string{
@@ -595,12 +598,13 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		})
 	}
 	return &Bucket{
-		Name:           name,
-		Info:           b2resp.Info,
-		LifecycleRules: respRules,
-		ID:             b2resp.BucketID,
-		rev:            b2resp.Revision,
-		b2:             b,
+		Name:                        name,
+		Info:                        b2resp.Info,
+		LifecycleRules:              respRules,
+		ID:                          b2resp.BucketID,
+		rev:                         b2resp.Revision,
+		b2:                          b,
+		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
 	}, nil
 }
 
@@ -626,8 +630,11 @@ type Bucket struct {
 	rev            int
 	b2             *B2
 
-	CORSRules                   []b2types.CORSRule
-	DefaultRetention            *b2types.Retention
+	CORSRules        []b2types.CORSRule
+	DefaultRetention *b2types.Retention
+	// DefaultServerSideEncryption is the bucket's default encryption for new
+	// files. It is nil when the key may not read it, and a nil value is left
+	// out of Update so the server keeps whatever it has.
 	DefaultServerSideEncryption *b2types.ServerSideEncryption
 	FileLockEnabled             bool
 	ReplicationConfiguration    *b2types.ReplicationConfiguration
@@ -681,7 +688,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		ID:                          b2resp.BucketID,
 		b2:                          b.b2,
 		CORSRules:                   b2resp.CORSRules,
-		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption,
+		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
 		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
 		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
 	}
@@ -734,13 +741,14 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 			})
 		}
 		buckets = append(buckets, &Bucket{
-			Name:           bucket.Name,
-			Type:           bucket.Type,
-			Info:           bucket.Info,
-			LifecycleRules: rules,
-			ID:             bucket.BucketID,
-			rev:            bucket.Revision,
-			b2:             b,
+			Name:                        bucket.Name,
+			Type:                        bucket.Type,
+			Info:                        bucket.Info,
+			LifecycleRules:              rules,
+			ID:                          bucket.BucketID,
+			rev:                         bucket.Revision,
+			b2:                          b,
+			DefaultServerSideEncryption: bucket.DefaultServerSideEncryption.Value,
 		})
 	}
 	return buckets, nil

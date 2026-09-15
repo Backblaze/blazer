@@ -33,7 +33,7 @@ type beRootInterface interface {
 	reupload(error) bool
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	reauthorizeAccount(context.Context) error
-	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (beBucketInterface, error)
+	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption) (beBucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]beBucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (beKeyInterface, error)
 	listKeys(context.Context, int, string) ([]beKeyInterface, string, error)
@@ -193,11 +193,11 @@ func (r *beRoot) reauthorizeAccount(ctx context.Context) error {
 	return r.authorizeAccount(ctx, r.account, r.key, r.options)
 }
 
-func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (beBucketInterface, error) {
+func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption) (beBucketInterface, error) {
 	var bi beBucketInterface
 	f := func() error {
 		g := func() error {
-			bucket, err := r.b2i.createBucket(ctx, name, btype, info, rules)
+			bucket, err := r.b2i.createBucket(ctx, name, btype, info, rules, sse)
 			if err != nil {
 				return err
 			}

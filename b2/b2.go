@@ -245,18 +245,30 @@ type BucketAttrs struct {
 	ReplicationConfig *ReplicationConfiguration
 }
 
-// DefaultServerSideEncryption sets the bucket defaultServerSideEncryption to { "mode": "SSE-B2", "algorithm": "AES256" }
-// Must call Bucket.Update() to apply the change.
-func DefaultServerSideEncryption() *ServerSideEncryption {
+// SSEB2WithAES256 returns the SSE-B2 server-side encryption setting with the
+// AES256 algorithm. It is the only supported bucket default; leaving
+// BucketAttrs.DefaultServerSideEncryption nil uses the service default.
+func SSEB2WithAES256() *ServerSideEncryption {
 	return &ServerSideEncryption{
 		Mode:      "SSE-B2",
 		Algorithm: "AES256",
 	}
 }
 
+// DefaultServerSideEncryption returns the SSE-B2 setting.
+//
+// Deprecated: use SSEB2WithAES256.
+func DefaultServerSideEncryption() *ServerSideEncryption { return SSEB2WithAES256() }
+
 type ServerSideEncryption struct {
 	Mode      string
 	Algorithm string
+}
+
+// canBeUsedAsBucketDefault reports whether the service accepts the setting as
+// a bucket's default: only SSE-B2 with AES256 can be set explicitly.
+func (s *ServerSideEncryption) canBeUsedAsBucketDefault() bool {
+	return s.Mode == "SSE-B2" && s.Algorithm == "AES256"
 }
 
 type CORSRule struct {
@@ -408,7 +420,10 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if attrs == nil {
 		attrs = &BucketAttrs{Type: Private}
 	}
-	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules)
+	if sse := attrs.DefaultServerSideEncryption; sse != nil && !sse.canBeUsedAsBucketDefault() {
+		return nil, fmt.Errorf("%s/%s cannot be used as default for a bucket", sse.Mode, sse.Algorithm)
+	}
+	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption)
 	if err != nil {
 		return nil, err
 	}
@@ -452,6 +467,11 @@ func IsUpdateConflict(err error) bool {
 // this method could fail with an update conflict, in which case you should
 // retrieve the latest bucket attributes with Attrs and try again.
 func (b *Bucket) Update(ctx context.Context, attrs *BucketAttrs) error {
+	if attrs != nil {
+		if sse := attrs.DefaultServerSideEncryption; sse != nil && !sse.canBeUsedAsBucketDefault() {
+			return fmt.Errorf("%s/%s cannot be used as default for a bucket", sse.Mode, sse.Algorithm)
+		}
+	}
 	return b.b.updateBucket(ctx, attrs)
 }
 

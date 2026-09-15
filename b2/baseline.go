@@ -35,7 +35,7 @@ type b2RootInterface interface {
 	retry(error) bool
 	reauth(error) bool
 	reupload(error) bool
-	createBucket(context.Context, string, string, map[string]string, []LifecycleRule) (b2BucketInterface, error)
+	createBucket(context.Context, string, string, map[string]string, []LifecycleRule, *ServerSideEncryption) (b2BucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]b2BucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error)
 	listKeys(context.Context, int, string) ([]b2KeyInterface, string, error)
@@ -215,7 +215,7 @@ func (*b2Root) reupload(err error) bool {
 	return base.Action(err) == base.AttemptNewUpload
 }
 
-func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (b2BucketInterface, error) {
+func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption) (b2BucketInterface, error) {
 	var baseRules []base.LifecycleRule
 	for _, rule := range rules {
 		baseRules = append(baseRules, base.LifecycleRule{
@@ -224,7 +224,14 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 			Prefix:                 rule.Prefix,
 		})
 	}
-	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules)
+	var baseSSE *b2types.ServerSideEncryption
+	if sse != nil {
+		baseSSE = &b2types.ServerSideEncryption{
+			Mode:      sse.Mode,
+			Algorithm: sse.Algorithm,
+		}
+	}
+	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE)
 	if err != nil {
 		return nil, err
 	}
@@ -374,11 +381,18 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 			Prefix:                 rule.Prefix,
 		})
 	}
-	return &BucketAttrs{
+	attrs := &BucketAttrs{
 		LifecycleRules: rules,
 		Info:           b.b.Info,
 		Type:           BucketType(b.b.Type),
 	}
+	if sse := b.b.DefaultServerSideEncryption; sse != nil {
+		attrs.DefaultServerSideEncryption = &ServerSideEncryption{
+			Mode:      sse.Mode,
+			Algorithm: sse.Algorithm,
+		}
+	}
+	return attrs
 }
 
 func (b *b2Bucket) id() string { return b.b.ID }

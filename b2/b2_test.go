@@ -140,7 +140,7 @@ func (t *testRoot) listKeys(context.Context, int, string) ([]b2KeyInterface, str
 	return nil, "", nil
 }
 
-func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule) (b2BucketInterface, error) {
+func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule, _ *ServerSideEncryption) (b2BucketInterface, error) {
 	if err := t.errs.getError("createBucket"); err != nil {
 		return nil, err
 	}
@@ -1453,4 +1453,50 @@ func readFile(ctx context.Context, obj *Object, sha string, chunk, concur int) e
 		return fmt.Errorf("bad hash: got %s, want %s", rsha, sha)
 	}
 	return nil
+}
+
+func TestBucketDefaultEncryptionRejected(t *testing.T) {
+	ctx := context.Background()
+	client := &Client{
+		backend: &beRoot{
+			b2i: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs:      &errCont{},
+			},
+		},
+	}
+	bucket, err := client.NewBucket(ctx, "bkt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	table := []struct {
+		name string
+		sse  *ServerSideEncryption
+		ok   bool
+	}{
+		{name: "unset", sse: nil, ok: true},
+		{name: "sse-b2", sse: SSEB2WithAES256(), ok: true},
+		{name: "none", sse: &ServerSideEncryption{Mode: "none"}},
+		{name: "sse-c", sse: &ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"}},
+		{name: "empty", sse: &ServerSideEncryption{}},
+		{name: "sse-b2 without algorithm", sse: &ServerSideEncryption{Mode: "SSE-B2"}},
+	}
+	for _, ent := range table {
+		t.Run(ent.name, func(t *testing.T) {
+			attrs := &BucketAttrs{DefaultServerSideEncryption: ent.sse}
+			_, err := client.NewBucket(ctx, "new-"+ent.name, attrs)
+			if (err == nil) != ent.ok {
+				t.Errorf("NewBucket(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
+			}
+			// Attrs are ignored when the bucket already exists.
+			if _, err := client.NewBucket(ctx, "bkt", attrs); err != nil {
+				t.Errorf("NewBucket(existing, %+v): err = %v, want nil", ent.sse, err)
+			}
+			err = bucket.Update(ctx, attrs)
+			if (err == nil) != ent.ok {
+				t.Errorf("Update(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
+			}
+		})
+	}
 }

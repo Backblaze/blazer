@@ -74,6 +74,8 @@ type CreateBucketRequest struct {
 	Type           string            `json:"bucketType"`
 	Info           map[string]string `json:"bucketInfo"`
 	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
+
+	DefaultServerSideEncryption *ServerSideEncryption `json:"defaultServerSideEncryption,omitempty"`
 }
 
 type CreateBucketResponse struct {
@@ -86,7 +88,7 @@ type CreateBucketResponse struct {
 
 	CORSRules                   []CORSRule                        `json:"corsRules,omitempty"`
 	DefaultRetention            string                            `json:"defaultRetention,omitempty"`
-	DefaultServerSideEncryption *ServerSideEncryption             `json:"defaultServerSideEncryption,omitempty"`
+	DefaultServerSideEncryption ServerSideEncryptionResponse      `json:"defaultServerSideEncryption"`
 	FileLockConfig              *FileLockConfiguration            `json:"fileLockConfiguration,omitempty"`
 	ReplicationConfiguration    *ReplicationConfigurationResponse `json:"replicationConfiguration,omitempty"`
 }
@@ -329,6 +331,14 @@ type ListKeysResponse struct {
 type ServerSideEncryption struct {
 	Mode      string `json:"mode"`
 	Algorithm string `json:"algorithm"`
+}
+
+// ServerSideEncryptionResponse is the shape in which bucket responses report
+// the default encryption setting. Value is nil when the application key
+// lacks the readBucketEncryption capability.
+type ServerSideEncryptionResponse struct {
+	IsClientAuthorizedToRead bool                  `json:"isClientAuthorizedToRead"`
+	Value                    *ServerSideEncryption `json:"value"`
 }
 
 type Retention struct {

@@ -739,6 +739,47 @@ func TestNewBucket(t *testing.T) {
 	}
 }
 
+func TestBucketDefaultEncryption(t *testing.T) {
+	id := os.Getenv(apiID)
+	key := os.Getenv(apiKey)
+	if id == "" || key == "" {
+		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+	}
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	client, err := NewClient(ctx, id, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	table := []struct {
+		name  string
+		attrs *BucketAttrs
+	}{
+		{name: "sse-omitted", attrs: nil},
+		{name: "sse-explicit", attrs: &BucketAttrs{DefaultServerSideEncryption: SSEB2WithAES256()}},
+	}
+	for _, ent := range table {
+		t.Run(ent.name, func(t *testing.T) {
+			bucket, err := client.NewBucket(ctx, id+"-"+ent.name, ent.attrs)
+			if err != nil {
+				t.Fatalf("NewBucket(%v): %v", ent.attrs, err)
+			}
+			defer bucket.Delete(ctx)
+			attrs, err := bucket.Attrs(ctx)
+			if err != nil {
+				t.Fatalf("Attrs: %v", err)
+			}
+			want := SSEB2WithAES256()
+			if !reflect.DeepEqual(attrs.DefaultServerSideEncryption, want) {
+				t.Errorf("Attrs().DefaultServerSideEncryption = %+v, want %+v", attrs.DefaultServerSideEncryption, want)
+			}
+		})
+	}
+}
+
 func TestDuelingBuckets(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
