@@ -32,3 +32,10 @@ _testmain.go
 /b2keys
 
 .go-version
+
+# Local credentials
+.env
+
+# Local tooling
+.memsearch/
+.worktrees/
