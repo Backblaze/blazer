@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-15
+
 ### Changed
 
 - B2 now applies SSE-B2 (AES256) as the default server-side encryption to every bucket. A nil `BucketAttrs.DefaultServerSideEncryption` passed to `Client.NewBucket` or `Bucket.Update` leaves the default to the server; any other setting than SSE-B2 with AES256 is rejected before the request is sent.
