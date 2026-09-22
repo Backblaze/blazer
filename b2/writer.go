@@ -303,8 +303,16 @@ func (w *Writer) simpleWriteFile() error {
 		return err
 	}
 	// This defer needs to be in a func() so that we put whatever the value of ue
-	// is at function exit.
-	defer func() { w.o.b.urlPool.put(ue) }()
+	// is at function exit. Only pool it on success: ue is reassigned to a fresh
+	// URL on every retry, so on failure it holds the URL from the last failed
+	// attempt, and pooling that could hand a broken upload URL to the next,
+	// unrelated Writer on this bucket.
+	success := false
+	defer func() {
+		if success {
+			w.o.b.urlPool.put(ue)
+		}
+	}()
 	sha1 := w.w.Hash()
 	ctype := w.contentType
 	if ctype == "" {
@@ -355,6 +363,7 @@ func (w *Writer) simpleWriteFile() error {
 		return err
 	}
 
+	success = true
 	return nil
 }
 

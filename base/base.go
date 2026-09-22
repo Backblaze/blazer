@@ -210,6 +210,12 @@ func Backoff(err error) time.Duration {
 	if !ok {
 		return 0
 	}
+	// Cap at the same 30s ceiling used by internal/retry.Backoff, so a
+	// large or malformed server-supplied Retry-After value can't produce
+	// an unbounded single sleep in the retry loop.
+	if e.retry > 30 {
+		return 30 * time.Second
+	}
 	return time.Duration(e.retry) * time.Second
 }
 

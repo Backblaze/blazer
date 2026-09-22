@@ -751,6 +751,92 @@ func TestReuploadFile(t *testing.T) {
 	}
 }
 
+// TestFailedUploadDoesNotPoolURL verifies that when simpleWriteFile hard-fails
+// (retries exhausted), the upload URL from the last, failed attempt is not
+// returned to the bucket's urlPool. Since urlPool has no health check, pooling
+// it would let an unrelated, subsequent Writer on the same bucket pick up a
+// potentially broken upload URL/connection.
+func TestFailedUploadDoesNotPoolURL(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	ch := make(chan time.Time)
+	close(ch)
+	after = func(d time.Duration) <-chan time.Time {
+		return ch
+	}
+
+	root := &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs: &errCont{
+			errMap: map[string]map[int]error{
+				"uploadFile": {
+					0: testError{reupload: true, maxReuploads: 0},
+				},
+			},
+		},
+	}
+	client := &Client{
+		backend: &beRoot{
+			b2i: root,
+		},
+	}
+	b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := b.Object("foo")
+	w := o.NewWriter(ctx)
+	r := io.LimitReader(zReader{}, 1e4)
+	if _, err := io.Copy(w, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err == nil {
+		t.Fatalf("writer should have returned an error")
+	}
+
+	if u := b.urlPool.get(); u != nil {
+		t.Fatalf("upload URL from a failed attempt was pooled; want nil")
+	}
+}
+
+// TestSuccessfulUploadPoolsURL confirms the happy path still pools the upload
+// URL after simpleWriteFile succeeds, i.e. that the fix in
+// TestFailedUploadDoesNotPoolURL didn't break normal URL reuse.
+func TestSuccessfulUploadPoolsURL(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	root := &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs:      &errCont{},
+	}
+	client := &Client{
+		backend: &beRoot{
+			b2i: root,
+		},
+	}
+	b, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := b.Object("foo")
+	w := o.NewWriter(ctx)
+	r := io.LimitReader(zReader{}, 1e4)
+	if _, err := io.Copy(w, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("writer should not have returned an error: %v", err)
+	}
+
+	if u := b.urlPool.get(); u == nil {
+		t.Fatalf("upload URL from a successful attempt was not pooled; want non-nil")
+	}
+}
+
 func TestReuploadFileWithoutReuploadAfter(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
