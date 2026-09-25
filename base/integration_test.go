@@ -78,7 +78,7 @@ func TestStorage(t *testing.T) {
 		},
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", m, rules, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", m, rules, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestStorage(t *testing.T) {
 
 	// Need a real bucket ID etc. to create a replication rule
 	targetName := id + "-" + targetBucketName
-	targetBucket, err := b2.CreateBucket(ctx, targetName, "", m, rules, nil)
+	targetBucket, err := b2.CreateBucket(ctx, targetName, "", m, rules, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestUploadAuthAfterConnectionHang(t *testing.T) {
 		t.Fatal(err)
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +514,7 @@ func TestCancelledContextCancelsHTTPRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +560,7 @@ func TestDeadlineExceededContextCancelsHTTPRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -778,7 +778,7 @@ func TestUploadDownloadFilenameEscaping(t *testing.T) {
 
 	// b2_create_bucket
 	bname := id + "-" + bucketName
-	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil)
+	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
