@@ -561,7 +561,7 @@ type LifecycleRule struct {
 
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
-func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption) (*Bucket, error) {
+func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool) (*Bucket, error) {
 	if btype != "allPublic" {
 		btype = "allPrivate"
 	}
@@ -581,6 +581,8 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		LifecycleRules: b2rules,
 
 		DefaultServerSideEncryption: sse,
+		CORSRules:                   corsRules,
+		FileLockEnabled:             fileLockEnabled,
 	}
 	b2resp := &b2types.CreateBucketResponse{}
 	headers := map[string]string{
@@ -597,15 +599,20 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
 		})
 	}
-	return &Bucket{
+	bucket := &Bucket{
 		Name:                        name,
 		Info:                        b2resp.Info,
 		LifecycleRules:              respRules,
 		ID:                          b2resp.BucketID,
 		rev:                         b2resp.Revision,
 		b2:                          b,
+		CORSRules:                   b2resp.CORSRules,
 		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
-	}, nil
+	}
+	if b2resp.FileLockConfig != nil {
+		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
+	}
+	return bucket, nil
 }
 
 // DeleteBucket wraps b2_delete_bucket.
@@ -740,7 +747,7 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
 			})
 		}
-		buckets = append(buckets, &Bucket{
+		listed := &Bucket{
 			Name:                        bucket.Name,
 			Type:                        bucket.Type,
 			Info:                        bucket.Info,
@@ -748,8 +755,13 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 			ID:                          bucket.BucketID,
 			rev:                         bucket.Revision,
 			b2:                          b,
+			CORSRules:                   bucket.CORSRules,
 			DefaultServerSideEncryption: bucket.DefaultServerSideEncryption.Value,
-		})
+		}
+		if bucket.FileLockConfig != nil {
+			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
+		}
+		buckets = append(buckets, listed)
 	}
 	return buckets, nil
 }
