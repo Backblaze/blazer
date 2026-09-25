@@ -39,6 +39,13 @@ const (
 
 var gmux = &sync.Mutex{}
 
+func TestBucketID(t *testing.T) {
+	b := &Bucket{b: &beBucket{b2bucket: &testBucket{idv: "bucket-id"}}}
+	if got := b.ID(); got != "bucket-id" {
+		t.Fatalf("Bucket.ID() = %q, want %q", got, "bucket-id")
+	}
+}
+
 type testError struct {
 	retry        bool
 	backoff      time.Duration
@@ -185,6 +192,7 @@ func (t *testRoot) listBuckets(context.Context, string, ...string) ([]b2BucketIn
 
 type testBucket struct {
 	n     string
+	idv   string
 	errs  *errCont
 	files map[string]string
 }
@@ -194,7 +202,7 @@ func (t *testBucket) btype() string                                    { return 
 func (t *testBucket) attrs() *BucketAttrs                              { return nil }
 func (t *testBucket) deleteBucket(context.Context) error               { return nil }
 func (t *testBucket) updateBucket(context.Context, *BucketAttrs) error { return nil }
-func (t *testBucket) id() string                                       { return "" }
+func (t *testBucket) id() string                                       { return t.idv }
 
 func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	if err := t.errs.getError("getUploadURL"); err != nil {
