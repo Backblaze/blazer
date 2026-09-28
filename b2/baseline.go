@@ -35,7 +35,7 @@ type b2RootInterface interface {
 	retry(error) bool
 	reauth(error) bool
 	reupload(error) bool
-	createBucket(context.Context, string, string, map[string]string, []LifecycleRule, *ServerSideEncryption) (b2BucketInterface, error)
+	createBucket(context.Context, string, string, map[string]string, []LifecycleRule, *ServerSideEncryption, []CORSRule, bool) (b2BucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]b2BucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error)
 	listKeys(context.Context, int, string) ([]b2KeyInterface, string, error)
@@ -215,7 +215,7 @@ func (*b2Root) reupload(err error) bool {
 	return base.Action(err) == base.AttemptNewUpload
 }
 
-func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption) (b2BucketInterface, error) {
+func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (b2BucketInterface, error) {
 	var baseRules []base.LifecycleRule
 	for _, rule := range rules {
 		baseRules = append(baseRules, base.LifecycleRule{
@@ -231,7 +231,18 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 			Algorithm: sse.Algorithm,
 		}
 	}
-	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE)
+	var baseCORSRules []b2types.CORSRule
+	for _, rule := range corsRules {
+		baseCORSRules = append(baseCORSRules, b2types.CORSRule{
+			Name:              rule.Name,
+			AllowedOrigins:    rule.AllowedOrigins,
+			AllowedHeaders:    rule.AllowedHeaders,
+			AllowedOperations: rule.AllowedOperations,
+			ExposeHeaders:     rule.ExposeHeaders,
+			MaxAgeSeconds:     rule.MaxAgeSeconds,
+		})
+	}
+	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE, baseCORSRules, fileLockEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -382,9 +393,20 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 		})
 	}
 	attrs := &BucketAttrs{
-		LifecycleRules: rules,
-		Info:           b.b.Info,
-		Type:           BucketType(b.b.Type),
+		LifecycleRules:  rules,
+		Info:            b.b.Info,
+		Type:            BucketType(b.b.Type),
+		FileLockEnabled: b.b.FileLockEnabled,
+	}
+	for _, rule := range b.b.CORSRules {
+		attrs.CORSRules = append(attrs.CORSRules, CORSRule{
+			Name:              rule.Name,
+			AllowedOrigins:    rule.AllowedOrigins,
+			AllowedHeaders:    rule.AllowedHeaders,
+			AllowedOperations: rule.AllowedOperations,
+			ExposeHeaders:     rule.ExposeHeaders,
+			MaxAgeSeconds:     rule.MaxAgeSeconds,
+		})
 	}
 	if sse := b.b.DefaultServerSideEncryption; sse != nil {
 		attrs.DefaultServerSideEncryption = &ServerSideEncryption{
