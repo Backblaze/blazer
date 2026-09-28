@@ -404,11 +404,12 @@ func (t *testFileChunk) uploadPart(_ context.Context, r io.Reader, _ string, _, 
 }
 
 type testFile struct {
-	n     string
-	s     int64
-	t     time.Time
-	a     string
-	files map[string]string
+	n                string
+	s                int64
+	t                time.Time
+	a                string
+	files            map[string]string
+	bypassGovernance bool
 }
 
 func (t *testFile) id() string           { return t.n }
@@ -429,13 +430,37 @@ func (t *testFile) listParts(context.Context, int, int) ([]b2FilePartInterface, 
 	return nil, 0, nil
 }
 
-func (t *testFile) deleteFileVersion(context.Context) error {
+func (t *testFile) deleteFileVersion(_ context.Context, bypassGovernance bool) error {
 	gmux.Lock()
 	defer gmux.Unlock()
+	t.bypassGovernance = bypassGovernance
 	delete(t.files, t.n)
 	return nil
 }
 
+func TestObjectDeleteBypassGovernanceOption(t *testing.T) {
+	ctx := context.Background()
+	standard := &testFile{n: "standard", a: "upload", files: make(map[string]string)}
+	if err := objectForDeleteOptionTest(standard).Delete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if standard.bypassGovernance {
+		t.Fatal("Delete without BypassGovernance requested a bypass")
+	}
+
+	bypass := &testFile{n: "bypass", a: "upload", files: make(map[string]string)}
+	if err := objectForDeleteOptionTest(bypass).Delete(ctx, BypassGovernance()); err != nil {
+		t.Fatal(err)
+	}
+	if !bypass.bypassGovernance {
+		t.Fatal("Delete with BypassGovernance did not request a bypass")
+	}
+}
+
+func objectForDeleteOptionTest(file *testFile) *Object {
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	return &Object{f: &beFile{b2file: file, ri: root}}
+}
 func (t *testFile) updateFileRetention(context.Context, *Retention, bool) error { return nil }
 func (t *testFile) updateFileLegalHold(context.Context, LegalHold) error        { return nil }
 

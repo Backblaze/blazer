@@ -699,14 +699,36 @@ func (o *Object) ensure(ctx context.Context) error {
 	return nil
 }
 
-// Delete removes the given object, if it is a regular file or hide marker
-func (o *Object) Delete(ctx context.Context) error {
+type deleteOptions struct {
+	bypassGovernance bool
+}
+
+// DeleteOption configures Delete.
+type DeleteOption func(*deleteOptions)
+
+// BypassGovernance requests deletion of a file under governance-mode Object
+// Lock retention. The application key must have the bypassGovernance
+// capability; B2 rejects the request for compliance-mode retention.
+// https://www.backblaze.com/apidocs/b2-delete-file-version
+// https://www.backblaze.com/docs/cloud-storage-object-lock
+func BypassGovernance() DeleteOption {
+	return func(opts *deleteOptions) {
+		opts.bypassGovernance = true
+	}
+}
+
+// Delete removes the given object, if it is a regular file or hide marker.
+func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
 	if err := o.ensure(ctx); err != nil {
 		return err
 	}
+	options := &deleteOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 	status := o.f.status()
 	if status == "upload" || status == "hide" {
-		return o.f.deleteFileVersion(ctx)
+		return o.f.deleteFileVersion(ctx, options.bypassGovernance)
 	} else {
 		return fmt.Errorf("%s is not a regular file or hide marker: %s", o.name, status)
 	}

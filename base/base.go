@@ -887,11 +887,17 @@ func (url *URL) UploadFileWithFileLock(ctx context.Context, r io.Reader, size in
 	}, nil
 }
 
-// DeleteFileVersion wraps b2_delete_file_version.
-func (f *File) DeleteFileVersion(ctx context.Context) error {
+// DeleteFileVersion wraps b2_delete_file_version. Passing true requests a
+// governance-retention bypass; it requires the bypassGovernance capability and
+// does not bypass compliance retention.
+// https://www.backblaze.com/apidocs/b2-delete-file-version
+// https://www.backblaze.com/docs/cloud-storage-object-lock
+func (f *File) DeleteFileVersion(ctx context.Context, bypassGovernance ...bool) error {
+	bypass := len(bypassGovernance) > 0 && bypassGovernance[0]
 	b2req := &b2types.DeleteFileVersionRequest{
-		Name:   f.Name,
-		FileID: f.ID,
+		Name:             f.Name,
+		FileID:           f.ID,
+		BypassGovernance: bypass,
 	}
 	headers := map[string]string{
 		"Authorization": f.b2.authToken,

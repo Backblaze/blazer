@@ -86,7 +86,7 @@ type beFileInterface interface {
 	size() int64
 	timestamp() time.Time
 	status() string
-	deleteFileVersion(context.Context) error
+	deleteFileVersion(context.Context, bool) error
 	updateFileRetention(context.Context, *Retention, bool) error
 	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (beFileInfoInterface, error)
@@ -561,10 +561,10 @@ func (b *beURL) uploadFile(ctx context.Context, r readResetter, size int, name, 
 	return file, nil
 }
 
-func (b *beFile) deleteFileVersion(ctx context.Context) error {
+func (b *beFile) deleteFileVersion(ctx context.Context, bypassGovernance bool) error {
 	f := func() error {
 		g := func() error {
-			return b.b2file.deleteFileVersion(ctx)
+			return b.b2file.deleteFileVersion(ctx, bypassGovernance)
 		}
 		return withReauth(ctx, b.ri, g)
 	}

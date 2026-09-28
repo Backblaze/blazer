@@ -73,7 +73,7 @@ type b2FileInterface interface {
 	size() int64
 	timestamp() time.Time
 	status() string
-	deleteFileVersion(context.Context) error
+	deleteFileVersion(context.Context, bool) error
 	updateFileRetention(context.Context, *Retention, bool) error
 	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (b2FileInfoInterface, error)
@@ -532,8 +532,8 @@ func (b *b2URL) reload(ctx context.Context) error {
 	return b.b.Reload(ctx)
 }
 
-func (b *b2File) deleteFileVersion(ctx context.Context) error {
-	return b.b.DeleteFileVersion(ctx)
+func (b *b2File) deleteFileVersion(ctx context.Context, bypassGovernance bool) error {
+	return b.b.DeleteFileVersion(ctx, bypassGovernance)
 }
 
 func (b *b2File) updateFileRetention(ctx context.Context, retention *Retention, bypassGovernance bool) error {
