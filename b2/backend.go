@@ -87,7 +87,6 @@ type beFileInterface interface {
 	timestamp() time.Time
 	status() string
 	deleteFileVersion(context.Context, bool) error
-	deleteFileVersion(context.Context) error
 	updateFileRetention(context.Context, *Retention, bool) error
 	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (beFileInfoInterface, error)
