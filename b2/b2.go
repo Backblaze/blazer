@@ -114,8 +114,9 @@ func Transport(rt http.RoundTripper) ClientOption {
 	}
 }
 
-// FailSomeUploads requests intermittent upload failures from the B2 service.
-// This is mostly useful for testing.
+// FailSomeUploads requests intermittent upload failures from the B2 service by
+// sending B2's documented X-Bz-Test-Mode: fail_some_uploads header. It is for
+// testing retry and error-handling paths only; do not use it in production.
 func FailSomeUploads() ClientOption {
 	return func(c *clientOptions) {
 		c.failSomeUploads = true
@@ -123,15 +124,19 @@ func FailSomeUploads() ClientOption {
 }
 
 // ExpireSomeAuthTokens requests intermittent authentication failures from the
-// B2 service.
+// B2 service by sending B2's documented
+// X-Bz-Test-Mode: expire_some_account_authorization_tokens header. It is for
+// testing re-authentication paths only; do not use it in production.
 func ExpireSomeAuthTokens() ClientOption {
 	return func(c *clientOptions) {
 		c.expireTokens = true
 	}
 }
 
-// ForceCapExceeded requests a cap limit from the B2 service.  This causes all
-// uploads to be treated as if they would exceed the configure B2 capacity.
+// ForceCapExceeded requests a cap limit from the B2 service by sending B2's
+// documented X-Bz-Test-Mode: force_cap_exceeded header. This causes all uploads
+// to be treated as if they would exceed the configured B2 capacity. It is for
+// testing only; do not use it in production.
 func ForceCapExceeded() ClientOption {
 	return func(c *clientOptions) {
 		c.capExceeded = true
@@ -281,8 +286,9 @@ type CORSRule struct {
 }
 
 type Retention struct {
-	Mode   string
-	Period *RetentionPeriod
+	Mode                 string
+	Period               *RetentionPeriod
+	RetainUntilTimestamp int64
 }
 
 type RetentionPeriod struct {
@@ -423,7 +429,7 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if sse := attrs.DefaultServerSideEncryption; sse != nil && !sse.canBeUsedAsBucketDefault() {
 		return nil, fmt.Errorf("%s/%s cannot be used as default for a bucket", sse.Mode, sse.Algorithm)
 	}
-	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption)
+	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption, attrs.CORSRules, attrs.FileLockEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -522,6 +528,11 @@ func (b *Bucket) Name() string {
 	return b.b.name()
 }
 
+// ID returns the bucket's B2 identifier.
+func (b *Bucket) ID() string {
+	return b.b.id()
+}
+
 // Object represents a B2 object.
 type Object struct {
 	attrs *Attrs
@@ -540,6 +551,8 @@ type Attrs struct {
 	SHA1            string            // Can be "none" for large files.  If set on upload, will be used for large files.
 	LastModified    time.Time         // If present, and there are fewer than 10 keys in the Info field, this is saved on upload.
 	Info            map[string]string // Save arbitrary metadata on upload, but limited to 10 keys.
+	Retention       *Retention        // Object Lock retention settings for this file.
+	LegalHold       LegalHold         // Object Lock legal hold for this file.
 }
 
 // Name returns an object's name
@@ -562,6 +575,7 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 		return nil, err
 	}
 	name, sha, size, ct, info, st, stamp := fi.stats()
+	retention, legalHold := fi.fileLock()
 	var state ObjectState
 	switch st {
 	case "upload":
@@ -594,6 +608,8 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 		Info:            info,
 		Status:          state,
 		LastModified:    mtime,
+		Retention:       retention,
+		LegalHold:       legalHold,
 	}, nil
 }
 

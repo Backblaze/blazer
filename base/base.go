@@ -561,7 +561,7 @@ type LifecycleRule struct {
 
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
-func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption) (*Bucket, error) {
+func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool) (*Bucket, error) {
 	if btype != "allPublic" {
 		btype = "allPrivate"
 	}
@@ -581,6 +581,8 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		LifecycleRules: b2rules,
 
 		DefaultServerSideEncryption: sse,
+		CORSRules:                   corsRules,
+		FileLockEnabled:             fileLockEnabled,
 	}
 	b2resp := &b2types.CreateBucketResponse{}
 	headers := map[string]string{
@@ -597,15 +599,20 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
 		})
 	}
-	return &Bucket{
+	bucket := &Bucket{
 		Name:                        name,
 		Info:                        b2resp.Info,
 		LifecycleRules:              respRules,
 		ID:                          b2resp.BucketID,
 		rev:                         b2resp.Revision,
 		b2:                          b,
+		CORSRules:                   b2resp.CORSRules,
 		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
-	}, nil
+	}
+	if b2resp.FileLockConfig != nil {
+		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
+	}
+	return bucket, nil
 }
 
 // DeleteBucket wraps b2_delete_bucket.
@@ -740,7 +747,7 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
 			})
 		}
-		buckets = append(buckets, &Bucket{
+		listed := &Bucket{
 			Name:                        bucket.Name,
 			Type:                        bucket.Type,
 			Info:                        bucket.Info,
@@ -748,8 +755,13 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 			ID:                          bucket.BucketID,
 			rev:                         bucket.Revision,
 			b2:                          b,
+			CORSRules:                   bucket.CORSRules,
 			DefaultServerSideEncryption: bucket.DefaultServerSideEncryption.Value,
-		})
+		}
+		if bucket.FileLockConfig != nil {
+			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
+		}
+		buckets = append(buckets, listed)
 	}
 	return buckets, nil
 }
@@ -842,13 +854,46 @@ func (url *URL) UploadFile(ctx context.Context, r io.Reader, size int, name, con
 	}, nil
 }
 
-// DeleteFileVersion wraps b2_delete_file_version. Passing true requests a
 // governance-retention bypass; it requires the bypassGovernance capability and
 // does not bypass compliance retention.
 // https://www.backblaze.com/apidocs/b2-delete-file-version
 // https://www.backblaze.com/docs/cloud-storage-object-lock
-func (f *File) DeleteFileVersion(ctx context.Context, bypassGovernance ...bool) error {
 	bypass := len(bypassGovernance) > 0 && bypassGovernance[0]
+// UploadFileWithFileLock wraps b2_upload_file with Object Lock settings.
+func (url *URL) UploadFileWithFileLock(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, retention *b2types.Retention, legalHold string) (*File, error) {
+	headers := map[string]string{
+		"Authorization":     url.token,
+		"X-Bz-File-Name":    name,
+		"Content-Type":      contentType,
+		"Content-Length":    fmt.Sprintf("%d", size),
+		"X-Bz-Content-Sha1": sha1,
+	}
+	for k, v := range info {
+		headers[fmt.Sprintf("X-Bz-Info-%s", k)] = v
+	}
+	if retention != nil {
+		headers["X-Bz-File-Retention-Mode"] = retention.Mode
+		headers["X-Bz-File-Retention-Retain-Until-Timestamp"] = fmt.Sprintf("%d", retention.RetainUntilTimestamp)
+	}
+	if legalHold != "" {
+		headers["X-Bz-File-Legal-Hold"] = legalHold
+	}
+	b2resp := &b2types.UploadFileResponse{}
+	if err := url.b2.opts.makeRequest(ctx, "b2_upload_file", "POST", url.uri, nil, b2resp, headers, &requestBody{body: r, size: int64(size)}); err != nil {
+		return nil, err
+	}
+	return &File{
+		Name:      name,
+		Size:      int64(size),
+		Timestamp: millitime(b2resp.Timestamp),
+		Status:    b2resp.Action,
+		ID:        b2resp.FileID,
+		b2:        url.b2,
+	}, nil
+}
+
+// DeleteFileVersion wraps b2_delete_file_version.
+func (f *File) DeleteFileVersion(ctx context.Context) error {
 	b2req := &b2types.DeleteFileVersionRequest{
 		Name:             f.Name,
 		FileID:           f.ID,
@@ -858,6 +903,20 @@ func (f *File) DeleteFileVersion(ctx context.Context, bypassGovernance ...bool) 
 		"Authorization": f.b2.authToken,
 	}
 	return f.b2.opts.makeRequest(ctx, "b2_delete_file_version", "POST", f.b2.apiURI+b2types.V3api+"b2_delete_file_version", b2req, nil, headers, nil)
+}
+
+// UpdateFileRetention wraps b2_update_file_retention.
+func (f *File) UpdateFileRetention(ctx context.Context, retention *b2types.Retention, bypassGovernance bool) error {
+	b2req := &b2types.UpdateFileRetentionRequest{FileID: f.ID, Name: f.Name, Retention: retention, BypassGovernance: bypassGovernance}
+	headers := map[string]string{"Authorization": f.b2.authToken}
+	return f.b2.opts.makeRequest(ctx, "b2_update_file_retention", "POST", f.b2.apiURI+b2types.V3api+"b2_update_file_retention", b2req, nil, headers, nil)
+}
+
+// UpdateFileLegalHold wraps b2_update_file_legal_hold.
+func (f *File) UpdateFileLegalHold(ctx context.Context, legalHold string) error {
+	b2req := &b2types.UpdateFileLegalHoldRequest{FileID: f.ID, Name: f.Name, LegalHold: legalHold}
+	headers := map[string]string{"Authorization": f.b2.authToken}
+	return f.b2.opts.makeRequest(ctx, "b2_update_file_legal_hold", "POST", f.b2.apiURI+b2types.V3api+"b2_update_file_legal_hold", b2req, nil, headers, nil)
 }
 
 // LargeFile holds information necessary to implement B2 large file support.
@@ -877,6 +936,30 @@ func (b *Bucket) StartLargeFile(ctx context.Context, name, contentType string, i
 		Name:        name,
 		ContentType: contentType,
 		Info:        info,
+	}
+	b2resp := &b2types.StartLargeFileResponse{}
+	headers := map[string]string{
+		"Authorization": b.b2.authToken,
+	}
+	if err := b.b2.opts.makeRequest(ctx, "b2_start_large_file", "POST", b.b2.apiURI+b2types.V3api+"b2_start_large_file", b2req, b2resp, headers, nil); err != nil {
+		return nil, err
+	}
+	return &LargeFile{
+		ID:     b2resp.ID,
+		b2:     b.b2,
+		hashes: make(map[int]string),
+	}, nil
+}
+
+// StartLargeFileWithFileLock wraps b2_start_large_file with Object Lock settings.
+func (b *Bucket) StartLargeFileWithFileLock(ctx context.Context, name, contentType string, info map[string]string, retention *b2types.Retention, legalHold string) (*LargeFile, error) {
+	b2req := &b2types.StartLargeFileRequest{
+		BucketID:    b.ID,
+		Name:        name,
+		ContentType: contentType,
+		Info:        info,
+		Retention:   retention,
+		LegalHold:   legalHold,
 	}
 	b2resp := &b2types.StartLargeFileResponse{}
 	headers := map[string]string{
@@ -1309,6 +1392,20 @@ type FileInfo struct {
 	Info        map[string]string
 	Status      string
 	Timestamp   time.Time
+	Retention   *b2types.Retention
+	LegalHold   string
+}
+
+func fileLockFromResponse(retention b2types.FileRetentionResponse, legalHold b2types.LegalHoldResponse) (*b2types.Retention, string) {
+	var fileRetention *b2types.Retention
+	if retention.IsClientAuthorizedToRead && retention.Value != nil {
+		fileRetention = retention.Value
+	}
+	var fileLegalHold string
+	if legalHold.IsClientAuthorizedToRead && legalHold.Value != "" {
+		fileLegalHold = legalHold.Value
+	}
+	return fileRetention, fileLegalHold
 }
 
 // GetFileInfo wraps b2_get_file_info.
@@ -1326,6 +1423,7 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 	f.Status = b2resp.Action
 	f.Name = b2resp.Name
 	f.Timestamp = millitime(b2resp.Timestamp)
+	retention, legalHold := fileLockFromResponse(b2resp.Retention, b2resp.LegalHold)
 	f.Info = &FileInfo{
 		Name:        b2resp.Name,
 		SHA1:        b2resp.SHA1,
@@ -1335,6 +1433,8 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 		Info:        b2resp.Info,
 		Status:      b2resp.Action,
 		Timestamp:   millitime(b2resp.Timestamp),
+		Retention:   retention,
+		LegalHold:   legalHold,
 	}
 	return f.Info, nil
 }
@@ -1419,4 +1519,32 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 		})
 	}
 	return keys, b2resp.Next, nil
+}
+
+// CopyFile wraps b2_copy_file.
+func (b *Bucket) CopyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (*File, error) {
+	b2req := &b2types.CopyFileRequest{
+		SourceFileID:        sourceFileID,
+		FileName:            name,
+		DestinationBucketID: destinationBucketID,
+		Range:               byteRange,
+		MetadataDirective:   metadataDirective,
+	}
+	if metadataDirective == "REPLACE" {
+		b2req.ContentType = &contentType
+		b2req.FileInfo = info
+	}
+	b2resp := &b2types.CopyFileResponse{}
+	headers := map[string]string{"Authorization": b.b2.authToken}
+	if err := b.b2.opts.makeRequest(ctx, "b2_copy_file", "POST", b.b2.apiURI+b2types.V3api+"b2_copy_file", b2req, b2resp, headers, nil); err != nil {
+		return nil, err
+	}
+	return &File{
+		Name:      b2resp.Name,
+		Size:      b2resp.Size,
+		Status:    b2resp.Action,
+		Timestamp: millitime(b2resp.Timestamp),
+		ID:        b2resp.FileID,
+		b2:        b.b2,
+	}, nil
 }
