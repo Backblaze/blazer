@@ -141,6 +141,29 @@ base := bucket.BaseURL()
 ```
 
 
+### Testing resilience with B2 test mode
+
+B2 provides documented "test mode" hooks (sent as the `X-Bz-Test-Mode` request
+header) that ask the service to inject controlled failures, so you can exercise
+your retry and error-handling paths without waiting for real faults. blazer
+exposes them as client options:
+
+```go
+client, err := b2.NewClient(ctx, id, key,
+    b2.FailSomeUploads(),      // X-Bz-Test-Mode: fail_some_uploads
+    b2.ExpireSomeAuthTokens(), // X-Bz-Test-Mode: expire_some_account_authorization_tokens
+    b2.ForceCapExceeded(),     // X-Bz-Test-Mode: force_cap_exceeded
+)
+```
+
+- `FailSomeUploads` — B2 fails a fraction of uploads, so you can verify upload retries.
+- `ExpireSomeAuthTokens` — B2 expires some auth tokens, exercising re-authentication.
+- `ForceCapExceeded` — B2 treats uploads as if the account storage cap were exceeded.
+
+These are for testing only — leave them off in production. See Backblaze's B2
+documentation for the `X-Bz-Test-Mode` header for the authoritative behavior.
+
+
 ### Licenses
 The b2 package currently does not consume any third party packages and entirely depends on imports of the Go stdlib or from sources provided within the `blazer` repository itself.
 A report of used licenses can be found at `./b2/licenses.csv` which was generated with https://github.com/google/go-licenses . Please double check yourself if this is a concern as this may change over time and the licenses report could become stale
