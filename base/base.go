@@ -1414,3 +1414,31 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 	}
 	return keys, b2resp.Next, nil
 }
+
+// CopyFile wraps b2_copy_file.
+func (b *Bucket) CopyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (*File, error) {
+	b2req := &b2types.CopyFileRequest{
+		SourceFileID:        sourceFileID,
+		FileName:            name,
+		DestinationBucketID: destinationBucketID,
+		Range:               byteRange,
+		MetadataDirective:   metadataDirective,
+	}
+	if metadataDirective == "REPLACE" {
+		b2req.ContentType = &contentType
+		b2req.FileInfo = info
+	}
+	b2resp := &b2types.CopyFileResponse{}
+	headers := map[string]string{"Authorization": b.b2.authToken}
+	if err := b.b2.opts.makeRequest(ctx, "b2_copy_file", "POST", b.b2.apiURI+b2types.V3api+"b2_copy_file", b2req, b2resp, headers, nil); err != nil {
+		return nil, err
+	}
+	return &File{
+		Name:      b2resp.Name,
+		Size:      b2resp.Size,
+		Status:    b2resp.Action,
+		Timestamp: millitime(b2resp.Timestamp),
+		ID:        b2resp.FileID,
+		b2:        b.b2,
+	}, nil
+}
