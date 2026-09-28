@@ -315,7 +315,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 
 	b.b.FileLockEnabled = attrs.FileLockEnabled
 
-	if b.b.ReplicationConfiguration != nil {
+	if attrs.ReplicationConfig != nil {
 		asRepSource := b2types.AsReplicationSource{
 			KeyID:            attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID,
 			ReplicationRules: make([]b2types.ReplicationRules, len(attrs.ReplicationConfig.AsReplicationSource.ReplicationRules)),
