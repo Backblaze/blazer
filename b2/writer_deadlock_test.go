@@ -22,8 +22,8 @@ func (r *deadlockRoot) createBucket(ctx context.Context, name, btype string, inf
 
 type deadlockBucket struct{ *testBucket }
 
-func (b *deadlockBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string) (b2LargeFileInterface, error) {
-	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info)
+func (b *deadlockBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, rt *FileRetention, lh LegalHold) (b2LargeFileInterface, error) {
+	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info, rt, lh)
 	if err != nil {
 		return nil, err
 	}

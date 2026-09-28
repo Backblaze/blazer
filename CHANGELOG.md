@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `(*base.B2).CreateKeyMultiBucket` and the `b2.BucketIDs` `KeyOption` for creating Multi-Bucket Application Keys via `(*b2.Client).CreateKey`.
 - `(*b2.Bucket).ID` returns the bucket's B2 ID, which is needed to fill in `ReplicationRules.DestinationBucketID`.
 - `b2.BypassGovernance()`, a `DeleteOption` accepted by `(*b2.Object).Delete`, deletes a file version under governance-mode Object Lock retention. The application key needs the `bypassGovernance` capability; compliance-mode retention is never bypassed. `(*base.File).DeleteFileVersion` takes an optional `bypassGovernance` argument for the same purpose.
+- Per-file Object Lock. `b2.WithFileRetention` and `b2.WithLegalHold` set retention and legal hold when a `Writer` uploads a file, `(*b2.Object).UpdateFileRetention` and `UpdateFileLegalHold` change them afterwards, and `Attrs.Retention` and `Attrs.LegalHold` report them. Passing a nil `*FileRetention` to `UpdateFileRetention` removes retention (governance mode needs `bypassGovernance`). `FileRetention` takes a `RetentionMode` and a `RetainUntil` time, and is separate from the bucket default `Retention`. `WithAttrsOption` does not copy `Attrs.Retention` or `Attrs.LegalHold`. A `Writer` with `Resume` set refuses to resume an unfinished upload whose retention or legal hold differs from the one requested. `base.UploadFile` and `base.StartLargeFile` accept an optional `base.FileLock`.
 
 ### Changed
 
