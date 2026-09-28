@@ -163,6 +163,8 @@ type StartLargeFileRequest struct {
 	Name        string            `json:"fileName"`
 	ContentType string            `json:"contentType"`
 	Info        map[string]string `json:"fileInfo,omitempty"`
+	Retention   *Retention        `json:"fileRetention,omitempty"`
+	LegalHold   string            `json:"legalHold,omitempty"`
 }
 
 type StartLargeFileResponse struct {
@@ -254,18 +256,37 @@ type GetFileInfoRequest struct {
 }
 
 type GetFileInfoResponse struct {
-	FileID      string            `json:"fileId,omitempty"`
-	Name        string            `json:"fileName,omitempty"`
-	AccountID   string            `json:"accountId,omitempty"`
-	BucketID    string            `json:"bucketId,omitempty"`
-	Size        int64             `json:"contentLength,omitempty"`
-	SHA1        string            `json:"contentSha1,omitempty"`
-	MD5         string            `json:"contentMd5,omitempty"`
-	ContentType string            `json:"contentType,omitempty"`
-	Info        map[string]string `json:"fileInfo,omitempty"`
-	Action      string            `json:"action,omitempty"`
-	Timestamp   int64             `json:"uploadTimestamp,omitempty"`
+	FileID      string                `json:"fileId,omitempty"`
+	Name        string                `json:"fileName,omitempty"`
+	AccountID   string                `json:"accountId,omitempty"`
+	BucketID    string                `json:"bucketId,omitempty"`
+	Size        int64                 `json:"contentLength,omitempty"`
+	SHA1        string                `json:"contentSha1,omitempty"`
+	MD5         string                `json:"contentMd5,omitempty"`
+	ContentType string                `json:"contentType,omitempty"`
+	Info        map[string]string     `json:"fileInfo,omitempty"`
+	Action      string                `json:"action,omitempty"`
+	Timestamp   int64                 `json:"uploadTimestamp,omitempty"`
+	Retention   FileRetentionResponse `json:"fileRetention,omitempty"`
+	LegalHold   LegalHoldResponse     `json:"legalHold,omitempty"`
 }
+
+type UpdateFileRetentionRequest struct {
+	FileID           string     `json:"fileId"`
+	Name             string     `json:"fileName"`
+	Retention        *Retention `json:"fileRetention"`
+	BypassGovernance bool       `json:"bypassGovernance"`
+}
+
+type UpdateFileRetentionResponse GetFileInfoResponse
+
+type UpdateFileLegalHoldRequest struct {
+	FileID    string `json:"fileId"`
+	Name      string `json:"fileName"`
+	LegalHold string `json:"legalHold"`
+}
+
+type UpdateFileLegalHoldResponse GetFileInfoResponse
 
 type GetDownloadAuthorizationRequest struct {
 	BucketID           string `json:"bucketId"`
@@ -343,9 +364,24 @@ type ServerSideEncryptionResponse struct {
 	Value                    *ServerSideEncryption `json:"value"`
 }
 
+// FileRetentionResponse is the read-authorization envelope B2 uses when a
+// file response carries Object Lock retention settings.
+type FileRetentionResponse struct {
+	IsClientAuthorizedToRead bool       `json:"isClientAuthorizedToRead"`
+	Value                    *Retention `json:"value"`
+}
+
+// LegalHoldResponse is the read-authorization envelope B2 uses when a file
+// response carries an Object Lock legal hold. An absent value decodes as "".
+type LegalHoldResponse struct {
+	IsClientAuthorizedToRead bool   `json:"isClientAuthorizedToRead"`
+	Value                    string `json:"value"`
+}
+
 type Retention struct {
-	Mode   string           `json:"mode,omitempty"`
-	Period *RetentionPeriod `json:"period,omitempty"`
+	Mode                 string           `json:"mode,omitempty"`
+	Period               *RetentionPeriod `json:"period,omitempty"`
+	RetainUntilTimestamp int64            `json:"retainUntilTimestamp,omitempty"`
 }
 
 type RetentionPeriod struct {

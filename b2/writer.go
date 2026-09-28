@@ -65,6 +65,8 @@ type Writer struct {
 
 	contentType string
 	info        map[string]string
+	retention   *Retention
+	legalHold   LegalHold
 
 	csize       int
 	ctx         context.Context
@@ -321,7 +323,7 @@ func (w *Writer) simpleWriteFile() error {
 	err = retry.Do(
 		w.ctx,
 		func() error {
-			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info)
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold)
 			if err != nil {
 				return err
 			}
@@ -364,7 +366,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		if ctype == "" {
 			ctype = "application/octet-stream"
 		}
-		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info)
+		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold)
 	}
 	var got bool
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
@@ -609,6 +611,20 @@ type WriterOption func(*Writer)
 func WithAttrsOption(attrs *Attrs) WriterOption {
 	return func(w *Writer) {
 		w.withAttrs(attrs)
+	}
+}
+
+// WithFileRetention sets Object Lock retention for the file uploaded by the writer.
+func WithFileRetention(retention *Retention) WriterOption {
+	return func(w *Writer) {
+		w.retention = retention
+	}
+}
+
+// WithLegalHold sets Object Lock legal hold for the file uploaded by the writer.
+func WithLegalHold(legalHold LegalHold) WriterOption {
+	return func(w *Writer) {
+		w.legalHold = legalHold
 	}
 }
 
