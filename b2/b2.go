@@ -286,8 +286,9 @@ type CORSRule struct {
 }
 
 type Retention struct {
-	Mode   string
-	Period *RetentionPeriod
+	Mode                 string
+	Period               *RetentionPeriod
+	RetainUntilTimestamp int64
 }
 
 type RetentionPeriod struct {
@@ -550,6 +551,8 @@ type Attrs struct {
 	SHA1            string            // Can be "none" for large files.  If set on upload, will be used for large files.
 	LastModified    time.Time         // If present, and there are fewer than 10 keys in the Info field, this is saved on upload.
 	Info            map[string]string // Save arbitrary metadata on upload, but limited to 10 keys.
+	Retention       *Retention        // Object Lock retention settings for this file.
+	LegalHold       LegalHold         // Object Lock legal hold for this file.
 }
 
 // Name returns an object's name
@@ -572,6 +575,7 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 		return nil, err
 	}
 	name, sha, size, ct, info, st, stamp := fi.stats()
+	retention, legalHold := fi.fileLock()
 	var state ObjectState
 	switch st {
 	case "upload":
@@ -604,6 +608,8 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 		Info:            info,
 		Status:          state,
 		LastModified:    mtime,
+		Retention:       retention,
+		LegalHold:       legalHold,
 	}, nil
 }
 
