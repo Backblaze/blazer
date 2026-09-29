@@ -1,0 +1,601 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x client.simulator -- the contract is bin/conformance/README.md.
+#
+# Scenario: the shipped x/transport offline; PARTIAL: a fault injector, not a B2 fake
+#
+# NO DOCUMENTED CONTRACT FOUND -- this is SDK-side/ecosystem tooling, not a B2 API contract.
+# Shipping an in-process fake is packaging; no Backblaze doc page covers it. The
+# fake models the same endpoints the API docs describe, but that is the tool's
+# claim, so a PASS here says the tool and its own fake agree, nothing about B2.
+#
+# Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+SLUG=blazer
+CAP=client.simulator
+TARGET=simulator
+
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+
+# A detail never carries a response body, a multi-line diagnostic or a
+# credential: one line, printable, capped.
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# The Go program is carried at the end of this file as an INERT heredoc, so
+# `bash -n` parses this check as the shell script it is rather than choking on
+# Go syntax.
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+# `go mod tidy` (not `go mod download`) writes the go.sum entries the build
+# verifies against; without it a fresh module fails "missing go.sum entry".
+export GOPROXY=direct
+
+# Build and run are deliberately separate. A module that cannot be fetched or
+# compiled is an ABSENT RUNTIME (amber); a binary that runs and says nothing is
+# a defect in this check (red). One combined step cannot tell them apart.
+build_out="$( (cd "$work" && go mod tidy && go build -o check .) 2>&1 )"
+if [ "$?" -ne 0 ]; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- blazer could not be fetched or built: $(tidy_detail "$build_out"))"
+  exit 0
+fi
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+// blazer x client.simulator -- a PARTIAL (⚠) cell, and the one that pins a
+// DISAGREEMENT the parity matrix already records.
+//
+// Setup   a scratch project depending only on the PUBLISHED package
+// Action  import the shipped fake, run a trivial upload/download against it
+// Assert  it works with NO network -- a packaging/consumability check, not a
+//         B2 round trip
+// Go ⚠    what ships is a FAULT-INJECTING http.RoundTripper, not a B2 fake
+//
+// So the scenario splits in two here, and the check reports both halves:
+//   1. PACKAGING holds. github.com/Backblaze/blazer/x/transport imports from
+//      the published module and fabricates responses offline.
+//   2. The FAKE does not exist. A trivial upload/download cannot be run
+//      against it with no network, because it answers no B2 method -- it only
+//      breaks requests that were going somewhere real.
+// A run in which the offline round trip SUCCEEDED would mean blazer does ship
+// a B2 fake and the card is wrong; that is the failure this check is shaped to
+// catch.
+//
+// It reports @simulator whatever target was requested: this cell is about what
+// runs in-process, and a staging label on it would be a lie the report cannot
+// detect.
+//
+// The API came from docs/sdks/blazer/card.md and godoc for
+// github.com/Backblaze/blazer/b2 and .../x/transport. Never from b2sdks/.
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
+	"github.com/Backblaze/blazer/x/transport"
+)
+
+const capability = "client.simulator"
+
+// unreachable stands in for "no network": every request that escapes the
+// in-process machinery lands here and fails, and the counter proves whether
+// anything tried.
+type unreachable struct {
+	mu       sync.Mutex
+	attempts int
+}
+
+func (u *unreachable) RoundTrip(request *http.Request) (*http.Response, error) {
+	u.mu.Lock()
+	u.attempts++
+	u.mu.Unlock()
+	return nil, fmt.Errorf("sdkharness conformance: no network in this check")
+}
+
+func (u *unreachable) count() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.attempts
+}
+
+func runCheck(ctx context.Context, target *string) error {
+	*target = "simulator"
+
+	// --- half one: the package ships and works offline --------------------
+	network := &unreachable{}
+	injected := transport.WithFailures(network,
+		transport.FailureRate(1),
+		transport.Response(http.StatusBadRequest),
+		transport.Body("sdkharness conformance: injected fault"))
+	if injected == nil {
+		return failf("packaging", "transport.WithFailures returned no RoundTripper")
+	}
+
+	probe, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:1/b2api/v3/b2_authorize_account", nil)
+	if err != nil {
+		return failf("packaging", "could not build a probe request")
+	}
+	response, err := injected.RoundTrip(probe.WithContext(ctx))
+	if err != nil {
+		return failf("packaging", "the shipped RoundTripper could not answer a request offline")
+	}
+	if response.Body != nil {
+		io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		return failf("packaging", "the shipped RoundTripper answered HTTP %d, not the injected %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if network.count() != 0 {
+		return failf("packaging", "the shipped RoundTripper reached for the network to fabricate an injected failure")
+	}
+	note("packaging holds: x/transport imports from the published module and fabricates a response with no network")
+
+	// --- half two: it is not a B2 fake ------------------------------------
+	// A B2 fake would let the trivial upload/download below run offline. This
+	// one cannot: it has no b2_authorize_account to answer with.
+	offlineCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	client, err := b2.NewClient(offlineCtx, "sdkharness-conformance", "sdkharness-conformance",
+		b2.Transport(injected), b2.APIBase("http://127.0.0.1:1"))
+	if err == nil {
+		if roundTripped := trivialRoundTrip(offlineCtx, client); roundTripped == nil {
+			return failf("simulator boundary", "a trivial upload/download COMPLETED offline, so blazer does ship a usable B2 fake and the card's boundary is wrong")
+		}
+		return failf("simulator boundary", "b2.NewClient succeeded offline against the shipped RoundTripper, which the card records as a fault injector rather than a B2 fake")
+	}
+	note("boundary confirmed: b2.NewClient cannot authorize against the shipped RoundTripper offline (%s), because x/transport injects faults and answers no B2 method", scrub(err.Error()))
+
+	// A second construction with nothing but a refusing transport shows the
+	// package has no built-in fake to fall back on either.
+	bare := &unreachable{}
+	bareCtx, cancelBare := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelBare()
+	if _, err := b2.NewClient(bareCtx, "sdkharness-conformance", "sdkharness-conformance",
+		b2.Transport(bare), b2.APIBase("http://127.0.0.1:1")); err == nil {
+		return failf("simulator boundary", "b2.NewClient authorized with every request refused, which would mean an in-process fake answered it")
+	}
+	note("no in-process B2 fake exists: %d refused requests and no client, so `simulator` is no-realm-option for every other blazer capability", bare.count()+network.count())
+	note("this check ran with NO network beyond fetching the published module itself")
+	return nil
+}
+
+// trivialRoundTrip is the scenario's upload/download, attempted only if a
+// client ever comes into existence offline.
+func trivialRoundTrip(ctx context.Context, client *b2.Client) error {
+	bucket, err := client.Bucket(ctx, "sdkharness-conf-simulator")
+	if err != nil {
+		return err
+	}
+	name := objectName("simulator.txt")
+	payload := payloadOf(64)
+	if _, err := upload(ctx, bucket, name, payload, nil, nil); err != nil {
+		return err
+	}
+	got, err := download(ctx, bucket, name, nil)
+	if err != nil {
+		return err
+	}
+	if len(got) != len(payload) {
+		return fmt.Errorf("offline round trip returned %d bytes, expected %d", len(got), len(payload))
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Shared plumbing. Identical in every blazer check; the scenario above is the
+// only part that differs. Contract: bin/conformance/README.md.
+// ---------------------------------------------------------------------------
+
+const slug = "blazer"
+
+// The closed reason set, mirrored from bin/conformance/README.md. The runner
+// enforces it; a reason outside it is a FAIL the runner manufactures.
+const (
+	reasonNoRealm   = "no-realm-option"
+	reasonUnreach   = "unreachable"
+	reasonUnauth    = "unauthorized"
+	reasonNoCred    = "no-credential"
+	reasonNoRuntime = "missing-runtime"
+	reasonNotClaim  = "not-claimed"
+)
+
+// amberErr: the question could not be asked. failErr: it was asked, and the
+// answer contradicts the card.
+type amberErr struct{ reason, detail string }
+
+func (e *amberErr) Error() string { return e.reason + ": " + e.detail }
+
+type failErr struct{ step, detail string }
+
+func (e *failErr) Error() string { return e.step + ": " + e.detail }
+
+func amberf(reason, format string, args ...interface{}) error {
+	return &amberErr{reason: reason, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+func failf(step, format string, args ...interface{}) error {
+	return &failErr{step: step, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+// secretsToScrub holds every value that must never reach stdout: the key id,
+// the application key, and any download token this check mints.
+var secretsToScrub []string
+
+// opaqueToken matches anything long and token-shaped. A detail never needs a
+// 25-character opaque string, and a leaked credential is far worse than a
+// vague detail.
+var opaqueToken = regexp.MustCompile(`[A-Za-z0-9+/=_-]{25,}`)
+
+func scrub(s string) string { return scrubTo(s, 180) }
+
+// scrubTo is scrub with a caller-chosen cap: a result-line detail stays short,
+// while a NOTE may carry the evidence it is there to carry.
+func scrubTo(s string, limit int) string {
+	for _, secret := range secretsToScrub {
+		if secret != "" {
+			s = strings.Replace(s, secret, "REDACTED", -1)
+		}
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	s = opaqueToken.ReplaceAllString(s, "REDACTED")
+	if len(s) > limit {
+		s = s[:limit] + "..."
+	}
+	return s
+}
+
+// classify turns an error into amber when the ENVIRONMENT, not the capability,
+// is what stopped the check. Anything it cannot place stays red: an open amber
+// rule is how "could not run" quietly becomes the answer to everything.
+func classify(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch err.(type) {
+	case *amberErr, *failErr:
+		return err
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{"401", "403", "unauthorized", "bad_auth_token", "expired_auth_token", "access_denied", "not_authorized", "missing capability", "insufficient"} {
+		if strings.Contains(msg, marker) {
+			return amberf(reasonUnauth, "%T matched %q at step %q", err, marker, step)
+		}
+	}
+	for _, marker := range []string{"no such host", "connection refused", "network is unreachable", "no route to host", "i/o timeout", "dial tcp", "tls handshake", "context deadline exceeded", "server misbehaving", "connection reset"} {
+		if strings.Contains(msg, marker) {
+			return amberf(reasonUnreach, "%T matched %q at step %q", err, marker, step)
+		}
+	}
+	return failf(step, "%s", err.Error())
+}
+
+func say(target, verdict string) {
+	fmt.Printf("CONFORMANCE %s %s @%s: %s\n", slug, capability, target, verdict)
+}
+
+// note carries evidence that is weaker than the assertion it supports. It is a
+// SEPARATE line on purpose: the runner parses `PASS` exactly, so a PASS may
+// never carry a detail.
+func note(format string, args ...interface{}) {
+	fmt.Printf("NOTE %s %s: %s\n", slug, capability, scrubTo(fmt.Sprintf(format, args...), 600))
+}
+
+func requestedTarget() string {
+	if t := os.Getenv("CONFORMANCE_TARGET"); t != "" {
+		return t
+	}
+	return "staging"
+}
+
+// apiBase maps a requested target onto a realm blazer can reach. blazer speaks
+// the B2 native API only and ships no in-process B2 fake -- what it ships is a
+// fault-injecting RoundTripper (docs/sdks/blazer/capabilities.tsv:
+// client.simulator = partial) -- so `simulator` is no-realm-option here.
+func apiBase(target string) (string, error) {
+	switch target {
+	case "staging":
+		return "https://api.backblaze.net", nil
+	case "production":
+		return "https://api.backblazeb2.com", nil
+	}
+	return "", amberf(reasonNoRealm, "blazer exposes no %q realm: it ships a fault-injecting RoundTripper, not a B2 fake", target)
+}
+
+func credentials() (string, string, error) {
+	id, key := os.Getenv("B2_APPLICATION_KEY_ID"), os.Getenv("B2_APPLICATION_KEY")
+	if id == "" || key == "" {
+		id, key = os.Getenv("B2_TEST_APPLICATION_KEY_ID"), os.Getenv("B2_TEST_APPLICATION_KEY")
+	}
+	if id == "" || key == "" {
+		return "", "", amberf(reasonNoCred, "B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY unset")
+	}
+	secretsToScrub = append(secretsToScrub, id, key)
+	return id, key, nil
+}
+
+func newClient(ctx context.Context, target string) (*b2.Client, error) {
+	base, err := apiBase(target)
+	if err != nil {
+		return nil, err
+	}
+	id, key, err := credentials()
+	if err != nil {
+		return nil, err
+	}
+	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
+	if err != nil {
+		return nil, classify("authenticate", err)
+	}
+	return client, nil
+}
+
+func randomHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return strings.Repeat("0", 2*n)
+	}
+	return hex.EncodeToString(buf)
+}
+
+func bucketName() string { return "sdkharness-conf-" + randomHex(6) }
+
+func objectName(leaf string) string { return "st/" + leaf }
+
+func sha1hex(payload []byte) string {
+	sum := sha1.Sum(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+// payloadOf returns n deterministic-but-incompressible-enough bytes.
+func payloadOf(n int) []byte {
+	seed := []byte("sdkharness conformance blazer payload ")
+	buf := make([]byte, n)
+	for i := range buf {
+		buf[i] = seed[i%len(seed)] ^ byte(i*31)
+	}
+	return buf
+}
+
+// newBucket creates an ephemeral bucket and returns a cleanup that empties and
+// removes it. A check owns every resource it creates and destroys all of them,
+// on the error path too -- hence the returned func is always deferred.
+func newBucket(ctx context.Context, client *b2.Client, attrs *b2.BucketAttrs) (*b2.Bucket, func(), error) {
+	if attrs == nil {
+		attrs = &b2.BucketAttrs{Type: b2.Private}
+	}
+	bucket, err := client.NewBucket(ctx, bucketName(), attrs)
+	if err != nil {
+		return nil, func() {}, classify("create bucket", err)
+	}
+	return bucket, func() { destroyBucket(ctx, bucket) }, nil
+}
+
+func destroyBucket(ctx context.Context, bucket *b2.Bucket) {
+	for attempt := 0; attempt < 2; attempt++ {
+		emptyBucket(ctx, bucket)
+		if err := bucket.Delete(ctx); err == nil {
+			return
+		} else if attempt == 1 {
+			// Never mask the verdict with a cleanup failure -- say it and move on.
+			note("cleanup left bucket %s behind: %s", bucket.Name(), scrub(err.Error()))
+		}
+	}
+}
+
+func emptyBucket(ctx context.Context, bucket *b2.Bucket) {
+	iter := bucket.List(ctx, b2.ListHidden())
+	for iter.Next() {
+		iter.Object().Delete(ctx)
+	}
+	unfinished := bucket.List(ctx, b2.ListUnfinished())
+	for unfinished.Next() {
+		unfinished.Object().Cancel(ctx)
+	}
+}
+
+// upload writes payload to name. tune runs before the first Write, because
+// blazer requires Writer fields to be set before then.
+func upload(ctx context.Context, bucket *b2.Bucket, name string, payload []byte, attrs *b2.Attrs, tune func(*b2.Writer)) (*b2.Object, error) {
+	object := bucket.Object(name)
+	var opts []b2.WriterOption
+	if attrs != nil {
+		opts = append(opts, b2.WithAttrsOption(attrs))
+	}
+	writer := object.NewWriter(ctx, opts...)
+	if tune != nil {
+		tune(writer)
+	}
+	if _, err := writer.Write(payload); err != nil {
+		writer.Close()
+		return nil, classify("upload", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, classify("upload", err)
+	}
+	return object, nil
+}
+
+func download(ctx context.Context, bucket *b2.Bucket, name string, tune func(*b2.Reader)) ([]byte, error) {
+	reader := bucket.Object(name).NewReader(ctx)
+	if tune != nil {
+		tune(reader)
+	}
+	data, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, classify("download", readErr)
+	}
+	if closeErr != nil {
+		return nil, classify("download", closeErr)
+	}
+	return data, nil
+}
+
+// versionsOf returns every listed version of name, newest first. It is also the
+// only way to obtain a fileId here: blazer implements neither
+// b2_get_file_info_by_name nor b2_download_file_by_id (card.md, raw-endpoint
+// table), so a by-name Object reference carries no id.
+func versionsOf(ctx context.Context, bucket *b2.Bucket, name string) ([]*b2.Object, error) {
+	var found []*b2.Object
+	iter := bucket.List(ctx, b2.ListPrefix(name), b2.ListHidden())
+	for iter.Next() {
+		if iter.Object().Name() == name {
+			found = append(found, iter.Object())
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, classify("list versions", err)
+	}
+	return found, nil
+}
+
+func namesUnder(ctx context.Context, bucket *b2.Bucket, prefix string) ([]string, error) {
+	var names []string
+	iter := bucket.List(ctx, b2.ListPrefix(prefix))
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		return nil, classify("list", err)
+	}
+	return names, nil
+}
+
+// rpcCounts sums blazer's per-method RPC counters across every window it
+// reports (b2/monitor.go, surfaced by Client.Status). The windows overlap, so
+// the absolute numbers mean nothing; "was this method called between two
+// reads" -- which is what the boundary assertions use -- is sound.
+func rpcCounts(client *b2.Client) map[string]int {
+	counts := map[string]int{}
+	info := client.Status()
+	if info == nil {
+		return counts
+	}
+	for _, methods := range info.RPCs {
+		for name, n := range methods.CountByMethod() {
+			counts[name] += n
+		}
+	}
+	return counts
+}
+
+func rpcDelta(before, after map[string]int) []string {
+	var moved []string
+	for name, n := range after {
+		if n > before[name] {
+			moved = append(moved, name)
+		}
+	}
+	sort.Strings(moved)
+	return moved
+}
+
+func anyContains(values []string, substr string) bool {
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// exportedFields names a struct's exported fields, which is how the ⚠ boundary
+// assertions interrogate the PUBLISHED package rather than trusting the card.
+func exportedFields(v interface{}) []string {
+	var names []string
+	t := reflect.TypeOf(v)
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return names
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if field := t.Field(i); field.PkgPath == "" {
+			names = append(names, field.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func infoValue(info map[string]string, key string) (string, bool) {
+	for k, v := range info {
+		if strings.EqualFold(k, key) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+func main() {
+	target := requestedTarget()
+	defer func() {
+		if r := recover(); r != nil {
+			say(target, fmt.Sprintf("FAIL (panic -- %s)", scrub(fmt.Sprint(r))))
+			os.Exit(1)
+		}
+	}()
+	err := runCheck(context.Background(), &target)
+	switch e := err.(type) {
+	case nil:
+		say(target, "PASS")
+	case *amberErr:
+		say(target, fmt.Sprintf("COULD-NOT-RUN (%s -- %s)", e.reason, e.detail))
+	case *failErr:
+		say(target, fmt.Sprintf("FAIL (%s -- %s)", e.step, e.detail))
+		os.Exit(1)
+	default:
+		say(target, fmt.Sprintf("FAIL (check -- %s)", scrub(err.Error())))
+		os.Exit(1)
+	}
+}
+__EOF_GO__
