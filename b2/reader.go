@@ -80,6 +80,9 @@ type rchunk struct {
 // Close frees resources associated with the download.
 func (r *Reader) Close() error {
 	r.cancel()
+	if r.rcond != nil {
+		r.broadcast()
+	}
 	r.o.b.c.removeReader(r)
 	return nil
 }
@@ -99,6 +102,14 @@ func (r *Reader) setErrNoCancel(err error) {
 	if r.err == nil {
 		r.err = err
 	}
+}
+
+// broadcast wakes curChunk waiters. It takes rmux so the wakeup cannot land
+// between a waiter's predicate check and its registration in Wait.
+func (r *Reader) broadcast() {
+	r.rmux.Lock()
+	r.rcond.Broadcast()
+	r.rmux.Unlock()
 }
 
 func (r *Reader) getErr() error {
@@ -144,12 +155,12 @@ func (r *Reader) thread() {
 				buf.final = true
 				r.chunks[chunkID] = buf
 				r.rmux.Unlock()
-				r.rcond.Broadcast()
+				r.broadcast()
 				return
 			}
 			if err != nil {
 				r.setErr(err)
-				r.rcond.Broadcast()
+				r.broadcast()
 				return
 			}
 			r.rmux.Lock()
@@ -172,13 +183,13 @@ func (r *Reader) thread() {
 				attempts++
 				if attempts >= maxShortReadAttempts {
 					r.setErr(fmt.Errorf("b2 reader %d: got %dB of %dB after %d attempts", chunkID, i, rsize, attempts))
-					r.rcond.Broadcast()
+					r.broadcast()
 					return
 				}
 				blog.V(1).Infof("b2 reader %d: got %dB of %dB; retrying after %v", chunkID, i, rsize, b)
 				if err := b.wait(r.ctx); err != nil {
 					r.setErr(err)
-					r.rcond.Broadcast()
+					r.broadcast()
 					return
 				}
 				buf.Reset()
@@ -186,13 +197,13 @@ func (r *Reader) thread() {
 			}
 			if err != nil {
 				r.setErr(err)
-				r.rcond.Broadcast()
+				r.broadcast()
 				return
 			}
 			r.rmux.Lock()
 			r.chunks[chunkID] = buf
 			r.rmux.Unlock()
-			r.rcond.Broadcast()
+			r.broadcast()
 		}
 	}()
 }
