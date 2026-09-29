@@ -667,7 +667,7 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 // bytes.  If length is negative, the rest of the object is read.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Reader{
+	r := &Reader{
 		ctx:    ctx,
 		cancel: cancel,
 		o:      o,
@@ -676,6 +676,9 @@ func (o *Object) NewRangeReader(ctx context.Context, offset, length int64) *Read
 		length: length,
 		offset: offset,
 	}
+	// Created here, not in initFunc, so Close can broadcast without racing it.
+	r.rcond = sync.NewCond(&r.rmux)
+	return r
 }
 
 // NewReader returns a reader for the given object.

@@ -23,6 +23,7 @@ import (
 	"hash"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Backblaze/blazer/internal/blog"
@@ -66,7 +67,9 @@ type Reader struct {
 	sha1       string
 
 	rmux  sync.Mutex // guards rcond
-	rcond *sync.Cond
+	rcond *sync.Cond // created with the Reader, so it is safe to read without init
+
+	waiters int32 // curChunk goroutines parked in rcond.Wait; read by tests
 
 	emux sync.RWMutex // guards err, believe it or not
 	err  error
@@ -83,6 +86,7 @@ type rchunk struct {
 // Close frees resources associated with the download.
 func (r *Reader) Close() error {
 	r.cancel()
+	r.broadcast()
 	r.o.b.c.removeReader(r)
 	return nil
 }
@@ -102,6 +106,14 @@ func (r *Reader) setErrNoCancel(err error) {
 	if r.err == nil {
 		r.err = err
 	}
+}
+
+// broadcast wakes curChunk waiters. It takes rmux so the wakeup cannot land
+// between a waiter's predicate check and its registration in Wait.
+func (r *Reader) broadcast() {
+	r.rmux.Lock()
+	r.rcond.Broadcast()
+	r.rmux.Unlock()
 }
 
 func (r *Reader) getErr() error {
@@ -147,12 +159,12 @@ func (r *Reader) thread() {
 				buf.final = true
 				r.chunks[chunkID] = buf
 				r.rmux.Unlock()
-				r.rcond.Broadcast()
+				r.broadcast()
 				return
 			}
 			if err != nil {
 				r.setErr(err)
-				r.rcond.Broadcast()
+				r.broadcast()
 				return
 			}
 			r.rmux.Lock()
@@ -175,13 +187,13 @@ func (r *Reader) thread() {
 				attempts++
 				if attempts >= maxShortReadAttempts {
 					r.setErr(fmt.Errorf("b2 reader %d: got %dB of %dB after %d attempts: %w", chunkID, i, rsize, attempts, io.ErrUnexpectedEOF))
-					r.rcond.Broadcast()
+					r.broadcast()
 					return
 				}
 				blog.V(1).Infof("b2 reader %d: got %dB of %dB; retrying after %v", chunkID, i, rsize, b)
 				if err := b.wait(r.ctx, retryAfterFor(r.o.b.r)); err != nil {
 					r.setErr(err)
-					r.rcond.Broadcast()
+					r.broadcast()
 					return
 				}
 				buf.Reset()
@@ -189,13 +201,13 @@ func (r *Reader) thread() {
 			}
 			if err != nil {
 				r.setErr(err)
-				r.rcond.Broadcast()
+				r.broadcast()
 				return
 			}
 			r.rmux.Lock()
 			r.chunks[chunkID] = buf
 			r.rmux.Unlock()
-			r.rcond.Broadcast()
+			r.broadcast()
 		}
 	}()
 }
@@ -206,7 +218,9 @@ func (r *Reader) curChunk() (*rchunk, error) {
 		r.rmux.Lock()
 		defer r.rmux.Unlock()
 		for r.chunks[r.chrid] == nil && r.getErr() == nil && r.ctx.Err() == nil {
+			atomic.AddInt32(&r.waiters, 1)
 			r.rcond.Wait()
+			atomic.AddInt32(&r.waiters, -1)
 		}
 		select {
 		case ch <- r.chunks[r.chrid]:
@@ -230,7 +244,11 @@ func (r *Reader) initFunc() {
 	r.smap = make(map[int]*meteredReader)
 	r.smux.Unlock()
 	r.o.b.c.addReader(r)
-	r.rcond = sync.NewCond(&r.rmux)
+	// Wake waiters when the caller cancels without Close (context.AfterFunc needs Go 1.21).
+	go func() {
+		<-r.ctx.Done()
+		r.broadcast()
+	}()
 	cr := r.ConcurrentDownloads
 	if cr < 1 {
 		cr = 1

@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Writer` upload workers exit when the writer's context is cancelled. With `ConcurrentUploads` of 2 or more, a failed part cancelled the context, `Close` then returned before signalling the remaining workers, and an idle worker goroutine stayed parked forever.
 - `ObjectIterator` no longer ends a listing early, with no error, when a page is empty or all its entries are filtered out (hidden listings skip unfinished uploads) but B2 returned a cursor to the next page. This affected `List`, `ListHidden` and `ListUnfinished`. If a backend keeps returning an empty page with the same cursor, the iterator now stops with an error instead of repeating the request.
 - A `Reader` gives up on a chunk that keeps arriving truncated after 21 attempts (the first plus the 20 retries allowed for any download), with an error that wraps `io.ErrUnexpectedEOF`. It used to retry forever, until the caller's context ended. The wait between attempts grows from 1 ms to a cap of about 16 s, so an interruption of around two minutes is still survived.
+- `Reader` goroutines no longer stay parked in `Read` when a download failure or `Close` races the wait for the next chunk, or when the caller cancels the context without calling `Close`. Wakeups were sent without holding the lock the waiter checks under, so one could be lost, and cancelling the context woke nobody.
 
 ## [0.8.0] - 2026-09-15
 
