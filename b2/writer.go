@@ -161,6 +161,8 @@ func (w *Writer) thread() {
 			case cnk = <-w.ready:
 			case <-w.cdone:
 				return
+			case <-w.ctx.Done():
+				return
 			}
 			if sha, ok := w.seen[cnk.id]; ok {
 				if sha != cnk.buf.Hash() {
