@@ -11,8 +11,8 @@ import (
 // fails; the failure then cancels the writer context before Close runs.
 type closeLeakRoot struct{ *testRoot }
 
-func (r *closeLeakRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption) (b2BucketInterface, error) {
-	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse)
+func (r *closeLeakRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, cors []CORSRule, fileLock bool) (b2BucketInterface, error) {
+	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse, cors, fileLock)
 	if err != nil {
 		return nil, err
 	}
@@ -21,8 +21,8 @@ func (r *closeLeakRoot) createBucket(ctx context.Context, name, btype string, in
 
 type closeLeakBucket struct{ *testBucket }
 
-func (b *closeLeakBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string) (b2LargeFileInterface, error) {
-	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info)
+func (b *closeLeakBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, retention *Retention, legalHold LegalHold) (b2LargeFileInterface, error) {
+	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info, retention, legalHold)
 	if err != nil {
 		return nil, err
 	}

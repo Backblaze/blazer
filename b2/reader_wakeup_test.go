@@ -17,8 +17,8 @@ type wakeRoot struct {
 	calls int32
 }
 
-func (r *wakeRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption) (b2BucketInterface, error) {
-	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse)
+func (r *wakeRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, cors []CORSRule, fileLock bool) (b2BucketInterface, error) {
+	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse, cors, fileLock)
 	if err != nil {
 		return nil, err
 	}
