@@ -1,0 +1,204 @@
+#!/bin/sh
+# Customer-style B2 health check using github.com/Backblaze/blazer/b2.
+# Realm: HEALTHCHECK_REALM_URL when set (through b2.APIBase), else production.
+
+set -eu
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+slug=blazer
+
+if [ -z "${B2_TEST_APPLICATION_KEY_ID:-}" ]; then
+  printf 'HEALTHCHECK %s: SKIP (no credentials)\n' "$slug"
+  exit 0
+fi
+
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-blazer.XXXXXX")
+cleanup() {
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT HUP INT TERM
+
+awk 'found { print } /^__GO_PROGRAM__$/ { found = 1 }' "$0" > "$work_dir/main.go"
+cat > "$work_dir/go.mod" <<EOF
+module sdkharness-health-check-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+set +e
+# Fetch only third-party dependencies; the Blazer module itself is the checked-out revision selected by the local replace.
+export GOPROXY=direct
+# `go mod tidy` (not `go mod download`) writes the go.sum entries `go run`
+# verifies against; without it a fresh module fails "missing go.sum entry".
+result=$( (cd "$work_dir" && go mod tidy && go run .) 2>&1)
+status=$?
+set -e
+
+# The Go program emits exactly one "HEALTHCHECK blazer: ..." line. EXTRACT it
+# rather than exact-match the whole captured stream: go mod tidy prints
+# "go: downloading ..." to stderr, which shares this capture and broke a
+# whole-blob match even when the run itself passed.
+hc_line=$(printf '%s\n' "$result" | grep -E '^HEALTHCHECK blazer: ' | tail -1)
+case "$hc_line" in
+  "HEALTHCHECK blazer: PASS"|"HEALTHCHECK blazer: FAIL ("*)
+    printf '%s\n' "$hc_line"
+    exit "$status"
+    ;;
+esac
+
+# Do not pass through compiler or runtime diagnostics: they may be multi-line,
+# and the health-check protocol has exactly one result line.
+detail=$(printf '%s' "$result" | tr '\n\r' '  ' | tr -cd '[:print:]' | cut -c1-240)
+if [ -z "$detail" ]; then
+  detail='go run exited without a result'
+fi
+printf 'HEALTHCHECK %s: FAIL (run — %s)\n' "$slug" "$detail"
+exit 1
+
+__GO_PROGRAM__
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/Backblaze/blazer/b2"
+)
+
+const slug = "blazer"
+
+type stepError struct {
+	step string
+	err  error
+}
+
+func (e *stepError) Error() string {
+	return e.step + ": " + e.err.Error()
+}
+
+func fail(step string, err error) error {
+	return &stepError{step: step, err: err}
+}
+
+func objectName() (string, error) {
+	var suffix [16]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sdkharness-healthcheck/%x", suffix), nil
+}
+
+func listed(ctx context.Context, bucket *b2.Bucket, name string) (bool, error) {
+	iter := bucket.List(ctx, b2.ListPrefix(name))
+	for iter.Next() {
+		if iter.Object().Name() == name {
+			return true, nil
+		}
+	}
+	return false, iter.Err()
+}
+
+func run(ctx context.Context) (err error) {
+	keyID := os.Getenv("B2_APPLICATION_KEY_ID")
+	key := os.Getenv("B2_APPLICATION_KEY")
+	bucketName := os.Getenv("B2_BUCKET_NAME")
+	if keyID == "" || key == "" || bucketName == "" {
+		return fail("configuration", fmt.Errorf("B2_APPLICATION_KEY_ID, B2_APPLICATION_KEY, and B2_BUCKET_NAME are required"))
+	}
+
+	apiBase := os.Getenv("HEALTHCHECK_REALM_URL")
+	if apiBase == "" {
+		apiBase = "https://api.backblazeb2.com"
+	}
+	client, err := b2.NewClient(ctx, keyID, key, b2.APIBase(apiBase), b2.UserAgent("sdkharness-health-check/blazer"))
+	if err != nil {
+		return fail("authenticate", err)
+	}
+	bucket, err := client.Bucket(ctx, bucketName)
+	if err != nil {
+		return fail("bucket", err)
+	}
+
+	name, err := objectName()
+	if err != nil {
+		return fail("name", err)
+	}
+	object := bucket.Object(name)
+	cleanupNeeded := false
+	defer func() {
+		if !cleanupNeeded {
+			return
+		}
+		if cleanupErr := object.Delete(ctx); cleanupErr != nil && !b2.IsNotExist(cleanupErr) {
+			if err == nil {
+				err = fail("cleanup", cleanupErr)
+			} else {
+				err = fail("cleanup", fmt.Errorf("%v; original failure: %w", cleanupErr, err))
+			}
+		}
+	}()
+
+	payload := []byte("sdkharness customer-style health check\n")
+	writer := object.NewWriter(ctx, b2.WithAttrsOption(&b2.Attrs{ContentType: "text/plain"}))
+	cleanupNeeded = true
+	if _, err := writer.Write(payload); err != nil {
+		return fail("upload", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fail("upload", err)
+	}
+
+	reader := object.NewReader(ctx)
+	downloaded, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return fail("download", readErr)
+	}
+	if closeErr != nil {
+		return fail("download", closeErr)
+	}
+	if !bytes.Equal(downloaded, payload) {
+		return fail("verify", fmt.Errorf("downloaded bytes differ"))
+	}
+
+	found, err := listed(ctx, bucket, name)
+	if err != nil {
+		return fail("list", err)
+	}
+	if !found {
+		return fail("list", fmt.Errorf("uploaded object was not listed"))
+	}
+
+	if err := object.Delete(ctx); err != nil {
+		return fail("delete", err)
+	}
+	cleanupNeeded = false
+
+	found, err = listed(ctx, bucket, name)
+	if err != nil {
+		return fail("confirm delete", err)
+	}
+	if found {
+		return fail("confirm delete", fmt.Errorf("deleted object is still listed"))
+	}
+	return nil
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
+		detail := strings.ReplaceAll(err.Error(), "\n", " ")
+		fmt.Printf("HEALTHCHECK %s: FAIL (%s)\n", slug, detail)
+		os.Exit(1)
+	}
+	fmt.Printf("HEALTHCHECK %s: PASS\n", slug)
+}
