@@ -265,27 +265,33 @@ func (w *Writer) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	w.init()
-	if err := w.getErr(); err != nil {
-		return 0, err
+	// Loop rather than recurse: closeWrite is read-locked once per call, because
+	// a recursive RLock deadlocks as soon as Close is waiting for the write lock.
+	var n int
+	for {
+		if err := w.getErr(); err != nil {
+			return n, err
+		}
+		left := w.csize - w.w.Len()
+		if len(p) < left {
+			k, err := w.w.Write(p)
+			if err != nil {
+				w.setErr(err)
+			}
+			return n + k, err
+		}
+		i, err := w.w.Write(p[:left])
+		n += i
+		if err != nil {
+			w.setErr(err)
+			return n, err
+		}
+		if err := w.sendChunk(); err != nil {
+			w.setErr(err)
+			return n, w.getErr()
+		}
+		p = p[left:]
 	}
-	left := w.csize - w.w.Len()
-	if len(p) < left {
-		return w.w.Write(p)
-	}
-	i, err := w.w.Write(p[:left])
-	if err != nil {
-		w.setErr(err)
-		return i, err
-	}
-	if err := w.sendChunk(); err != nil {
-		w.setErr(err)
-		return i, w.getErr()
-	}
-	k, err := w.Write(p[left:])
-	if err != nil {
-		w.setErr(err)
-	}
-	return i + k, err
 }
 
 func (w *Writer) getUploadURL(ctx context.Context) (beURLInterface, error) {
@@ -435,8 +441,6 @@ func (w *Writer) sendChunk() error {
 
 	var cidx = -1
 	var ww writeBuffer = nil
-	w.emux.RLock()
-	defer w.emux.RUnlock()
 	if w.ctx.Err() == nil {
 		// Only claim the read lock if we need it
 		w.wmux.RLock()
