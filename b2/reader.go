@@ -30,6 +30,9 @@ import (
 
 var errNoMoreContent = errors.New("416: out of content")
 
+// maxShortReadAttempts bounds retries of a chunk whose body arrives truncated.
+const maxShortReadAttempts = 10
+
 // Reader reads files from B2.
 type Reader struct {
 	// ConcurrentDownloads is the number of simultaneous downloads to pull from
@@ -131,6 +134,7 @@ func (r *Reader) thread() {
 				r.length -= size
 			}
 			var b backoff
+			var attempts int
 		redo:
 			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false)
 			if err == errNoMoreContent {
@@ -165,6 +169,12 @@ func (r *Reader) thread() {
 			r.smux.Unlock()
 			if i < int64(rsize) || err == io.ErrUnexpectedEOF {
 				// Probably the network connection was closed early.  Retry.
+				attempts++
+				if attempts >= maxShortReadAttempts {
+					r.setErr(fmt.Errorf("b2 reader %d: got %dB of %dB after %d attempts", chunkID, i, rsize, attempts))
+					r.rcond.Broadcast()
+					return
+				}
 				blog.V(1).Infof("b2 reader %d: got %dB of %dB; retrying after %v", chunkID, i, rsize, b)
 				if err := b.wait(r.ctx); err != nil {
 					r.setErr(err)
