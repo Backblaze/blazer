@@ -268,8 +268,10 @@ func (b *Bucket) listObjects(ctx context.Context, count int, c *cursor) ([]*Obje
 			})
 		}
 	}
+	// Only a nil next cursor ends the listing: a page can come back empty (or
+	// be filtered to nothing) while more results remain.
 	var rtnErr error
-	if len(objects) == 0 || next == nil {
+	if next == nil {
 		rtnErr = io.EOF
 	}
 	return objects, next, rtnErr
@@ -299,8 +301,10 @@ func (b *Bucket) listCurrentObjects(ctx context.Context, count int, c *cursor) (
 			b:    b,
 		})
 	}
+	// Only a nil next cursor ends the listing: a page can come back empty (or
+	// be filtered to nothing) while more results remain.
 	var rtnErr error
-	if len(objects) == 0 || next == nil {
+	if next == nil {
 		rtnErr = io.EOF
 	}
 	return objects, next, rtnErr
@@ -328,8 +332,10 @@ func (b *Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, c *cur
 			b:    b,
 		})
 	}
+	// Only a nil next cursor ends the listing: a page can come back empty (or
+	// be filtered to nothing) while more results remain.
 	var rtnErr error
-	if len(objects) == 0 || next == nil {
+	if next == nil {
 		rtnErr = io.EOF
 	}
 	return objects, next, rtnErr
