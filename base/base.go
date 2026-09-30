@@ -69,6 +69,9 @@ func Action(err error) ErrAction {
 		return Punt
 	}
 	if e.retry > 0 {
+		if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
+			return AttemptNewUpload
+		}
 		return Retry
 	}
 	if e.code >= 500 && e.code < 600 && (e.method == "b2_upload_file" || e.method == "b2_upload_part") {
@@ -355,8 +358,9 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		}
 
 		return nil, b2err{
-			msg:   err.Error(),
-			retry: 1,
+			msg:    err.Error(),
+			method: method,
+			retry:  1,
 		}
 	}
 }
