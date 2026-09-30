@@ -419,6 +419,15 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 			Algorithm: sse.Algorithm,
 		}
 	}
+	if retention := b.b.DefaultRetention; retention != nil && retention.Period != nil {
+		attrs.DefaultRetention = &Retention{
+			Mode: retention.Mode,
+			Period: &RetentionPeriod{
+				Duration: retention.Period.Duration,
+				Unit:     retention.Period.Unit,
+			},
+		}
+	}
 	return attrs
 }
 
