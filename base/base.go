@@ -631,6 +631,15 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	if b2resp.FileLockConfig != nil {
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
+	if b2resp.FileLockConfig != nil && b2resp.FileLockConfig.Val.DefaultRetention.Mode != nil && b2resp.FileLockConfig.Val.DefaultRetention.Period.Unit != nil {
+		bucket.DefaultRetention = &b2types.Retention{
+			Mode: *b2resp.FileLockConfig.Val.DefaultRetention.Mode,
+			Period: &b2types.RetentionPeriod{
+				Duration: b2resp.FileLockConfig.Val.DefaultRetention.Period.Duration,
+				Unit:     *b2resp.FileLockConfig.Val.DefaultRetention.Period.Unit,
+			},
+		}
+	}
 	return bucket, nil
 }
 
@@ -803,6 +812,15 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 		}
 		if bucket.FileLockConfig != nil {
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
+		}
+		if bucket.FileLockConfig != nil && bucket.FileLockConfig.Val.DefaultRetention.Mode != nil && bucket.FileLockConfig.Val.DefaultRetention.Period.Unit != nil {
+			listed.DefaultRetention = &b2types.Retention{
+				Mode: *bucket.FileLockConfig.Val.DefaultRetention.Mode,
+				Period: &b2types.RetentionPeriod{
+					Duration: bucket.FileLockConfig.Val.DefaultRetention.Period.Duration,
+					Unit:     *bucket.FileLockConfig.Val.DefaultRetention.Period.Unit,
+				},
+			}
 		}
 		buckets = append(buckets, listed)
 	}
