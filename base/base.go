@@ -597,7 +597,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
 		})
 	}
-	return &Bucket{
+	bucket := &Bucket{
 		Name:                        name,
 		Info:                        b2resp.Info,
 		LifecycleRules:              respRules,
@@ -605,7 +605,17 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		rev:                         b2resp.Revision,
 		b2:                          b,
 		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
-	}, nil
+	}
+	if b2resp.FileLockConfig != nil && b2resp.FileLockConfig.Val.DefaultRetention.Mode != nil && b2resp.FileLockConfig.Val.DefaultRetention.Period.Unit != nil {
+		bucket.DefaultRetention = &b2types.Retention{
+			Mode: *b2resp.FileLockConfig.Val.DefaultRetention.Mode,
+			Period: &b2types.RetentionPeriod{
+				Duration: b2resp.FileLockConfig.Val.DefaultRetention.Period.Duration,
+				Unit:     *b2resp.FileLockConfig.Val.DefaultRetention.Period.Unit,
+			},
+		}
+	}
+	return bucket, nil
 }
 
 // DeleteBucket wraps b2_delete_bucket.
@@ -740,7 +750,7 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
 			})
 		}
-		buckets = append(buckets, &Bucket{
+		listedBucket := &Bucket{
 			Name:                        bucket.Name,
 			Type:                        bucket.Type,
 			Info:                        bucket.Info,
@@ -749,7 +759,17 @@ func (b *B2) ListBuckets(ctx context.Context, name string, bucketTypes ...string
 			rev:                         bucket.Revision,
 			b2:                          b,
 			DefaultServerSideEncryption: bucket.DefaultServerSideEncryption.Value,
-		})
+		}
+		if bucket.FileLockConfig != nil && bucket.FileLockConfig.Val.DefaultRetention.Mode != nil && bucket.FileLockConfig.Val.DefaultRetention.Period.Unit != nil {
+			listedBucket.DefaultRetention = &b2types.Retention{
+				Mode: *bucket.FileLockConfig.Val.DefaultRetention.Mode,
+				Period: &b2types.RetentionPeriod{
+					Duration: bucket.FileLockConfig.Val.DefaultRetention.Period.Duration,
+					Unit:     *bucket.FileLockConfig.Val.DefaultRetention.Period.Unit,
+				},
+			}
+		}
+		buckets = append(buckets, listedBucket)
 	}
 	return buckets, nil
 }
