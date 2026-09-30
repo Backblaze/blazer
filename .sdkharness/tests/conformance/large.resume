@@ -206,7 +206,7 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 
 	// --- fewer parts than the total ---------------------------------------
-	uploadedParts := callsMatching(before, after, "upload_part", windows)
+	uploadedParts := callsMatching(before, after, "b2_upload_part", windows)
 	switch {
 	case uploadedParts <= 0:
 		note("blazer's RPC counters recorded no part uploads, so 'fewer parts than the total' was NOT observed; the reused fileId above is the firm evidence of resumption")
