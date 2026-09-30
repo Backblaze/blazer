@@ -128,7 +128,7 @@ type UpdateBucketRequest struct {
 	BucketID       string            `json:"bucketId"`
 	Type           string            `json:"bucketType,omitempty"`
 	Info           map[string]string `json:"bucketInfo,omitempty"`
-	LifecycleRules []LifecycleRule   `json:"lifecycleRules,omitempty"`
+	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
 	IfRevisionIs   int               `json:"ifRevisionIs,omitempty"`
 
 	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
