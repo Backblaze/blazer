@@ -20,6 +20,11 @@ against the simulator.
   (`tests/lib/loopback_guard.go.txt`).
 - A check that reports `COULD-NOT-RUN` (or `SKIP`) must exit 0; the dispatcher reports a
   nonzero exit after such a verdict as a `FAIL`, never as amber evidence.
+- **Only a missing Go toolchain is amber.** `COULD-NOT-RUN (missing-runtime ...)` (health: `SKIP`)
+  is reserved for no usable `go` on `PATH`, or a Go older than this checkout requires with
+  `GOTOOLCHAIN=local` forbidding a download. A checkout or check that does not compile, a failing
+  `go mod tidy` and a dependency that cannot be resolved offline are a `FAIL` carrying the compiler
+  output, so a Blazer API or compile regression is never hidden as harmless evidence.
 
 `tests/selftest` pins these properties and needs neither a simulator nor the network.
 

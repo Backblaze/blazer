@@ -5,7 +5,8 @@
 # What it pins: (1) a dispatcher turns a child that prints COULD-NOT-RUN/SKIP and then
 # exits nonzero into FAIL, not into amber evidence; (2) a check run directly refuses a
 # non-simulator target and any non-loopback URL; (3) with a Go toolchain, the standard
-# transport refuses a non-loopback connection.
+# transport refuses a non-loopback connection; (4) a build failure is only amber when the
+# Go toolchain is missing or too old: a checkout or check that does not compile is a FAIL.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/blazer-selftest.XXXXXX")" || exit 1
@@ -100,6 +101,61 @@ GO
 else
   printf '[SKIP] go: toolchain not on PATH; transport guard not exercised\n'
 fi
+
+
+# --- (4) a build failure is amber ONLY for a missing/unusable toolchain ----------
+# Each case runs a REAL leaf (and the health check) inside a throwaway fake checkout, so the
+# path under test is the one the harness takes: leaf -> sdkharness_go_build -> verdict.
+mk_tree() { # <dir> <go directive> <b2 package source>
+  local d="$1"
+  mkdir -p "$d/.sdkharness/tests/conformance" "$d/.sdkharness/tests/resilience" "$d/.sdkharness/tests/health" "$d/.sdkharness/tests/lib" "$d/b2"
+  cp "$HERE/lib/contract.sh" "$HERE/lib/loopback_guard.go.txt" "$d/.sdkharness/tests/lib/"
+  cp "$HERE/conformance/files.upload" "$d/.sdkharness/tests/conformance/"
+  cp "$HERE/resilience/upload.retry_503" "$d/.sdkharness/tests/resilience/"
+  cp "$HERE/health/golden-path" "$d/.sdkharness/tests/health/"
+  printf 'module github.com/Backblaze/blazer\n\ngo %s\n' "$2" > "$d/go.mod"
+  printf '%s\n' "$3" > "$d/b2/b2.go"
+}
+# env -i would also strip HOME/GOCACHE, and Go then refuses to build for a reason unrelated to
+# what each case pins; hand the compiler its caches explicitly.
+gocaches() { printf 'HOME=%s GOCACHE=%s GOMODCACHE=%s' "${HOME:-/nonexistent}" "$(go env GOCACHE 2>/dev/null)" "$(go env GOMODCACHE 2>/dev/null)"; }
+leaf_out() { # <tree> <level> -> output; exit status in $TMP/rc
+  local t="$1" lvl="$2" gc; gc="$(gocaches)"
+  case "$lvl" in
+    conformance) out="$(env -i PATH="$PATH" $gc CONFORMANCE_TARGET=simulator CONFORMANCE_SIMULATOR_URL="$LOOP" "$t/.sdkharness/tests/conformance/files.upload" 2>&1)" ;;
+    resilience)  out="$(env -i PATH="$PATH" $gc RESILIENCE_SIMULATOR_URL="$LOOP" RESILIENCE_CONTROL_URL="$LOOP" "$t/.sdkharness/tests/resilience/upload.retry_503" 2>&1)" ;;
+    health)      out="$(env -i PATH="$PATH" $gc HEALTHCHECK_REALM_URL="$LOOP" B2_TEST_APPLICATION_KEY_ID=test-key-id B2_APPLICATION_KEY_ID=test-key-id B2_APPLICATION_KEY=test-key "$t/.sdkharness/tests/health/golden-path" 2>&1)" ;;
+  esac
+  printf '%s' "$?" > "$TMP/rc"
+}
+if command -v go >/dev/null 2>&1; then
+  mk_tree "$TMP/broken" 1.18 $'package b2\n\nfunc broken( {'
+  mk_tree "$TMP/toonew" 99.0 'package b2'
+  for lvl in conformance resilience health; do
+    leaf_out "$TMP/broken" "$lvl"; RC="$(cat "$TMP/rc")"
+    case "$out" in *"FAIL (build"*"syntax error"*) [ "$RC" = 1 ] && ok "$lvl: a checkout that does not compile is a FAIL carrying the compiler's complaint, not amber" || bad "$lvl: compile failure exited $RC, want 1";; *) bad "$lvl: compile failure not FAIL with the compiler output ($out)";; esac
+    case "$out" in *"COULD-NOT-RUN"*|*"SKIP"*) bad "$lvl: compile failure still reported as amber";; *) ok "$lvl: a compile failure is never reported as COULD-NOT-RUN/SKIP";; esac
+    leaf_out "$TMP/toonew" "$lvl"; RC="$(cat "$TMP/rc")"
+    case "$out" in *"missing-runtime"*"older than this checkout requires"*) [ "$RC" = 0 ] && ok "$lvl: a Go older than the checkout requires is amber (missing-runtime)" || bad "$lvl: old-toolchain exited $RC, want 0";; *) bad "$lvl: old toolchain not classified as missing-runtime ($out)";; esac
+  done
+else
+  printf '[SKIP] go: toolchain not on PATH; build classification with a real compiler not exercised\n'
+fi
+# A PATH with the shell tools the leaves use but no Go: amber, exit 0.
+stub="$TMP/nogo"; mkdir -p "$stub"
+for t in bash env mktemp awk cat cp rm dirname tr cut grep tail sed; do
+  p="$(command -v "$t" 2>/dev/null)"; [ -n "$p" ] && ln -s "$p" "$stub/$t"
+done
+mk_tree "$TMP/nogo-tree" 1.18 'package b2'
+for lvl in conformance resilience health; do
+  case "$lvl" in
+    conformance) out="$(env -i PATH="$stub" CONFORMANCE_TARGET=simulator CONFORMANCE_SIMULATOR_URL="$LOOP" "$TMP/nogo-tree/.sdkharness/tests/conformance/files.upload" 2>&1)" ;;
+    resilience)  out="$(env -i PATH="$stub" RESILIENCE_SIMULATOR_URL="$LOOP" RESILIENCE_CONTROL_URL="$LOOP" "$TMP/nogo-tree/.sdkharness/tests/resilience/upload.retry_503" 2>&1)" ;;
+    health)      out="$(env -i PATH="$stub" HEALTHCHECK_REALM_URL="$LOOP" B2_TEST_APPLICATION_KEY_ID=test-key-id B2_APPLICATION_KEY_ID=test-key-id B2_APPLICATION_KEY=test-key "$TMP/nogo-tree/.sdkharness/tests/health/golden-path" 2>&1)" ;;
+  esac
+  RC=$?
+  case "$out" in *"missing-runtime"*"Go"*) [ "$RC" = 0 ] && ok "$lvl: no Go on PATH is COULD-NOT-RUN/SKIP (missing-runtime), exit 0" || bad "$lvl: no-go exited $RC";; *) bad "$lvl: no Go not classified as missing-runtime ($out)";; esac
+done
 
 printf 'blazer .sdkharness selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

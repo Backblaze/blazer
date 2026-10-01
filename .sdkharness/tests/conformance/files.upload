@@ -61,15 +61,18 @@ replace github.com/Backblaze/blazer => $REPO_ROOT
 EOF
 
 
-# Build and run are deliberately separate. A module that cannot be fetched or
-# compiled is an ABSENT RUNTIME (amber); a binary that runs and says nothing is
-# a defect in this check (red). One combined step cannot tell them apart.
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
 cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
-build_out="$( (cd "$work" && go mod tidy && go build -o check .) 2>&1 )"
-if [ "$?" -ne 0 ]; then
-  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- blazer could not be built offline: $(tidy_detail "$build_out"))"
-  exit 0
-fi
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
 
 run_out="$("$work/check" 2>&1)"
 run_rc=$?

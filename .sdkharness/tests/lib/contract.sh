@@ -38,3 +38,35 @@ sdkharness_leaf_guard() {
   done
   return 0
 }
+
+# sdkharness_go_build <module-dir> <binary-name>
+# Builds the generated check in <module-dir> (offline) and CLASSIFIES a failure, because only
+# an absent or unusable Go toolchain is a missing runtime (amber). Anything else -- a compile
+# error in blazer or in this check, a failing `go mod tidy`, a dependency that cannot be
+# resolved offline -- is a defect to see, not harmless evidence.
+# Returns 0 on success; 10 when the toolchain is conclusively unusable (the reason is in
+# SDKHARNESS_BUILD_REASON); 20 for every other failure. SDKHARNESS_BUILD_OUT holds the tool output.
+sdkharness_go_build() {
+  local dir="$1" bin="$2" rc
+  SDKHARNESS_BUILD_OUT="" SDKHARNESS_BUILD_REASON=""
+  if ! command -v go >/dev/null 2>&1; then
+    SDKHARNESS_BUILD_REASON="no Go toolchain on PATH"
+    return 10
+  fi
+  if ! SDKHARNESS_BUILD_OUT="$(go version 2>&1)"; then
+    SDKHARNESS_BUILD_REASON="the Go toolchain on PATH does not run"
+    return 10
+  fi
+  SDKHARNESS_BUILD_OUT="$( (cd "$dir" && go mod tidy && go build -o "$bin" .) 2>&1 )"
+  rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  # GOTOOLCHAIN=local forbids fetching a newer toolchain: when the module graph wants one the
+  # installed Go is too old for this checkout. That is the only toolchain diagnostic Go emits
+  # in this exact, conclusive form; match it precisely so a real compile error never lands here.
+  case "$SDKHARNESS_BUILD_OUT" in
+    *"requires go >= "*"GOTOOLCHAIN=local)"*)
+      SDKHARNESS_BUILD_REASON="the installed Go is older than this checkout requires (GOTOOLCHAIN=local forbids a download)"
+      return 10 ;;
+  esac
+  return 20
+}
