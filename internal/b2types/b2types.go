@@ -168,8 +168,9 @@ type GetUploadURLResponse struct {
 type UploadFileResponse GetFileInfoResponse
 
 type DeleteFileVersionRequest struct {
-	Name   string `json:"fileName"`
-	FileID string `json:"fileId"`
+	Name             string `json:"fileName"`
+	FileID           string `json:"fileId"`
+	BypassGovernance bool   `json:"bypassGovernance,omitempty"`
 }
 
 type StartLargeFileRequest struct {
