@@ -656,7 +656,7 @@ type Bucket struct {
 
 // Update wraps b2_update_bucket.
 func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
-	var rules []b2types.LifecycleRule
+	rules := make([]b2types.LifecycleRule, 0, len(b.LifecycleRules))
 	for _, rule := range b.LifecycleRules {
 		rules = append(rules, b2types.LifecycleRule{
 			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
