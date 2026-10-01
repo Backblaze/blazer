@@ -60,6 +60,7 @@ type beBucketInterface interface {
 	listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (beFileReaderInterface, error)
 	hideFile(context.Context, string) (beFileInterface, error)
+	copyFile(context.Context, string, string, string, string, string, string, map[string]string) (beFileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
 	baseURL() string
 	s3URL() string
@@ -492,6 +493,25 @@ func (b *beBucket) hideFile(ctx context.Context, name string) (beFileInterface, 
 				b2file: f,
 				ri:     b.ri,
 			}
+			return nil
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+func (b *beBucket) copyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (beFileInterface, error) {
+	var file beFileInterface
+	f := func() error {
+		g := func() error {
+			copied, err := b.b2bucket.copyFile(ctx, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType, info)
+			if err != nil {
+				return err
+			}
+			file = &beFile{b2file: copied, ri: b.ri}
 			return nil
 		}
 		return withReauth(ctx, b.ri, g)

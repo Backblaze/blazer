@@ -56,6 +56,7 @@ type b2BucketInterface interface {
 	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (b2FileReaderInterface, error)
 	hideFile(context.Context, string) (b2FileInterface, error)
+	copyFile(context.Context, string, string, string, string, string, string, map[string]string) (b2FileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
 	baseURL() string
 	s3URL() string
@@ -475,6 +476,14 @@ func (b *b2Bucket) downloadFileByName(ctx context.Context, name string, offset, 
 
 func (b *b2Bucket) hideFile(ctx context.Context, name string) (b2FileInterface, error) {
 	f, err := b.b.HideFile(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &b2File{f}, nil
+}
+
+func (b *b2Bucket) copyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (b2FileInterface, error) {
+	f, err := b.b.CopyFile(ctx, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType, info)
 	if err != nil {
 		return nil, err
 	}
