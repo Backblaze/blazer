@@ -1,6 +1,8 @@
 #!/bin/sh
 # Customer-style B2 health check using github.com/Backblaze/blazer/b2.
-# Realm: HEALTHCHECK_REALM_URL when set (through b2.APIBase), else production.
+# Realm: HEALTHCHECK_REALM_URL, which must be an IPv4 loopback HTTP origin (the harness simulator),
+# through b2.APIBase. There is no production or staging mode, and only the simulator's fixed test
+# credential is accepted, so running this file directly cannot reach a real account.
 
 set -eu
 
@@ -8,9 +10,22 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 
 slug=blazer
 
+case "${HEALTHCHECK_REALM_URL:-}" in
+  http://127.0.0.1:[0-9]*) ;;
+  *)
+    printf 'HEALTHCHECK %s: FAIL (configuration -- HEALTHCHECK_REALM_URL must be an IPv4 loopback HTTP origin)\n' "$slug"
+    exit 1
+    ;;
+esac
+
 if [ -z "${B2_TEST_APPLICATION_KEY_ID:-}" ]; then
   printf 'HEALTHCHECK %s: SKIP (no credentials)\n' "$slug"
   exit 0
+fi
+
+if [ "${B2_APPLICATION_KEY_ID:-}" != test-key-id ] || [ "${B2_APPLICATION_KEY:-}" != test-key ]; then
+  printf 'HEALTHCHECK %s: FAIL (configuration -- only the simulator'"'"'s fixed test credential is accepted)\n' "$slug"
+  exit 1
 fi
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-blazer.XXXXXX")
@@ -31,17 +46,39 @@ replace github.com/Backblaze/blazer => $REPO_ROOT
 EOF
 
 set +e
-# Fetch only third-party dependencies; the Blazer module itself is the checked-out revision selected by the local replace.
-export GOPROXY=direct
-# `go mod tidy` (not `go mod download`) writes the go.sum entries `go run`
-# verifies against; without it a fresh module fails "missing go.sum entry".
-result=$( (cd "$work_dir" && go mod tidy && go run .) 2>&1)
+# The module graph is the checked-out Blazer revision (local replace) and the standard library: nothing
+# is fetched, and the toolchain may not be downloaded.
+export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=mod GOTOOLCHAIN=local GOWORK=off
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work_dir/loopback_guard.go"
+
+# Build and run are deliberately separate. Only a missing or unusable Go toolchain is an ABSENT
+# RUNTIME (SKIP, amber); a module that does not compile, a failing `go mod tidy` or an unresolved
+# dependency is a defect in blazer or this check (FAIL). `go mod tidy` (not `go mod download`)
+# writes the go.sum entries the build verifies against.
+if ! command -v go >/dev/null 2>&1 || ! go version >/dev/null 2>&1; then
+  printf 'HEALTHCHECK %s: SKIP (missing-runtime -- no usable Go toolchain on PATH)\n' "$slug"
+  exit 0
+fi
+build_out=$( (cd "$work_dir" && go mod tidy && go build -o check .) 2>&1)
+build_status=$?
+if [ "$build_status" -ne 0 ]; then
+  case "$build_out" in
+    *"requires go >= "*"GOTOOLCHAIN=local)"*)
+      printf 'HEALTHCHECK %s: SKIP (missing-runtime -- the installed Go is older than this checkout requires; GOTOOLCHAIN=local forbids a download)\n' "$slug"
+      exit 0
+      ;;
+  esac
+  detail=$(printf '%s' "$build_out" | tr '\n\r' '  ' | tr -cd '[:print:]' | cut -c1-240)
+  printf 'HEALTHCHECK %s: FAIL (build -- blazer or this check did not compile offline: %s)\n' "$slug" "$detail"
+  exit 1
+fi
+result=$("$work_dir/check" 2>&1)
 status=$?
 set -e
 
 # The Go program emits exactly one "HEALTHCHECK blazer: ..." line. EXTRACT it
 # rather than exact-match the whole captured stream: go mod tidy prints
-# "go: downloading ..." to stderr, which shares this capture and broke a
+# runtime diagnostics to stderr, which shares this capture and would break a
 # whole-blob match even when the run itself passed.
 hc_line=$(printf '%s\n' "$result" | grep -E '^HEALTHCHECK blazer: ' | tail -1)
 case "$hc_line" in
@@ -55,9 +92,9 @@ esac
 # and the health-check protocol has exactly one result line.
 detail=$(printf '%s' "$result" | tr '\n\r' '  ' | tr -cd '[:print:]' | cut -c1-240)
 if [ -z "$detail" ]; then
-  detail='go run exited without a result'
+  detail='the check binary exited without a result'
 fi
-printf 'HEALTHCHECK %s: FAIL (run — %s)\n' "$slug" "$detail"
+printf 'HEALTHCHECK %s: FAIL (run -- %s)\n' "$slug" "$detail"
 exit 1
 
 __GO_PROGRAM__
@@ -118,7 +155,7 @@ func run(ctx context.Context) (err error) {
 
 	apiBase := os.Getenv("HEALTHCHECK_REALM_URL")
 	if apiBase == "" {
-		apiBase = "https://api.backblazeb2.com"
+		return fail("configuration", fmt.Errorf("HEALTHCHECK_REALM_URL is required: this check runs only against the loopback simulator"))
 	}
 	client, err := b2.NewClient(ctx, keyID, key, b2.APIBase(apiBase), b2.UserAgent("sdkharness-health-check/blazer"))
 	if err != nil {
