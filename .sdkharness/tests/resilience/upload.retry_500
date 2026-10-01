@@ -13,6 +13,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 say() { printf 'RESILIENCE blazer upload.retry_500 @simulator: %s\n' "$1"; }
 tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
 
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard "" RESILIENCE_SIMULATOR_URL RESILIENCE_CONTROL_URL; then
+  say "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+
 if ! command -v go >/dev/null 2>&1; then
   say "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
   exit 0
@@ -40,10 +47,10 @@ MOD
 # A module that cannot be fetched or compiled is an absent runtime (amber); a
 # binary that runs and says nothing is this check's defect, which the runner
 # turns red on its own. `go mod tidy` writes the go.sum the build verifies.
-export GOPROXY=direct GOWORK=off
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
 build_out="$( (cd "$work" && go mod tidy && go build -o check .) 2>&1 )"
 if [ "$?" -ne 0 ]; then
-  say "COULD-NOT-RUN (missing-runtime -- blazer could not be fetched or built: $(tidy_detail "$build_out"))"
+  say "COULD-NOT-RUN (missing-runtime -- blazer could not be built offline: $(tidy_detail "$build_out"))"
   exit 0
 fi
 
