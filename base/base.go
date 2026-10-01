@@ -573,6 +573,13 @@ type LifecycleRule struct {
 	DaysHiddenUntilDeleted int
 }
 
+func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2types.ServerSideEncryption {
+	if sse == nil || sse.Mode == "" {
+		return nil
+	}
+	return sse
+}
+
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
 func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption) (*Bucket, error) {
@@ -618,7 +625,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		ID:                          b2resp.BucketID,
 		rev:                         b2resp.Revision,
 		b2:                          b,
-		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 	}, nil
 }
 
@@ -786,7 +793,7 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 			ID:                          bucket.BucketID,
 			rev:                         bucket.Revision,
 			b2:                          b,
-			DefaultServerSideEncryption: bucket.DefaultServerSideEncryption.Value,
+			DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(bucket.DefaultServerSideEncryption.Value),
 		})
 	}
 	return buckets, nil
