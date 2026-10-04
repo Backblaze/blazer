@@ -276,9 +276,12 @@ func scrubTo(s string, limit int) string {
 	return s
 }
 
-// classify turns an error into amber when the ENVIRONMENT, not the capability,
-// is what stopped the check. Anything it cannot place stays red: an open amber
-// rule is how "could not run" quietly becomes the answer to everything.
+// classify turns an error into a FAIL. This check only runs when the harness
+// handed it a loopback simulator URL, so a 401/403, a refused connection, a
+// deadline or a reset is the simulator or blazer misbehaving (an auth, hang or
+// retry regression), never a legitimate environment problem. Only a missing Go
+// toolchain or dependency is COULD-NOT-RUN, and that is decided before this
+// program exists (sdkharness_go_build in lib/contract.sh).
 func classify(step string, err error) error {
 	if err == nil {
 		return nil
@@ -286,17 +289,6 @@ func classify(step string, err error) error {
 	switch err.(type) {
 	case *amberErr, *failErr:
 		return err
-	}
-	msg := strings.ToLower(err.Error())
-	for _, marker := range []string{"401", "403", "unauthorized", "bad_auth_token", "expired_auth_token", "access_denied", "not_authorized", "missing capability", "insufficient"} {
-		if strings.Contains(msg, marker) {
-			return amberf(reasonUnauth, "%T matched %q at step %q", err, marker, step)
-		}
-	}
-	for _, marker := range []string{"no such host", "connection refused", "network is unreachable", "no route to host", "i/o timeout", "dial tcp", "tls handshake", "context deadline exceeded", "server misbehaving", "connection reset"} {
-		if strings.Contains(msg, marker) {
-			return amberf(reasonUnreach, "%T matched %q at step %q", err, marker, step)
-		}
 	}
 	return failf(step, "%s", err.Error())
 }
