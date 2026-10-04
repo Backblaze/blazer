@@ -24,7 +24,15 @@ against the simulator.
   is reserved for no usable `go` on `PATH`, or a Go older than this checkout requires with
   `GOTOOLCHAIN=local` forbidding a download. A checkout or check that does not compile, a failing
   `go mod tidy` and a dependency that cannot be resolved offline are a `FAIL` carrying the compiler
-  output, so a Blazer API or compile regression is never hidden as harmless evidence.
+  output, so a Blazer API or compile regression is never hidden as harmless evidence. This holds at
+  every level: because a check only runs against the simulator URL it was given, a `401`/`403`, a
+  refused connection, a deadline or a reset is a `FAIL` (a blazer auth, hang or retry regression, or a
+  broken simulator), never `COULD-NOT-RUN`.
+- **Reusing a simulator.** The resilience checks clear every armed fault (`DELETE /faults`) and
+  ignore journal entries that predate them, so running several back to back on one simulator does not
+  produce false FAILs. They cannot rewind the simulator clock (`POST /clock` only moves forward), so
+  `auth.clock_expiry` still wants a fresh simulator if you run it repeatedly. The harness starts a fresh
+  simulator per scenario regardless.
 
 `tests/selftest` pins these properties and needs neither a simulator nor the network.
 

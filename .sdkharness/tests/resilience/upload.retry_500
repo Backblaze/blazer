@@ -100,6 +100,9 @@ import (
 const scenario = "upload.retry_500"
 
 func runCheck(ctx context.Context) error {
+	if err := resetControlState(); err != nil {
+		return err
+	}
 	_, bucket, err := setup(ctx)
 	if err != nil {
 		return err
@@ -259,7 +262,45 @@ func journal() ([]entry, error) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, stepErr("journal", err)
 	}
-	return parsed.Entries, nil
+	var current []entry
+	for _, e := range parsed.Entries {
+		if e.Seq > journalFloor {
+			current = append(current, e)
+		}
+	}
+	return current, nil
+}
+
+// journalFloor is the highest journal seq present when this check started. The
+// simulator's journal is global and has no clear route, so a check that reads
+// it must ignore what earlier checks on the same simulator left behind.
+var journalFloor int
+
+// resetControlState makes the check hermetic on a reused simulator: it clears
+// every armed fault (DELETE /faults, which also drops queued wire faults) and
+// remembers where the journal stands so earlier traffic is not counted. It does
+// not rewind the simulator clock (POST /clock only moves forward).
+func resetControlState() error {
+	if _, err := control("DELETE", "/faults", nil); err != nil {
+		return stepErr("reset faults", err)
+	}
+	data, err := control("GET", "/journal", nil)
+	if err != nil {
+		return stepErr("journal baseline", err)
+	}
+	var parsed struct {
+		Entries []entry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return stepErr("journal baseline", err)
+	}
+	journalFloor = 0
+	for _, e := range parsed.Entries {
+		if e.Seq > journalFloor {
+			journalFloor = e.Seq
+		}
+	}
+	return nil
 }
 
 // after: entries on endpoint later than seq, with status (0 = any).
