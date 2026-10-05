@@ -69,7 +69,8 @@ func Action(err error) ErrAction {
 		return Punt
 	}
 	if e.retry > 0 {
-		if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
+		// A zero status means the transport failed before an HTTP response arrived.
+		if e.code == 0 && (e.method == "b2_upload_file" || e.method == "b2_upload_part") {
 			return AttemptNewUpload
 		}
 		return Retry
