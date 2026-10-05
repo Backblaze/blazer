@@ -801,6 +801,10 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 	}
 	var buckets []*Bucket
 	for _, bucket := range b2resp.Buckets {
+		var replicationConfig *b2types.ReplicationConfiguration
+		if bucket.ReplicationConfiguration != nil {
+			replicationConfig = bucket.ReplicationConfiguration.Value
+		}
 		var rules []LifecycleRule
 		for _, rule := range bucket.LifecycleRules {
 			rules = append(rules, LifecycleRule{
@@ -819,6 +823,7 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 			b2:                          b,
 			CORSRules:                   bucket.CORSRules,
 			DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(bucket.DefaultServerSideEncryption.Value),
+			ReplicationConfiguration:    replicationConfig,
 		}
 		if bucket.FileLockConfig != nil {
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
