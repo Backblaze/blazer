@@ -606,7 +606,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		Info:           info,
 		LifecycleRules: b2rules,
 
-		DefaultServerSideEncryption: sse,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(sse),
 		CORSRules:                   corsRules,
 		FileLockEnabled:             fileLockEnabled,
 	}
@@ -694,7 +694,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 
 		CORSRules:                   b.CORSRules,
 		DefaultRetention:            b.DefaultRetention,
-		DefaultServerSideEncryption: b.DefaultServerSideEncryption,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b.DefaultServerSideEncryption),
 		FileLockEnabled:             b.FileLockEnabled,
 		ReplicationConfiguration:    b.ReplicationConfiguration,
 	}
@@ -721,7 +721,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		ID:                          b2resp.BucketID,
 		b2:                          b.b2,
 		CORSRules:                   b2resp.CORSRules,
-		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
 		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
 	}

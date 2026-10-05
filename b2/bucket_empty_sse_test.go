@@ -21,6 +21,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"testing"
+
+	"github.com/Backblaze/blazer/internal/b2types"
 )
 
 type emptyDefaultSSETransport struct {
@@ -148,12 +150,17 @@ func TestBucketEmptyDefaultSSERoundTrip(t *testing.T) {
 		t.Errorf("read-back bucket default SSE = %#v; want nil", got)
 	}
 
+	// Simulate a handle cached before normalization; Update must omit this too.
+	bucket.b.(*beBucket).b2bucket.(*b2Bucket).b.DefaultServerSideEncryption = &b2types.ServerSideEncryption{}
 	attrs.Info = map[string]string{"updated": "true"}
 	if err := bucket.Update(ctx, attrs); err != nil {
 		t.Fatalf("update unrelated bucket info: %v", err)
 	}
 	if transport.updateCalls != 1 {
 		t.Fatalf("update calls = %d; want 1", transport.updateCalls)
+	}
+	if got := bucket.b.attrs().DefaultServerSideEncryption; got != nil {
+		t.Errorf("cached bucket default SSE after first update = %#v; want nil", got)
 	}
 
 	attrs, err = bucket.Attrs(ctx)
@@ -165,5 +172,23 @@ func TestBucketEmptyDefaultSSERoundTrip(t *testing.T) {
 	}
 	if got := attrs.Info["updated"]; got != "true" {
 		t.Errorf("updated bucket info = %q; want true", got)
+	}
+
+	attrs.Info = map[string]string{"updated": "again"}
+	if err := bucket.Update(ctx, attrs); err != nil {
+		t.Fatalf("second update on same bucket handle: %v", err)
+	}
+	if transport.updateCalls != 2 {
+		t.Fatalf("update calls = %d; want 2", transport.updateCalls)
+	}
+	attrs, err = bucket.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := attrs.DefaultServerSideEncryption; got != nil {
+		t.Errorf("bucket default SSE after second update = %#v; want nil", got)
+	}
+	if got := attrs.Info["updated"]; got != "again" {
+		t.Errorf("bucket info after second update = %q; want again", got)
 	}
 }
