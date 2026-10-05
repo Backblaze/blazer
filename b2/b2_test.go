@@ -108,22 +108,16 @@ func (e *errCont) getError(name string) error {
 }
 
 type testRoot struct {
-<<<<<<< HEAD
 	errs            *errCont
 	auths           int
 	bucketMap       map[string]map[string]string
 	corsRules       []CORSRule
 	fileLockEnabled bool
-=======
-	errs      *errCont
-	auths     int
-	bucketMap map[string]map[string]string
 
 	lastKeyMethod    string
 	lastKeyBucketID  string
 	lastKeyBucketIDs []string
 	lastKeyPrefix    string
->>>>>>> origin/master
 }
 
 func (t *testRoot) authorizeAccount(context.Context, string, string, clientOptions) error {
