@@ -1,0 +1,32 @@
+package main
+
+// Carried as lib/loopback_guard.go.txt and copied next to each check's main.go
+// by the check itself. It makes the standard transport refuse any connection
+// that is not to a loopback address, so an assertion run cannot reach an
+// external host even if a URL, proxy variable or redirect points elsewhere.
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+)
+
+func init() {
+	t, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return
+	}
+	dialer := &net.Dialer{}
+	t.Proxy = nil
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			return nil, fmt.Errorf("sdkharness: refusing non-loopback connection to %s", addr)
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+}

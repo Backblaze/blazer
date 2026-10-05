@@ -17,13 +17,20 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
 
 SLUG=blazer
 CAP=files.delete_version
-TARGET="${CONFORMANCE_TARGET:-staging}"
+TARGET=simulator
 
 say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
 
 # A detail never carries a response body, a multi-line diagnostic or a
 # credential: one line, printable, capped.
 tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+  say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
 
 if ! command -v go >/dev/null 2>&1; then
   say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
@@ -50,18 +57,19 @@ require github.com/Backblaze/blazer v0.8.0
 replace github.com/Backblaze/blazer => $REPO_ROOT
 EOF
 
-# `go mod tidy` (not `go mod download`) writes the go.sum entries the build
-# verifies against; without it a fresh module fails "missing go.sum entry".
-export GOPROXY=direct
 
-# Build and run are deliberately separate. A module that cannot be fetched or
-# compiled is an ABSENT RUNTIME (amber); a binary that runs and says nothing is
-# a defect in this check (red). One combined step cannot tell them apart.
-build_out="$( (cd "$work" && go mod tidy && go build -o check .) 2>&1 )"
-if [ "$?" -ne 0 ]; then
-  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- blazer could not be fetched or built: $(tidy_detail "$build_out"))"
-  exit 0
-fi
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
 
 run_out="$("$work/check" 2>&1)"
 run_rc=$?
@@ -235,9 +243,12 @@ func scrubTo(s string, limit int) string {
 	return s
 }
 
-// classify turns an error into amber when the ENVIRONMENT, not the capability,
-// is what stopped the check. Anything it cannot place stays red: an open amber
-// rule is how "could not run" quietly becomes the answer to everything.
+// classify turns an error into a FAIL. This check only runs when the harness
+// handed it a loopback simulator URL, so a 401/403, a refused connection, a
+// deadline or a reset is the simulator or blazer misbehaving (an auth, hang or
+// retry regression), never a legitimate environment problem. Only a missing Go
+// toolchain or dependency is COULD-NOT-RUN, and that is decided before this
+// program exists (sdkharness_go_build in lib/contract.sh).
 func classify(step string, err error) error {
 	if err == nil {
 		return nil
@@ -245,17 +256,6 @@ func classify(step string, err error) error {
 	switch err.(type) {
 	case *amberErr, *failErr:
 		return err
-	}
-	msg := strings.ToLower(err.Error())
-	for _, marker := range []string{"401", "403", "unauthorized", "bad_auth_token", "expired_auth_token", "access_denied", "not_authorized", "missing capability", "insufficient"} {
-		if strings.Contains(msg, marker) {
-			return amberf(reasonUnauth, "%T matched %q at step %q", err, marker, step)
-		}
-	}
-	for _, marker := range []string{"no such host", "connection refused", "network is unreachable", "no route to host", "i/o timeout", "dial tcp", "tls handshake", "context deadline exceeded", "server misbehaving", "connection reset"} {
-		if strings.Contains(msg, marker) {
-			return amberf(reasonUnreach, "%T matched %q at step %q", err, marker, step)
-		}
 	}
 	return failf(step, "%s", err.Error())
 }
@@ -275,7 +275,7 @@ func requestedTarget() string {
 	if t := os.Getenv("CONFORMANCE_TARGET"); t != "" {
 		return t
 	}
-	return "staging"
+	return "simulator"
 }
 
 // apiBase maps a requested target onto a realm blazer can reach. `simulator` is
@@ -283,18 +283,13 @@ func requestedTarget() string {
 // exports as CONFORMANCE_SIMULATOR_URL and blazer reaches through b2.APIBase;
 // unset, there is nothing to reach: no-realm-option.
 func apiBase(target string) (string, error) {
-	switch target {
-	case "staging":
-		return "https://api.backblaze.net", nil
-	case "production":
-		return "https://api.backblazeb2.com", nil
-	case "simulator":
+	if target == "simulator" {
 		if url := os.Getenv("CONFORMANCE_SIMULATOR_URL"); url != "" {
 			return url, nil
 		}
 		return "", amberf(reasonNoRealm, "CONFORMANCE_SIMULATOR_URL is unset")
 	}
-	return "", amberf(reasonNoRealm, "blazer exposes no %q realm", target)
+	return "", amberf(reasonNoRealm, "blazer checks run only against the loopback simulator, not %q", target)
 }
 
 // credentials at @simulator is the simulator's fixed test credential, so a real
@@ -303,15 +298,7 @@ func credentials(target string) (string, string, error) {
 	if target == "simulator" {
 		return "test-key-id", "test-key", nil
 	}
-	id, key := os.Getenv("B2_APPLICATION_KEY_ID"), os.Getenv("B2_APPLICATION_KEY")
-	if id == "" || key == "" {
-		id, key = os.Getenv("B2_TEST_APPLICATION_KEY_ID"), os.Getenv("B2_TEST_APPLICATION_KEY")
-	}
-	if id == "" || key == "" {
-		return "", "", amberf(reasonNoCred, "B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY unset")
-	}
-	secretsToScrub = append(secretsToScrub, id, key)
-	return id, key, nil
+	return "", "", amberf(reasonNoRealm, "blazer checks use only the simulator's fixed test credential")
 }
 
 func newClient(ctx context.Context, target string) (*b2.Client, error) {

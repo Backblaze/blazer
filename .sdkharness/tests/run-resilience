@@ -34,6 +34,9 @@ verdict="$(grep -F "$prefix" "$log")"; verdict="${verdict#*: }"
 case "$verdict" in
   PASS) [ "$child_rc" = 0 ] || { result FAIL "contract: PASS exited $child_rc"; exit 1; }; result PASS - ;;
   'FAIL ('*')') reason="${verdict#FAIL (}"; result FAIL "${reason%)}"; exit 1 ;;
-  'COULD-NOT-RUN ('*')') reason="${verdict#COULD-NOT-RUN (}"; result SKIP "${reason%)}" ;;
+  'COULD-NOT-RUN ('*')')
+    # A check that reports COULD-NOT-RUN and then fails is broken, not amber.
+    [ "$child_rc" = 0 ] || { result FAIL "contract: COULD-NOT-RUN exited $child_rc"; exit 1; }
+    reason="${verdict#COULD-NOT-RUN (}"; result SKIP "${reason%)}" ;;
   *) result FAIL 'contract: malformed standing verdict'; exit 1 ;;
 esac
