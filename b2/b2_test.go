@@ -516,6 +516,19 @@ func objectForDeleteOptionTest(file *testFile) *Object {
 	return &Object{f: &beFile{b2file: file, ri: root}}
 }
 
+func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
+	file := &testFile{n: "copy", a: "copy", files: map[string]string{"copy": "present"}}
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	object := &Object{f: &beFile{b2file: file, ri: root}}
+
+	if err := object.Delete(context.Background()); err != nil {
+		t.Fatalf("Delete copy-status object: %v", err)
+	}
+	if _, ok := file.files[file.n]; ok {
+		t.Fatal("Delete did not remove the copy-status object")
+	}
+}
+
 type testFileReader struct {
 	b io.ReadCloser
 	s int
