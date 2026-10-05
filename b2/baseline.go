@@ -273,9 +273,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs.Type != UnknownType {
 		b.b.Type = string(attrs.Type)
 	}
-	if attrs.Info != nil {
-		b.b.Info = attrs.Info
-	}
+	previousInfo := b.b.Info
+	b.b.Info = attrs.Info
 	if attrs.LifecycleRules != nil {
 		rules := []base.LifecycleRule{}
 		for _, rule := range attrs.LifecycleRules {
@@ -335,6 +334,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	newBucket, err := b.b.Update(ctx)
 	if err == nil {
 		b.b = newBucket
+	} else {
+		b.b.Info = previousInfo
 	}
 	code, _ := base.Code(err)
 	if code == 409 {
