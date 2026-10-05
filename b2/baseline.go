@@ -401,6 +401,25 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 			Algorithm: sse.Algorithm,
 		}
 	}
+	if config := b.b.ReplicationConfiguration; config != nil && config.AsReplicationSource != nil {
+		source := config.AsReplicationSource
+		attrs.ReplicationConfig = &ReplicationConfiguration{
+			AsReplicationSource: AsReplicationSource{
+				SourceApplicationKeyID: source.KeyID,
+				ReplicationRules:       make([]ReplicationRules, len(source.ReplicationRules)),
+			},
+		}
+		for i, rule := range source.ReplicationRules {
+			attrs.ReplicationConfig.AsReplicationSource.ReplicationRules[i] = ReplicationRules{
+				DestinationBucketID:  rule.DestinationBucketID,
+				FileNamePrefix:       rule.FileNamePrefix,
+				IncludeExistingFiles: rule.IncludeExistingFiles,
+				IsEnabled:            rule.IsEnabled,
+				Priority:             rule.Priority,
+				ReplicationRuleName:  rule.ReplicationRuleName,
+			}
+		}
+	}
 	return attrs
 }
 
