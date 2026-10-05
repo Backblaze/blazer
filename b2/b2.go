@@ -727,7 +727,7 @@ func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
 		opt(options)
 	}
 	status := o.f.status()
-	if status == "upload" || status == "hide" {
+	if status == "upload" || status == "hide" || status == "copy" {
 		return o.f.deleteFileVersion(ctx, options.bypassGovernance)
 	} else {
 		return fmt.Errorf("%s is not a regular file or hide marker: %s", o.name, status)

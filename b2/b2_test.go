@@ -469,6 +469,11 @@ func TestObjectDeleteBypassGovernanceOption(t *testing.T) {
 	if !bypass.bypassGovernance {
 		t.Fatal("Delete with BypassGovernance did not request a bypass")
 	}
+
+	copy := &testFile{n: "copy", a: "copy", files: make(map[string]string)}
+	if err := objectForDeleteOptionTest(copy).Delete(ctx); err != nil {
+		t.Fatalf("Delete copy-status object: %v", err)
+	}
 }
 
 func objectForDeleteOptionTest(file *testFile) *Object {
