@@ -111,6 +111,7 @@ type testRoot struct {
 	errs      *errCont
 	auths     int
 	bucketMap map[string]map[string]string
+	afterFunc func(time.Duration) <-chan time.Time
 
 	bucketSettings map[string]testBucketSettings
 
@@ -118,6 +119,33 @@ type testRoot struct {
 	lastKeyBucketID  string
 	lastKeyBucketIDs []string
 	lastKeyPrefix    string
+}
+
+func (t *testRoot) retryAfter(d time.Duration) <-chan time.Time {
+	if t.afterFunc != nil {
+		return t.afterFunc(d)
+	}
+	return time.After(d)
+}
+
+type testAfter struct {
+	calls uint32
+	ready chan time.Time
+}
+
+func newTestAfter() *testAfter {
+	ready := make(chan time.Time)
+	close(ready)
+	return &testAfter{ready: ready}
+}
+
+func (a *testAfter) wait(time.Duration) <-chan time.Time {
+	atomic.AddUint32(&a.calls, 1)
+	return a.ready
+}
+
+func (a *testAfter) count() int {
+	return int(atomic.LoadUint32(&a.calls))
 }
 
 type testBucketSettings struct {
@@ -408,7 +436,11 @@ type testFileChunk struct {
 func (t *testFileChunk) reload(context.Context) error { return nil }
 
 func (t *testFileChunk) uploadPart(_ context.Context, r io.Reader, _ string, _, index int) (int, error) {
-	if err := t.errs.getError("uploadPart"); err != nil {
+	name := fmt.Sprintf("uploadPart:%d", index)
+	if _, ok := t.errs.errMap[name]; !ok {
+		name = "uploadPart"
+	}
+	if err := t.errs.getError(name); err != nil {
 		return 0, err
 	}
 	buf := &bytes.Buffer{}
@@ -610,14 +642,6 @@ func TestBackoff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
-
 	table := []struct {
 		root *testRoot
 		want int
@@ -651,8 +675,9 @@ func TestBackoff(t *testing.T) {
 		},
 	}
 
-	var total int
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -670,10 +695,9 @@ func TestBackoff(t *testing.T) {
 		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
-		total += ent.want
-	}
-	if len(calls) != total {
-		t.Errorf("got %d calls, wanted %d", len(calls), total)
+		if got := timer.count(); got != ent.want {
+			t.Errorf("got %d calls, wanted %d", got, ent.want)
+		}
 	}
 }
 
@@ -682,18 +706,10 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	var calls []time.Duration
-	var cmux = &sync.Mutex{}
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		cmux.Lock()
-		defer cmux.Unlock()
-		calls = append(calls, d)
-		return ch
-	}
+	timer := newTestAfter()
 
 	root := &testRoot{
+		afterFunc: timer.wait,
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{
 			errMap: map[string]map[int]error{
@@ -712,8 +728,8 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err != nil {
 		t.Errorf("bucket should not err, got %v", err)
 	}
-	if len(calls) != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	if got := timer.count(); got != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", got)
 	}
 }
 
@@ -721,14 +737,6 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -765,6 +773,8 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -773,10 +783,9 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 		if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err == nil {
 			t.Fatalf("bucket should err")
 		}
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -784,14 +793,6 @@ func TestReuploadFile(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -828,6 +829,8 @@ func TestReuploadFile(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -847,10 +850,9 @@ func TestReuploadFile(t *testing.T) {
 			t.Fatalf("writer should have returned an error")
 		}
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -858,19 +860,10 @@ func TestReuploadFileWithoutReuploadAfter(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	var cmux = &sync.Mutex{}
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		cmux.Lock()
-		defer cmux.Unlock()
-		calls = append(calls, d)
-		return ch
-	}
+	timer := newTestAfter()
 
 	root := &testRoot{
+		afterFunc: timer.wait,
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{
 			errMap: map[string]map[int]error{
@@ -900,8 +893,8 @@ func TestReuploadFileWithoutReuploadAfter(t *testing.T) {
 		t.Fatalf("writer should have not returned an error")
 	}
 
-	if len(calls) != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	if got := timer.count(); got != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", got)
 	}
 }
 
@@ -909,14 +902,6 @@ func TestReuploadFileWithMaxReuploadsReached(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -953,6 +938,8 @@ func TestReuploadFileWithMaxReuploadsReached(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -972,10 +959,9 @@ func TestReuploadFileWithMaxReuploadsReached(t *testing.T) {
 			t.Fatalf("writer should have returned an error")
 		}
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -983,14 +969,6 @@ func TestReuploadPart(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -1001,7 +979,7 @@ func TestReuploadPart(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 2},
 							1: testError{reupload: true, maxReuploads: 2},
 							2: testError{reupload: true, maxReuploads: 2},
@@ -1016,7 +994,7 @@ func TestReuploadPart(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 0},
 						},
 					},
@@ -1027,6 +1005,8 @@ func TestReuploadPart(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -1041,15 +1021,15 @@ func TestReuploadPart(t *testing.T) {
 		w.ChunkSize = 1e4
 		w.ConcurrentUploads = 2
 		r := io.LimitReader(zReader{}, 1e5)
-		if _, err := io.Copy(w, r); err == nil {
-			t.Fatalf("writer should have returned an error: %v", err)
+		_, writeErr := io.Copy(w, r)
+		closeErr := w.Close()
+		if writeErr == nil && closeErr == nil {
+			t.Fatal("writer should have returned an error")
 		}
-		w.Close()
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -1057,19 +1037,10 @@ func TestReuploadPartWithoutReuploadAfter(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	var cmux = &sync.Mutex{}
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		cmux.Lock()
-		defer cmux.Unlock()
-		calls = append(calls, d)
-		return ch
-	}
+	timer := newTestAfter()
 
 	root := &testRoot{
+		afterFunc: timer.wait,
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{
 			errMap: map[string]map[int]error{
@@ -1101,8 +1072,8 @@ func TestReuploadPartWithoutReuploadAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(calls) != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	if got := timer.count(); got != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", got)
 	}
 }
 
@@ -1110,14 +1081,6 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -1128,7 +1091,7 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 2},
 							1: testError{reupload: true, maxReuploads: 2},
 							2: testError{reupload: true, maxReuploads: 2},
@@ -1143,7 +1106,7 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 0},
 						},
 					},
@@ -1154,6 +1117,8 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -1168,15 +1133,15 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 		w.ChunkSize = 1e4
 		w.ConcurrentUploads = 2
 		r := io.LimitReader(zReader{}, 1e5)
-		if _, err := io.Copy(w, r); err == nil {
-			t.Fatalf("writer should have returned an error")
+		_, writeErr := io.Copy(w, r)
+		closeErr := w.Close()
+		if writeErr == nil && closeErr == nil {
+			t.Fatal("writer should have returned an error")
 		}
-		w.Close()
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 

@@ -3,6 +3,7 @@ package b2
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,7 +14,7 @@ func TestSDKHarnessContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(string(content), "\r\n", "\n")), "\n")
 	if len(lines) != 36 || lines[0] != "test_level\tscenario\ttarget\texecutable" {
 		t.Fatalf("unexpected tests.tsv schema: %q", string(content))
 	}
@@ -46,7 +47,7 @@ func TestSDKHarnessContract(t *testing.T) {
 		if statErr != nil {
 			t.Fatal(statErr)
 		}
-		if info.Mode()&0o111 == 0 {
+		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 			t.Fatalf("scenario is not executable: %s", scenarioPath)
 		}
 		scenario, readErr := os.ReadFile(scenarioPath)
@@ -67,7 +68,7 @@ func TestSDKHarnessContract(t *testing.T) {
 		if statErr != nil {
 			t.Fatal(statErr)
 		}
-		if info.Mode()&0o111 == 0 {
+		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 			t.Fatalf("contract executable is not executable: %s", executable)
 		}
 	}
