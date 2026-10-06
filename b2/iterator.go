@@ -16,6 +16,7 @@ package b2
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 )
@@ -66,6 +67,7 @@ func (o *ObjectIterator) page(ctx context.Context) error {
 		o.opts.locker.Lock()
 		defer o.opts.locker.Unlock()
 	}
+	prev := o.c
 	objs, c, err := o.l(ctx, o.count, o.c)
 	if err != nil && err != io.EOF {
 		if bNotExist.MatchString(err.Error()) {
@@ -75,6 +77,11 @@ func (o *ObjectIterator) page(ctx context.Context) error {
 			}
 		}
 		return err
+	}
+	// An empty page may carry a cursor to more results, but a cursor that does
+	// not advance would repeat the same request forever.
+	if len(objs) == 0 && c != nil && prev != nil && c.name != "" && c.name == prev.name && c.id == prev.id {
+		return fmt.Errorf("b2: listing is not advancing: an empty page returned the same cursor %q", c.name)
 	}
 	o.c = c
 	o.objs = objs
@@ -118,7 +125,8 @@ func (o *ObjectIterator) Next() bool {
 		o.err = o.ctx.Err()
 		return false
 	}
-	if o.idx >= len(o.objs) {
+	// A page can be empty while more remain, so loop rather than recurse.
+	for o.idx >= len(o.objs) {
 		if o.final {
 			o.err = io.EOF
 			return false
@@ -127,7 +135,10 @@ func (o *ObjectIterator) Next() bool {
 			o.err = err
 			return false
 		}
-		return o.Next()
+		if o.ctx.Err() != nil {
+			o.err = o.ctx.Err()
+			return false
+		}
 	}
 	o.idx++
 	return true
