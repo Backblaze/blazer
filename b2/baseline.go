@@ -123,6 +123,14 @@ type b2Root struct {
 	b *base.B2
 }
 
+type replicationReadKey struct{}
+
+// base.ListBuckets does not retain the wrapped replication response, so the
+// transport records it for this one list call before base decodes the body.
+type replicationRead struct {
+	byID map[string]*b2types.ReplicationConfiguration
+}
+
 type b2Bucket struct {
 	b *base.Bucket
 }
@@ -244,12 +252,15 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 }
 
 func (b *b2Root) listBuckets(ctx context.Context, name string, bucketTypes ...string) ([]b2BucketInterface, error) {
+	capture := &replicationRead{byID: make(map[string]*b2types.ReplicationConfiguration)}
+	ctx = context.WithValue(ctx, replicationReadKey{}, capture)
 	buckets, err := b.b.ListBuckets(ctx, name, bucketTypes...)
 	if err != nil {
 		return nil, err
 	}
 	var rtn []b2BucketInterface
 	for _, bucket := range buckets {
+		bucket.ReplicationConfiguration = capture.byID[bucket.ID]
 		rtn = append(rtn, &b2Bucket{bucket})
 	}
 	return rtn, err
@@ -339,13 +350,16 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	b.b.FileLockEnabled = attrs.FileLockEnabled && !previousFileLock
 
 	if attrs.ReplicationConfig != nil {
-		asRepSource := b2types.AsReplicationSource{
-			KeyID:            attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID,
-			ReplicationRules: make([]b2types.ReplicationRules, len(attrs.ReplicationConfig.AsReplicationSource.ReplicationRules)),
+		cfg := &b2types.ReplicationConfiguration{}
+		source := attrs.ReplicationConfig.AsReplicationSource
+		if source.SourceApplicationKeyID != "" || source.ReplicationRules != nil {
+			cfg.AsReplicationSource = &b2types.AsReplicationSource{
+				KeyID:            source.SourceApplicationKeyID,
+				ReplicationRules: make([]b2types.ReplicationRules, len(source.ReplicationRules)),
+			}
 		}
-
-		for i, rule := range attrs.ReplicationConfig.AsReplicationSource.ReplicationRules {
-			asRepSource.ReplicationRules[i] = b2types.ReplicationRules{
+		for i, rule := range source.ReplicationRules {
+			cfg.AsReplicationSource.ReplicationRules[i] = b2types.ReplicationRules{
 				ReplicationRuleName:  rule.ReplicationRuleName,
 				DestinationBucketID:  rule.DestinationBucketID,
 				FileNamePrefix:       rule.FileNamePrefix,
@@ -354,10 +368,14 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 				Priority:             rule.Priority,
 			}
 		}
-
-		b.b.ReplicationConfiguration = &b2types.ReplicationConfiguration{
-			AsReplicationSource: &asRepSource,
+		if dest := attrs.ReplicationConfig.AsReplicationDestination; dest != nil {
+			cfg.AsReplicationDestination = &b2types.AsReplicationDestination{
+				SourceToDestinationKeyMapping: dest.SourceToDestinationKeyMapping,
+			}
+		} else if b.b.ReplicationConfiguration != nil {
+			cfg.AsReplicationDestination = b.b.ReplicationConfiguration.AsReplicationDestination
 		}
+		b.b.ReplicationConfiguration = cfg
 	}
 
 	newBucket, err := b.b.Update(ctx)
@@ -457,6 +475,27 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 				Duration: retention.Period.Duration,
 				Unit:     retention.Period.Unit,
 			},
+		}
+	}
+	if cfg := b.b.ReplicationConfiguration; cfg != nil {
+		attrs.ReplicationConfig = &ReplicationConfiguration{}
+		if source := cfg.AsReplicationSource; source != nil {
+			attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID = source.KeyID
+			for _, rule := range source.ReplicationRules {
+				attrs.ReplicationConfig.AsReplicationSource.ReplicationRules = append(attrs.ReplicationConfig.AsReplicationSource.ReplicationRules, ReplicationRules{
+					ReplicationRuleName:  rule.ReplicationRuleName,
+					DestinationBucketID:  rule.DestinationBucketID,
+					FileNamePrefix:       rule.FileNamePrefix,
+					IncludeExistingFiles: rule.IncludeExistingFiles,
+					IsEnabled:            rule.IsEnabled,
+					Priority:             rule.Priority,
+				})
+			}
+		}
+		if dest := cfg.AsReplicationDestination; dest != nil {
+			attrs.ReplicationConfig.AsReplicationDestination = &AsReplicationDestination{
+				SourceToDestinationKeyMapping: dest.SourceToDestinationKeyMapping,
+			}
 		}
 	}
 	return attrs

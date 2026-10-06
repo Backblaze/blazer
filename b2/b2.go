@@ -28,7 +28,9 @@
 package b2
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +39,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2types"
 )
 
 // Client is a Backblaze B2 client.
@@ -165,6 +169,24 @@ func (ct *clientTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	e := time.Now()
 	if err != nil {
 		return resp, err
+	}
+	if m == "b2_list_buckets" {
+		if capture, ok := r.Context().Value(replicationReadKey{}).(*replicationRead); ok && resp.Body != nil {
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				return nil, readErr
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			var listed b2types.ListBucketsResponse
+			if json.Unmarshal(body, &listed) == nil {
+				for _, bucket := range listed.Buckets {
+					if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead {
+						capture.byID[bucket.BucketID] = cfg.Value
+					}
+				}
+			}
+		}
 	}
 	if m != "" && ct.client != nil {
 		ct.client.slock.Lock()
@@ -296,7 +318,12 @@ type RetentionPeriod struct {
 }
 
 type ReplicationConfiguration struct {
-	AsReplicationSource AsReplicationSource
+	AsReplicationSource      AsReplicationSource
+	AsReplicationDestination *AsReplicationDestination
+}
+
+type AsReplicationDestination struct {
+	SourceToDestinationKeyMapping map[string]string
 }
 
 type AsReplicationSource struct {
