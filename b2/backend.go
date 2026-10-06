@@ -176,6 +176,14 @@ func (r *beRoot) maxReuploads(err error) uint     { return r.b2i.maxReuploads(er
 func (r *beRoot) retry(err error) bool            { return r.b2i.retry(err) }
 func (r *beRoot) reauth(err error) bool           { return r.b2i.reauth(err) }
 func (r *beRoot) reupload(err error) bool         { return r.b2i.reupload(err) }
+func (r *beRoot) retryAfter(d time.Duration) <-chan time.Time {
+	if timer, ok := r.b2i.(interface {
+		retryAfter(time.Duration) <-chan time.Time
+	}); ok {
+		return timer.retryAfter(d)
+	}
+	return time.After(d)
+}
 
 func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c clientOptions) error {
 	f := func() error {
@@ -781,8 +789,6 @@ func (b *beKey) expires() time.Time { return b.k.expires() }
 func (b *beKey) secret() string     { return b.k.secret() }
 func (b *beKey) id() string         { return b.k.id() }
 
-var after = time.After
-
 func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error {
 	return retry.Do(
 		ctx,
@@ -807,8 +813,17 @@ func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error 
 		retry.RetryIf(func(attempt uint, err error) bool {
 			return ri.retry(err)
 		}),
-		retry.WithAfter(after),
+		retry.WithAfter(retryAfterFor(ri)),
 	)
+}
+
+func retryAfterFor(ri beRootInterface) func(time.Duration) <-chan time.Time {
+	if timer, ok := ri.(interface {
+		retryAfter(time.Duration) <-chan time.Time
+	}); ok {
+		return timer.retryAfter
+	}
+	return time.After
 }
 
 func withReauth(ctx context.Context, ri beRootInterface, f func() error) error {

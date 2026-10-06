@@ -67,6 +67,7 @@ jobs:
           go-version: ${{ matrix.go-version }}
           cache-dependency-path: '**/go.sum'
       - run: go test -race -shuffle=on -coverprofile=cover.out ./...
+        shell: bash # Windows PowerShell splits cover.out into a separate .out package.
       - name: Upload coverage
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

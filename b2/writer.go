@@ -213,7 +213,7 @@ func (w *Writer) thread() {
 					fc = f
 					return nil
 				}),
-				retry.WithAfter(after),
+				retry.WithAfter(retryAfterFor(w.o.b.r)),
 			)
 			if err != nil {
 				w.setErr(err)
@@ -349,7 +349,7 @@ func (w *Writer) simpleWriteFile() error {
 			ue = u
 			return nil
 		}),
-		retry.WithAfter(after),
+		retry.WithAfter(retryAfterFor(w.o.b.r)),
 	)
 	if err != nil {
 		return err
