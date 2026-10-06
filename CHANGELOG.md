@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `(*base.B2).CreateKeyMultiBucket` and the `b2.BucketIDs` `KeyOption` for creating Multi-Bucket Application Keys via `(*b2.Client).CreateKey`.
 - `(*b2.Bucket).ID` returns the bucket's B2 ID, which is needed to fill in `ReplicationRules.DestinationBucketID`.
+- `b2.BypassGovernance()`, a `DeleteOption` accepted by `(*b2.Object).Delete`, deletes a file version under governance-mode Object Lock retention. The application key needs the `bypassGovernance` capability; compliance-mode retention is never bypassed. `(*base.File).DeleteFileVersion` takes an optional `bypassGovernance` argument for the same purpose.
 
 ### Changed
 
