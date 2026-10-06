@@ -535,8 +535,9 @@ func Transport(rt http.RoundTripper) AuthOption {
 	}
 }
 
-// FailSomeUploads requests intermittent upload failures from the B2 service.
-// This is mostly useful for testing.
+// FailSomeUploads requests intermittent upload failures from the B2 service by
+// sending B2's documented X-Bz-Test-Mode: fail_some_uploads header. It is for
+// testing retry and error-handling paths only; do not use it in production.
 func FailSomeUploads() AuthOption {
 	return func(o *b2Options) {
 		o.failSomeUploads = true
@@ -544,15 +545,19 @@ func FailSomeUploads() AuthOption {
 }
 
 // ExpireSomeAuthTokens requests intermittent authentication failures from the
-// B2 service.
+// B2 service by sending B2's documented
+// X-Bz-Test-Mode: expire_some_account_authorization_tokens header. It is for
+// testing re-authentication paths only; do not use it in production.
 func ExpireSomeAuthTokens() AuthOption {
 	return func(o *b2Options) {
 		o.expireTokens = true
 	}
 }
 
-// ForceCapExceeded requests a cap limit from the B2 service.  This causes all
-// uploads to be treated as if they would exceed the configure B2 capacity.
+// ForceCapExceeded requests a cap limit from the B2 service by sending B2's
+// documented X-Bz-Test-Mode: force_cap_exceeded header. This causes all uploads
+// to be treated as if they would exceed the configured B2 capacity. It is for
+// testing only; do not use it in production.
 func ForceCapExceeded() AuthOption {
 	return func(o *b2Options) {
 		o.capExceeded = true

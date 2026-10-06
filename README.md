@@ -146,22 +146,29 @@ base := bucket.BaseURL()
 B2 provides documented "test mode" hooks (sent as the `X-Bz-Test-Mode` request
 header) that ask the service to inject controlled failures, so you can exercise
 your retry and error-handling paths without waiting for real faults. blazer
-exposes them as client options:
+exposes each one as a client option:
 
 ```go
-client, err := b2.NewClient(ctx, id, key,
-    b2.FailSomeUploads(),      // X-Bz-Test-Mode: fail_some_uploads
-    b2.ExpireSomeAuthTokens(), // X-Bz-Test-Mode: expire_some_account_authorization_tokens
-    b2.ForceCapExceeded(),     // X-Bz-Test-Mode: force_cap_exceeded
-)
+// Ask B2 to fail some uploads so you can verify your upload retries.
+client, err := b2.NewClient(ctx, id, key, b2.FailSomeUploads())
 ```
 
-- `FailSomeUploads` — B2 fails a fraction of uploads, so you can verify upload retries.
-- `ExpireSomeAuthTokens` — B2 expires some auth tokens, exercising re-authentication.
-- `ForceCapExceeded` — B2 treats uploads as if the account storage cap were exceeded.
+| Option | `X-Bz-Test-Mode` value | Effect |
+| --- | --- | --- |
+| `b2.FailSomeUploads()` | `fail_some_uploads` | B2 fails some uploads, exercising upload retries. |
+| `b2.ExpireSomeAuthTokens()` | `expire_some_account_authorization_tokens` | B2 expires account authorization tokens frequently, exercising re-authentication. |
+| `b2.ForceCapExceeded()` | `force_cap_exceeded` | B2 behaves as if the account storage cap were exceeded. Backblaze documents it for upload- and download-related calls. |
 
-These are for testing only — leave them off in production. See Backblaze's B2
-documentation for the `X-Bz-Test-Mode` header for the authoritative behavior.
+Backblaze documents each value on its own and does not say whether several can be
+combined. Enabling more than one option sends one `X-Bz-Test-Mode` header line per
+option, which is untested, so use one option per client.
+
+The header is set when the client is created and sent with every request that
+client makes, including authorization and downloads. There is no way to turn it
+off afterwards, so create a separate client for tests and leave these options off
+in production. See Backblaze's
+[Integration Checklist](https://www.backblaze.com/docs/cloud-storage-integration-checklist)
+for the authoritative behavior.
 
 
 ### Licenses
