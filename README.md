@@ -161,7 +161,10 @@ client, err := b2.NewClient(ctx, id, key, b2.FailSomeUploads())
 
 Backblaze documents each value on its own and does not say whether several can be
 combined. Enabling more than one option sends one `X-Bz-Test-Mode` header line per
-option, which is untested, so use one option per client.
+option. blazer's live integration tests combine `b2.FailSomeUploads()` and
+`b2.ExpireSomeAuthTokens()`, but that does not establish that every combination is
+supported by the B2 service, so prefer one option per client unless you have
+verified the combination you need.
 
 The header is set when the client is created and sent with every request that
 client makes, including authorization and downloads. There is no way to turn it
