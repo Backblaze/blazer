@@ -36,8 +36,8 @@ import (
 )
 
 const (
-	apiID  = "B2_ACCOUNT_ID"
-	apiKey = "B2_SECRET_KEY"
+	apiID  = "B2_APPLICATION_KEY_ID"
+	apiKey = "B2_APPLICATION_KEY"
 
 	errVar = "B2_TRANSIENT_ERRORS"
 )
@@ -703,7 +703,7 @@ func TestNewBucket(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -776,7 +776,7 @@ func TestBucketDefaultEncryption(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -1485,7 +1485,7 @@ func startLiveTest(ctx context.Context, t *testing.T) (*Bucket, func()) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 		return nil, nil
 	}
 	ccport := &ccTripper{rt: defaultTransport, t: t}

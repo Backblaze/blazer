@@ -29,26 +29,26 @@ jobs:
           cache-dependency-path: go.sum
       - name: Check live credentials
         env:
-          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
-          B2_SECRET_KEY: ${{ secrets.B2_SECRET_KEY }}
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
         run: |
-          if [[ -z "$B2_ACCOUNT_ID" || -z "$B2_SECRET_KEY" ]]; then
-            echo '::error::The live-tests environment requires B2_ACCOUNT_ID and B2_SECRET_KEY.'
+          if [[ -z "$B2_APPLICATION_KEY_ID" || -z "$B2_APPLICATION_KEY" ]]; then
+            echo '::error::The live-tests environment requires B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY.'
             exit 1
           fi
       - name: Remove stale test buckets
         env:
-          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
-          B2_SECRET_KEY: ${{ secrets.B2_SECRET_KEY }}
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
         run: go run ./internal/bin/cleanup/cleanup.go
       - name: Run live integration tests
         env:
-          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
-          B2_SECRET_KEY: ${{ secrets.B2_SECRET_KEY }}
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
         run: go test -v -count=1 -timeout 30m ./b2/... ./base/...
       - name: Remove test buckets
         if: ${{ always() }}
         env:
-          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
-          B2_SECRET_KEY: ${{ secrets.B2_SECRET_KEY }}
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
         run: go run ./internal/bin/cleanup/cleanup.go

@@ -16,11 +16,11 @@
 //
 // To copy a file into B2:
 //
-//	B2_ACCOUNT_ID=foo B2_ACCOUNT_KEY=bar simple /path/to/file b2://bucket/path/to/dst
+//	B2_APPLICATION_KEY_ID=foo B2_APPLICATION_KEY=bar simple /path/to/file b2://bucket/path/to/dst
 //
 // To copy a file out:
 //
-//	B2_ACCOUNT_ID=foo B2_ACCOUNT_KEY=bar simple b2://bucket/path/to/file /path/to/dst
+//	B2_APPLICATION_KEY_ID=foo B2_APPLICATION_KEY=bar simple b2://bucket/path/to/file /path/to/dst
 package main
 
 import (
@@ -37,8 +37,15 @@ import (
 
 func main() {
 	flag.Parse()
-	b2id := os.Getenv("B2_ACCOUNT_ID")
-	b2key := os.Getenv("B2_ACCOUNT_KEY")
+	b2id := os.Getenv("B2_APPLICATION_KEY_ID")
+	b2key := os.Getenv("B2_APPLICATION_KEY")
+	// The old names remain as a deprecated fallback.
+	if b2id == "" {
+		b2id = os.Getenv("B2_ACCOUNT_ID")
+	}
+	if b2key == "" {
+		b2key = os.Getenv("B2_ACCOUNT_KEY")
+	}
 
 	args := flag.Args()
 	if len(args) != 2 {

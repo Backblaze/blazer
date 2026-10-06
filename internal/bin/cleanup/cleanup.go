@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	apiID  = "B2_ACCOUNT_ID"
-	apiKey = "B2_SECRET_KEY"
+	apiID  = "B2_APPLICATION_KEY_ID"
+	apiKey = "B2_APPLICATION_KEY"
 )
 
 var bucketNameSuffixes = [...]string{
