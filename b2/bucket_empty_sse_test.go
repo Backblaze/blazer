@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 
@@ -120,7 +120,7 @@ func jsonResponse(req *http.Request, status int, body interface{}) (*http.Respon
 	}
 	return &http.Response{
 		StatusCode: status,
-		Body:       ioutil.NopCloser(bytes.NewReader(contents)),
+		Body:       io.NopCloser(bytes.NewReader(contents)),
 		Header:     make(http.Header),
 		Request:    req,
 	}, nil
