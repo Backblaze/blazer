@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Bucket.Attrs` and the buckets returned by `Client.Bucket` and `Client.ListBuckets` report `CORSRules` and `FileLockEnabled`.
 - `Bucket.Update` sends `CORSRule.Name` as `corsRuleName`; it was dropped.
 - `Bucket.Update` sends `BucketAttrs.ReplicationConfig` when it is set, and no longer panics when it is nil on a bucket that already has a replication configuration. The check used the bucket's cached configuration instead of the caller's.
+- `Writer` no longer hangs when a part of a large upload fails permanently. `sendChunk` held a read lock while blocked handing the next chunk to a worker, so the failing worker could never record the error and cancel the upload. `Write` also no longer takes its read lock recursively, which could deadlock against a waiting `Close`.
 
 ## [0.8.0] - 2026-09-15
 
