@@ -17,7 +17,7 @@ package base
 import (
 	"bytes"
 	"context"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 
@@ -76,7 +76,7 @@ func (t defaultRetentionResponseTransport) RoundTrip(req *http.Request) (*http.R
 func defaultRetentionHTTPResponse(req *http.Request, body string) *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
-		Body:       ioutil.NopCloser(bytes.NewBufferString(body)),
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
 		Header:     make(http.Header),
 		Request:    req,
 	}
