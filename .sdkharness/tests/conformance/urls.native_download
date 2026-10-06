@@ -1,0 +1,608 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x urls.native_download -- the contract is bin/conformance/README.md.
+#
+# Scenario: prefix download authorization, fetch, then expire; B2-native token shape
+#
+# DOCS. The expected values are B2's published NATIVE contract, not SigV4.
+# b2_get_download_authorization "Returns an authorization token that can be
+# passed to b2_download_file_by_name in the Authorization header or as an
+# Authorization parameter", limited to fileNamePrefix and expiring after
+# validDurationInSeconds. b2_download_file_by_name addresses
+# <downloadUrl>/file/<bucket>/<name>, accepts the token "in the URL query string
+# instead of being passed in the HTTP header", and answers an expired one with
+# 401 expired_auth_token.
+# https://www.backblaze.com/apidocs/b2-get-download-authorization
+# https://www.backblaze.com/apidocs/b2-download-file-by-name
+# The shape leg matches (no X-Amz-*; Authorization as query or header). The
+# /file/ path is not asserted.
+# NEEDS REVIEW: docs say an expired token is 401 expired_auth_token; the
+# expiry leg also accepts 403. Unresolved here, not fixed.
+#
+# Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+SLUG=blazer
+CAP=urls.native_download
+TARGET=simulator
+
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+
+# A detail never carries a response body, a multi-line diagnostic or a
+# credential: one line, printable, capped.
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+  say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# The Go program is carried at the end of this file as an INERT heredoc, so
+# `bash -n` parses this check as the shell script it is rather than choking on
+# Go syntax.
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+// blazer x urls.native_download.
+//
+// Setup   a fixture object
+// Action  get a download authorization for a prefix with a short TTL, fetch it
+//         over plain HTTP, then wait past expiry
+// Assert  200 with the correct bytes, then 401
+//
+// MUST assert the B2-NATIVE share-token shape, not a SigV4 query string. blazer
+// has no S3 path at all (card.md: "S3-compatible API -- no"), so a SigV4
+// parameter turning up here would be the surprise worth failing on.
+//
+// The token is a credential: it is registered for scrubbing and the URL itself
+// is never printed.
+//
+// The API came from docs/sdks/blazer/card.md and godoc for
+// github.com/Backblaze/blazer/b2. Never from b2sdks/.
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"reflect"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
+)
+
+const capability = "urls.native_download"
+
+const authValidFor = 5 * time.Second
+
+func runCheck(ctx context.Context, target *string) error {
+	client, err := newClient(ctx, *target)
+	if err != nil {
+		return err
+	}
+
+	payload := payloadOf(4096)
+	name := objectName("native-url.bin")
+
+	bucket, cleanup, err := newBucket(ctx, client, nil)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	object, err := upload(ctx, bucket, name, payload, nil, nil)
+	if err != nil {
+		return err
+	}
+
+	// A prefix-scoped download authorization is the B2-native share token.
+	prefixToken, err := bucket.AuthToken(ctx, "st/", authValidFor)
+	if err != nil {
+		return classify("download authorization", err)
+	}
+	if prefixToken == "" {
+		return failf("download authorization", "b2_get_download_authorization returned an empty token")
+	}
+	secretsToScrub = append(secretsToScrub, prefixToken)
+
+	authorized, err := object.AuthURL(ctx, authValidFor, "")
+	if err != nil {
+		return classify("download authorization", err)
+	}
+	query := authorized.Query()
+	for parameter := range query {
+		if strings.HasPrefix(strings.ToLower(parameter), "x-amz-") {
+			return failf("token shape", "the authorized URL carries the SigV4 parameter %q; this must be a B2-native share token", parameter)
+		}
+	}
+	urlToken := ""
+	for parameter, values := range query {
+		if strings.EqualFold(parameter, "Authorization") && len(values) > 0 {
+			urlToken = values[0]
+		}
+	}
+	if urlToken != "" {
+		secretsToScrub = append(secretsToScrub, urlToken)
+		note("the authorized URL carries a B2-native Authorization token and no SigV4 parameter")
+	} else {
+		note("the authorized URL carries no token parameter (query keys: %v); the prefix token is sent as a header instead", queryKeys(query))
+	}
+
+	// --- inside the TTL ---------------------------------------------------
+	status, body, err := fetch(ctx, authorized.String(), urlToken, prefixToken)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return failf("authorized fetch", "the authorized URL returned HTTP %d inside its TTL", status)
+	}
+	if !bytes.Equal(body, payload) {
+		return failf("authorized fetch", "the authorized URL returned %d bytes, which differ from the %d uploaded", len(body), len(payload))
+	}
+
+	// --- past the TTL -----------------------------------------------------
+	time.Sleep(authValidFor + 4*time.Second)
+	expiredStatus, _, err := fetch(ctx, authorized.String(), urlToken, prefixToken)
+	if err != nil {
+		return err
+	}
+	switch expiredStatus {
+	case http.StatusUnauthorized:
+	case http.StatusForbidden:
+		note("the expired token was refused with HTTP 403 rather than 401")
+	default:
+		return failf("expiry", "the token still returned HTTP %d after its %s TTL had passed", expiredStatus, authValidFor)
+	}
+	return nil
+}
+
+// fetch performs a plain HTTP GET, sending the token as a header when the URL
+// does not already carry one.
+func fetch(ctx context.Context, rawURL, urlToken, headerToken string) (int, []byte, error) {
+	request, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return 0, nil, failf("authorized fetch", "could not build the request")
+	}
+	request = request.WithContext(ctx)
+	if urlToken == "" {
+		request.Header.Set("Authorization", headerToken)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return 0, nil, classify("authorized fetch", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return response.StatusCode, nil, classify("authorized fetch", err)
+	}
+	return response.StatusCode, body, nil
+}
+
+func queryKeys(query map[string][]string) []string {
+	var keys []string
+	for key := range query {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ---------------------------------------------------------------------------
+// Shared plumbing. Identical in every blazer check; the scenario above is the
+// only part that differs. Contract: bin/conformance/README.md.
+// ---------------------------------------------------------------------------
+
+const slug = "blazer"
+
+// The closed reason set, mirrored from bin/conformance/README.md. The runner
+// enforces it; a reason outside it is a FAIL the runner manufactures.
+const (
+	reasonNoRealm   = "no-realm-option"
+	reasonUnreach   = "unreachable"
+	reasonUnauth    = "unauthorized"
+	reasonNoCred    = "no-credential"
+	reasonNoRuntime = "missing-runtime"
+	reasonNotClaim  = "not-claimed"
+)
+
+// amberErr: the question could not be asked. failErr: it was asked, and the
+// answer contradicts the card.
+type amberErr struct{ reason, detail string }
+
+func (e *amberErr) Error() string { return e.reason + ": " + e.detail }
+
+type failErr struct{ step, detail string }
+
+func (e *failErr) Error() string { return e.step + ": " + e.detail }
+
+func amberf(reason, format string, args ...interface{}) error {
+	return &amberErr{reason: reason, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+func failf(step, format string, args ...interface{}) error {
+	return &failErr{step: step, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+// secretsToScrub holds every value that must never reach stdout: the key id,
+// the application key, and any download token this check mints.
+var secretsToScrub []string
+
+// opaqueToken matches anything long and token-shaped. A detail never needs a
+// 25-character opaque string, and a leaked credential is far worse than a
+// vague detail.
+var opaqueToken = regexp.MustCompile(`[A-Za-z0-9+/=_-]{25,}`)
+
+func scrub(s string) string { return scrubTo(s, 180) }
+
+// scrubTo is scrub with a caller-chosen cap: a result-line detail stays short,
+// while a NOTE may carry the evidence it is there to carry.
+func scrubTo(s string, limit int) string {
+	for _, secret := range secretsToScrub {
+		if secret != "" {
+			s = strings.Replace(s, secret, "REDACTED", -1)
+		}
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	s = opaqueToken.ReplaceAllString(s, "REDACTED")
+	if len(s) > limit {
+		s = s[:limit] + "..."
+	}
+	return s
+}
+
+// classify turns an error into a FAIL. This check only runs when the harness
+// handed it a loopback simulator URL, so a 401/403, a refused connection, a
+// deadline or a reset is the simulator or blazer misbehaving (an auth, hang or
+// retry regression), never a legitimate environment problem. Only a missing Go
+// toolchain or dependency is COULD-NOT-RUN, and that is decided before this
+// program exists (sdkharness_go_build in lib/contract.sh).
+func classify(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch err.(type) {
+	case *amberErr, *failErr:
+		return err
+	}
+	return failf(step, "%s", err.Error())
+}
+
+func say(target, verdict string) {
+	fmt.Printf("CONFORMANCE %s %s @%s: %s\n", slug, capability, target, verdict)
+}
+
+// note carries evidence that is weaker than the assertion it supports. It is a
+// SEPARATE line on purpose: the runner parses `PASS` exactly, so a PASS may
+// never carry a detail.
+func note(format string, args ...interface{}) {
+	fmt.Printf("NOTE %s %s: %s\n", slug, capability, scrubTo(fmt.Sprintf(format, args...), 600))
+}
+
+func requestedTarget() string {
+	if t := os.Getenv("CONFORMANCE_TARGET"); t != "" {
+		return t
+	}
+	return "simulator"
+}
+
+// apiBase maps a requested target onto a realm blazer can reach. `simulator` is
+// the harness's own server (bin/simulator/serve.mjs), whose URL the runner
+// exports as CONFORMANCE_SIMULATOR_URL and blazer reaches through b2.APIBase;
+// unset, there is nothing to reach: no-realm-option.
+func apiBase(target string) (string, error) {
+	if target == "simulator" {
+		if url := os.Getenv("CONFORMANCE_SIMULATOR_URL"); url != "" {
+			return url, nil
+		}
+		return "", amberf(reasonNoRealm, "CONFORMANCE_SIMULATOR_URL is unset")
+	}
+	return "", amberf(reasonNoRealm, "blazer checks run only against the loopback simulator, not %q", target)
+}
+
+// credentials at @simulator is the simulator's fixed test credential, so a real
+// B2_* value can never be sent there.
+func credentials(target string) (string, string, error) {
+	if target == "simulator" {
+		return "test-key-id", "test-key", nil
+	}
+	return "", "", amberf(reasonNoRealm, "blazer checks use only the simulator's fixed test credential")
+}
+
+func newClient(ctx context.Context, target string) (*b2.Client, error) {
+	base, err := apiBase(target)
+	if err != nil {
+		return nil, err
+	}
+	id, key, err := credentials(target)
+	if err != nil {
+		return nil, err
+	}
+	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
+	if err != nil {
+		return nil, classify("authenticate", err)
+	}
+	return client, nil
+}
+
+func randomHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return strings.Repeat("0", 2*n)
+	}
+	return hex.EncodeToString(buf)
+}
+
+func bucketName() string { return "sdkharness-conf-" + randomHex(6) }
+
+func objectName(leaf string) string { return "st/" + leaf }
+
+func sha1hex(payload []byte) string {
+	sum := sha1.Sum(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+// payloadOf returns n deterministic-but-incompressible-enough bytes.
+func payloadOf(n int) []byte {
+	seed := []byte("sdkharness conformance blazer payload ")
+	buf := make([]byte, n)
+	for i := range buf {
+		buf[i] = seed[i%len(seed)] ^ byte(i*31)
+	}
+	return buf
+}
+
+// newBucket creates an ephemeral bucket and returns a cleanup that empties and
+// removes it. A check owns every resource it creates and destroys all of them,
+// on the error path too -- hence the returned func is always deferred.
+func newBucket(ctx context.Context, client *b2.Client, attrs *b2.BucketAttrs) (*b2.Bucket, func(), error) {
+	if attrs == nil {
+		attrs = &b2.BucketAttrs{Type: b2.Private}
+	}
+	bucket, err := client.NewBucket(ctx, bucketName(), attrs)
+	if err != nil {
+		return nil, func() {}, classify("create bucket", err)
+	}
+	return bucket, func() { destroyBucket(ctx, bucket) }, nil
+}
+
+func destroyBucket(ctx context.Context, bucket *b2.Bucket) {
+	for attempt := 0; attempt < 2; attempt++ {
+		emptyBucket(ctx, bucket)
+		if err := bucket.Delete(ctx); err == nil {
+			return
+		} else if attempt == 1 {
+			// Never mask the verdict with a cleanup failure -- say it and move on.
+			note("cleanup left bucket %s behind: %s", bucket.Name(), scrub(err.Error()))
+		}
+	}
+}
+
+func emptyBucket(ctx context.Context, bucket *b2.Bucket) {
+	iter := bucket.List(ctx, b2.ListHidden())
+	for iter.Next() {
+		iter.Object().Delete(ctx)
+	}
+	unfinished := bucket.List(ctx, b2.ListUnfinished())
+	for unfinished.Next() {
+		unfinished.Object().Cancel(ctx)
+	}
+}
+
+// upload writes payload to name. tune runs before the first Write, because
+// blazer requires Writer fields to be set before then.
+func upload(ctx context.Context, bucket *b2.Bucket, name string, payload []byte, attrs *b2.Attrs, tune func(*b2.Writer)) (*b2.Object, error) {
+	object := bucket.Object(name)
+	var opts []b2.WriterOption
+	if attrs != nil {
+		opts = append(opts, b2.WithAttrsOption(attrs))
+	}
+	writer := object.NewWriter(ctx, opts...)
+	if tune != nil {
+		tune(writer)
+	}
+	if _, err := writer.Write(payload); err != nil {
+		writer.Close()
+		return nil, classify("upload", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, classify("upload", err)
+	}
+	return object, nil
+}
+
+func download(ctx context.Context, bucket *b2.Bucket, name string, tune func(*b2.Reader)) ([]byte, error) {
+	reader := bucket.Object(name).NewReader(ctx)
+	if tune != nil {
+		tune(reader)
+	}
+	data, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, classify("download", readErr)
+	}
+	if closeErr != nil {
+		return nil, classify("download", closeErr)
+	}
+	return data, nil
+}
+
+// versionsOf returns every listed version of name, newest first. It is also the
+// only way to obtain a fileId here: blazer implements neither
+// b2_get_file_info_by_name nor b2_download_file_by_id (card.md, raw-endpoint
+// table), so a by-name Object reference carries no id.
+func versionsOf(ctx context.Context, bucket *b2.Bucket, name string) ([]*b2.Object, error) {
+	var found []*b2.Object
+	iter := bucket.List(ctx, b2.ListPrefix(name), b2.ListHidden())
+	for iter.Next() {
+		if iter.Object().Name() == name {
+			found = append(found, iter.Object())
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, classify("list versions", err)
+	}
+	return found, nil
+}
+
+func namesUnder(ctx context.Context, bucket *b2.Bucket, prefix string) ([]string, error) {
+	var names []string
+	iter := bucket.List(ctx, b2.ListPrefix(prefix))
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		return nil, classify("list", err)
+	}
+	return names, nil
+}
+
+// rpcCounts sums blazer's per-method RPC counters across every window it
+// reports (b2/monitor.go, surfaced by Client.Status). The windows overlap, so
+// the absolute numbers mean nothing; "was this method called between two
+// reads" -- which is what the boundary assertions use -- is sound.
+func rpcCounts(client *b2.Client) map[string]int {
+	counts := map[string]int{}
+	info := client.Status()
+	if info == nil {
+		return counts
+	}
+	for _, methods := range info.RPCs {
+		for name, n := range methods.CountByMethod() {
+			counts[name] += n
+		}
+	}
+	return counts
+}
+
+func rpcDelta(before, after map[string]int) []string {
+	var moved []string
+	for name, n := range after {
+		if n > before[name] {
+			moved = append(moved, name)
+		}
+	}
+	sort.Strings(moved)
+	return moved
+}
+
+func anyContains(values []string, substr string) bool {
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// exportedFields names a struct's exported fields, which is how the ⚠ boundary
+// assertions interrogate the PUBLISHED package rather than trusting the card.
+func exportedFields(v interface{}) []string {
+	var names []string
+	t := reflect.TypeOf(v)
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return names
+	}
+	for i := 0; i < t.NumField(); i++ {
+		if field := t.Field(i); field.PkgPath == "" {
+			names = append(names, field.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func infoValue(info map[string]string, key string) (string, bool) {
+	for k, v := range info {
+		if strings.EqualFold(k, key) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+func main() {
+	target := requestedTarget()
+	defer func() {
+		if r := recover(); r != nil {
+			say(target, fmt.Sprintf("FAIL (panic -- %s)", scrub(fmt.Sprint(r))))
+			os.Exit(1)
+		}
+	}()
+	err := runCheck(context.Background(), &target)
+	switch e := err.(type) {
+	case nil:
+		say(target, "PASS")
+	case *amberErr:
+		say(target, fmt.Sprintf("COULD-NOT-RUN (%s -- %s)", e.reason, e.detail))
+	case *failErr:
+		say(target, fmt.Sprintf("FAIL (%s -- %s)", e.step, e.detail))
+		os.Exit(1)
+	default:
+		say(target, fmt.Sprintf("FAIL (check -- %s)", scrub(err.Error())))
+		os.Exit(1)
+	}
+}
+__EOF_GO__

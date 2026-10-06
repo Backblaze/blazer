@@ -153,12 +153,16 @@ func TestMutex(t *testing.T) {
 				m.Lock()
 				new := atomic.AddInt32(&a, 1)
 				if new != 1 {
-					t.Fatalf("two threads locked at once")
+					t.Errorf("two threads locked at once")
+					m.Unlock()
+					return
 				}
 				time.Sleep(20 * time.Millisecond)
 				new = atomic.AddInt32(&a, -1)
 				if new != 0 {
-					t.Fatalf("two threads locked at once")
+					t.Errorf("two threads locked at once")
+					m.Unlock()
+					return
 				}
 				t.Logf("thread %d: lock %d", i, j)
 				m.Unlock()

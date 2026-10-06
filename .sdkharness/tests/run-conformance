@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -u
+
+LEVEL=conformance
+SCENARIO="${SDKHARNESS_SCENARIO:-}"
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+. "$HERE/lib/contract.sh"
+result() { printf 'SDKHARNESS_RESULT\t%s\t%s\t%s\t%s\n' "$LEVEL" "$SCENARIO" "$1" "$2"; }
+
+[ "${SDKHARNESS_TEST_LEVEL:-}" = "$LEVEL" ] \
+  || { result FAIL 'configuration: unexpected test level'; exit 1; }
+case "$SCENARIO" in ''|*[!A-Za-z0-9_.-]*) result FAIL 'configuration: invalid scenario'; exit 1 ;; esac
+[ -n "${SDKHARNESS_SIMULATOR_URL:-}" ] && sdkharness_valid_loopback_origin "$SDKHARNESS_SIMULATOR_URL" \
+  || { result FAIL 'configuration: simulator URL must be an IPv4 loopback HTTP origin'; exit 1; }
+check="$HERE/conformance/$SCENARIO"
+[ -x "$check" ] || { result FAIL 'configuration: scenario executable is unavailable'; exit 1; }
+
+log="$(mktemp "${TMPDIR:-/tmp}/sdkharness-blazer-conformance.XXXXXX")" \
+  || { result FAIL 'setup: could not create child log'; exit 1; }
+trap 'rm -f "$log"' EXIT
+if CONFORMANCE_TARGET=simulator \
+  CONFORMANCE_SIMULATOR_URL="$SDKHARNESS_SIMULATOR_URL" \
+  CONFORMANCE_SIMULATOR_HTTPS_URL="${SDKHARNESS_SIMULATOR_HTTPS_URL:-}" \
+  CONFORMANCE_SIMULATOR_CA="${SDKHARNESS_SIMULATOR_CA:-}" \
+  "$check" >"$log" 2>&1; then child_rc=0; else child_rc=$?; fi
+
+prefix="CONFORMANCE blazer $SCENARIO @"
+grep -Fv "$prefix" "$log" || true
+count="$(grep -Fc "$prefix" "$log" 2>/dev/null || true)"
+[ "$count" = 1 ] || { result FAIL "contract: expected one standing result, got $count"; exit 1; }
+verdict="$(grep -F "$prefix" "$log")"; verdict="${verdict#*: }"
+case "$verdict" in
+  PASS) [ "$child_rc" = 0 ] || { result FAIL "contract: PASS exited $child_rc"; exit 1; }; result PASS - ;;
+  'FAIL ('*')') reason="${verdict#FAIL (}"; result FAIL "${reason%)}"; exit 1 ;;
+  'COULD-NOT-RUN ('*')')
+    # A check that reports COULD-NOT-RUN and then fails is broken, not amber.
+    [ "$child_rc" = 0 ] || { result FAIL "contract: COULD-NOT-RUN exited $child_rc"; exit 1; }
+    reason="${verdict#COULD-NOT-RUN (}"; result SKIP "${reason%)}" ;;
+  *) result FAIL 'contract: malformed standing verdict'; exit 1 ;;
+esac

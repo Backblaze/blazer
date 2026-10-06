@@ -114,8 +114,9 @@ func Transport(rt http.RoundTripper) ClientOption {
 	}
 }
 
-// FailSomeUploads requests intermittent upload failures from the B2 service.
-// This is mostly useful for testing.
+// FailSomeUploads requests intermittent upload failures from the B2 service by
+// sending B2's documented X-Bz-Test-Mode: fail_some_uploads header. It is for
+// testing retry and error-handling paths only; do not use it in production.
 func FailSomeUploads() ClientOption {
 	return func(c *clientOptions) {
 		c.failSomeUploads = true
@@ -123,15 +124,19 @@ func FailSomeUploads() ClientOption {
 }
 
 // ExpireSomeAuthTokens requests intermittent authentication failures from the
-// B2 service.
+// B2 service by sending B2's documented
+// X-Bz-Test-Mode: expire_some_account_authorization_tokens header. It is for
+// testing re-authentication paths only; do not use it in production.
 func ExpireSomeAuthTokens() ClientOption {
 	return func(c *clientOptions) {
 		c.expireTokens = true
 	}
 }
 
-// ForceCapExceeded requests a cap limit from the B2 service.  This causes all
-// uploads to be treated as if they would exceed the configure B2 capacity.
+// ForceCapExceeded requests a cap limit from the B2 service by sending B2's
+// documented X-Bz-Test-Mode: force_cap_exceeded header. This causes all uploads
+// to be treated as if they would exceed the configured B2 capacity. It is for
+// testing only; do not use it in production.
 func ForceCapExceeded() ClientOption {
 	return func(c *clientOptions) {
 		c.capExceeded = true
@@ -245,18 +250,30 @@ type BucketAttrs struct {
 	ReplicationConfig *ReplicationConfiguration
 }
 
-// DefaultServerSideEncryption sets the bucket defaultServerSideEncryption to { "mode": "SSE-B2", "algorithm": "AES256" }
-// Must call Bucket.Update() to apply the change.
-func DefaultServerSideEncryption() *ServerSideEncryption {
+// SSEB2WithAES256 returns the SSE-B2 server-side encryption setting with the
+// AES256 algorithm. It is the only supported bucket default; leaving
+// BucketAttrs.DefaultServerSideEncryption nil uses the service default.
+func SSEB2WithAES256() *ServerSideEncryption {
 	return &ServerSideEncryption{
 		Mode:      "SSE-B2",
 		Algorithm: "AES256",
 	}
 }
 
+// DefaultServerSideEncryption returns the SSE-B2 setting.
+//
+// Deprecated: use SSEB2WithAES256.
+func DefaultServerSideEncryption() *ServerSideEncryption { return SSEB2WithAES256() }
+
 type ServerSideEncryption struct {
 	Mode      string
 	Algorithm string
+}
+
+// canBeUsedAsBucketDefault reports whether the service accepts the setting as
+// a bucket's default: only SSE-B2 with AES256 can be set explicitly.
+func (s *ServerSideEncryption) canBeUsedAsBucketDefault() bool {
+	return s.Mode == "SSE-B2" && s.Algorithm == "AES256"
 }
 
 type CORSRule struct {
@@ -408,7 +425,10 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if attrs == nil {
 		attrs = &BucketAttrs{Type: Private}
 	}
-	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules)
+	if sse := attrs.DefaultServerSideEncryption; sse != nil && !sse.canBeUsedAsBucketDefault() {
+		return nil, fmt.Errorf("%s/%s cannot be used as default for a bucket", sse.Mode, sse.Algorithm)
+	}
+	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption, attrs.CORSRules, attrs.FileLockEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -452,6 +472,11 @@ func IsUpdateConflict(err error) bool {
 // this method could fail with an update conflict, in which case you should
 // retrieve the latest bucket attributes with Attrs and try again.
 func (b *Bucket) Update(ctx context.Context, attrs *BucketAttrs) error {
+	if attrs != nil {
+		if sse := attrs.DefaultServerSideEncryption; sse != nil && !sse.canBeUsedAsBucketDefault() {
+			return fmt.Errorf("%s/%s cannot be used as default for a bucket", sse.Mode, sse.Algorithm)
+		}
+	}
 	return b.b.updateBucket(ctx, attrs)
 }
 
@@ -500,6 +525,12 @@ func (b *Bucket) S3URL() string {
 // Name returns the bucket's name.
 func (b *Bucket) Name() string {
 	return b.b.name()
+}
+
+// ID returns the bucket's B2 identifier, as reported when the bucket was
+// created or listed. It makes no network call.
+func (b *Bucket) ID() string {
+	return b.b.id()
 }
 
 // Object represents a B2 object.
@@ -663,14 +694,36 @@ func (o *Object) ensure(ctx context.Context) error {
 	return nil
 }
 
-// Delete removes the given object, if it is a regular file or hide marker
-func (o *Object) Delete(ctx context.Context) error {
+type deleteOptions struct {
+	bypassGovernance bool
+}
+
+// DeleteOption configures Delete.
+type DeleteOption func(*deleteOptions)
+
+// BypassGovernance requests deletion of a file under governance-mode Object
+// Lock retention. The application key must have the bypassGovernance
+// capability; B2 rejects the request for compliance-mode retention.
+// https://www.backblaze.com/apidocs/b2-delete-file-version
+// https://www.backblaze.com/docs/cloud-storage-object-lock
+func BypassGovernance() DeleteOption {
+	return func(opts *deleteOptions) {
+		opts.bypassGovernance = true
+	}
+}
+
+// Delete removes the given object, if it is a regular file or hide marker.
+func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
 	if err := o.ensure(ctx); err != nil {
 		return err
 	}
+	options := &deleteOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 	status := o.f.status()
 	if status == "upload" || status == "hide" {
-		return o.f.deleteFileVersion(ctx)
+		return o.f.deleteFileVersion(ctx, options.bypassGovernance)
 	} else {
 		return fmt.Errorf("%s is not a regular file or hide marker: %s", o.name, status)
 	}

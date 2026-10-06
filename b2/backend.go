@@ -33,9 +33,10 @@ type beRootInterface interface {
 	reupload(error) bool
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	reauthorizeAccount(context.Context) error
-	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (beBucketInterface, error)
+	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (beBucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]beBucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (beKeyInterface, error)
+	createKeyMultiBucket(context.Context, string, []string, time.Duration, []string, string) (beKeyInterface, error)
 	listKeys(context.Context, int, string) ([]beKeyInterface, string, error)
 }
 
@@ -85,7 +86,7 @@ type beFileInterface interface {
 	size() int64
 	timestamp() time.Time
 	status() string
-	deleteFileVersion(context.Context) error
+	deleteFileVersion(context.Context, bool) error
 	getFileInfo(context.Context) (beFileInfoInterface, error)
 	listParts(context.Context, int, int) ([]beFilePartInterface, int, error)
 	compileParts(int64, map[int]string) beLargeFileInterface
@@ -175,6 +176,14 @@ func (r *beRoot) maxReuploads(err error) uint     { return r.b2i.maxReuploads(er
 func (r *beRoot) retry(err error) bool            { return r.b2i.retry(err) }
 func (r *beRoot) reauth(err error) bool           { return r.b2i.reauth(err) }
 func (r *beRoot) reupload(err error) bool         { return r.b2i.reupload(err) }
+func (r *beRoot) retryAfter(d time.Duration) <-chan time.Time {
+	if timer, ok := r.b2i.(interface {
+		retryAfter(time.Duration) <-chan time.Time
+	}); ok {
+		return timer.retryAfter(d)
+	}
+	return time.After(d)
+}
 
 func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c clientOptions) error {
 	f := func() error {
@@ -193,11 +202,11 @@ func (r *beRoot) reauthorizeAccount(ctx context.Context) error {
 	return r.authorizeAccount(ctx, r.account, r.key, r.options)
 }
 
-func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (beBucketInterface, error) {
+func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (beBucketInterface, error) {
 	var bi beBucketInterface
 	f := func() error {
 		g := func() error {
-			bucket, err := r.b2i.createBucket(ctx, name, btype, info, rules)
+			bucket, err := r.b2i.createBucket(ctx, name, btype, info, rules, sse, corsRules, fileLockEnabled)
 			if err != nil {
 				return err
 			}
@@ -244,6 +253,28 @@ func (r *beRoot) createKey(ctx context.Context, name string, caps []string, vali
 	f := func() error {
 		g := func() error {
 			got, err := r.b2i.createKey(ctx, name, caps, valid, bucketID, prefix)
+			if err != nil {
+				return err
+			}
+			k = &beKey{
+				b2i: r,
+				k:   got,
+			}
+			return nil
+		}
+		return withReauth(ctx, r, g)
+	}
+	if err := withBackoff(ctx, r, f); err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
+func (r *beRoot) createKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (beKeyInterface, error) {
+	var k *beKey
+	f := func() error {
+		g := func() error {
+			got, err := r.b2i.createKeyMultiBucket(ctx, name, caps, valid, bucketIDs, prefix)
 			if err != nil {
 				return err
 			}
@@ -536,10 +567,10 @@ func (b *beURL) uploadFile(ctx context.Context, r readResetter, size int, name, 
 	return file, nil
 }
 
-func (b *beFile) deleteFileVersion(ctx context.Context) error {
+func (b *beFile) deleteFileVersion(ctx context.Context, bypassGovernance bool) error {
 	f := func() error {
 		g := func() error {
-			return b.b2file.deleteFileVersion(ctx)
+			return b.b2file.deleteFileVersion(ctx, bypassGovernance)
 		}
 		return withReauth(ctx, b.ri, g)
 	}
@@ -758,8 +789,6 @@ func (b *beKey) expires() time.Time { return b.k.expires() }
 func (b *beKey) secret() string     { return b.k.secret() }
 func (b *beKey) id() string         { return b.k.id() }
 
-var after = time.After
-
 func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error {
 	return retry.Do(
 		ctx,
@@ -784,8 +813,17 @@ func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error 
 		retry.RetryIf(func(attempt uint, err error) bool {
 			return ri.retry(err)
 		}),
-		retry.WithAfter(after),
+		retry.WithAfter(retryAfterFor(ri)),
 	)
+}
+
+func retryAfterFor(ri beRootInterface) func(time.Duration) <-chan time.Time {
+	if timer, ok := ri.(interface {
+		retryAfter(time.Duration) <-chan time.Time
+	}); ok {
+		return timer.retryAfter
+	}
+	return time.After
 }
 
 func withReauth(ctx context.Context, ri beRootInterface, f func() error) error {

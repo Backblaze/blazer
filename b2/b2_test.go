@@ -22,6 +22,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -37,6 +38,47 @@ const (
 )
 
 var gmux = &sync.Mutex{}
+
+func TestNewBucketCORSAndFileLock(t *testing.T) {
+	ctx := context.Background()
+	wantCORS := []CORSRule{{
+		Name:              "browser",
+		AllowedOrigins:    []string{"https://example.com"},
+		AllowedHeaders:    []string{"authorization"},
+		AllowedOperations: []string{"b2_download_file_by_name"},
+		ExposeHeaders:     []string{"x-bz-file-name"},
+		MaxAgeSeconds:     60,
+	}}
+	client := &Client{backend: &beRoot{b2i: &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs:      &errCont{},
+	}}}
+	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{
+		Type:            Private,
+		CORSRules:       wantCORS,
+		FileLockEnabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := bucket.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(attrs.CORSRules, wantCORS) {
+		t.Errorf("Bucket.Attrs().CORSRules = %#v, want %#v", attrs.CORSRules, wantCORS)
+	}
+	if !attrs.FileLockEnabled {
+		t.Error("Bucket.Attrs().FileLockEnabled = false, want true")
+	}
+}
+
+func TestBucketID(t *testing.T) {
+	b := &Bucket{b: &beBucket{b2bucket: &testBucket{idv: "bucket-id"}}}
+	if got := b.ID(); got != "bucket-id" {
+		t.Fatalf("Bucket.ID() = %q, want %q", got, "bucket-id")
+	}
+}
 
 type testError struct {
 	retry        bool
@@ -69,6 +111,46 @@ type testRoot struct {
 	errs      *errCont
 	auths     int
 	bucketMap map[string]map[string]string
+	afterFunc func(time.Duration) <-chan time.Time
+
+	bucketSettings map[string]testBucketSettings
+
+	lastKeyMethod    string
+	lastKeyBucketID  string
+	lastKeyBucketIDs []string
+	lastKeyPrefix    string
+}
+
+func (t *testRoot) retryAfter(d time.Duration) <-chan time.Time {
+	if t.afterFunc != nil {
+		return t.afterFunc(d)
+	}
+	return time.After(d)
+}
+
+type testAfter struct {
+	calls uint32
+	ready chan time.Time
+}
+
+func newTestAfter() *testAfter {
+	ready := make(chan time.Time)
+	close(ready)
+	return &testAfter{ready: ready}
+}
+
+func (a *testAfter) wait(time.Duration) <-chan time.Time {
+	atomic.AddUint32(&a.calls, 1)
+	return a.ready
+}
+
+func (a *testAfter) count() int {
+	return int(atomic.LoadUint32(&a.calls))
+}
+
+type testBucketSettings struct {
+	corsRules       []CORSRule
+	fileLockEnabled bool
 }
 
 func (t *testRoot) authorizeAccount(context.Context, string, string, clientOptions) error {
@@ -133,14 +215,23 @@ func (t *testRoot) reupload(err error) bool {
 	return e.reupload
 }
 
-func (t *testRoot) createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error) {
+func (t *testRoot) createKey(_ context.Context, _ string, _ []string, _ time.Duration, bucketID, prefix string) (b2KeyInterface, error) {
+	t.lastKeyMethod = "createKey"
+	t.lastKeyBucketID = bucketID
+	t.lastKeyPrefix = prefix
+	return nil, nil
+}
+func (t *testRoot) createKeyMultiBucket(_ context.Context, _ string, _ []string, _ time.Duration, bucketIDs []string, prefix string) (b2KeyInterface, error) {
+	t.lastKeyMethod = "createKeyMultiBucket"
+	t.lastKeyBucketIDs = bucketIDs
+	t.lastKeyPrefix = prefix
 	return nil, nil
 }
 func (t *testRoot) listKeys(context.Context, int, string) ([]b2KeyInterface, string, error) {
 	return nil, "", nil
 }
 
-func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule) (b2BucketInterface, error) {
+func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule, _ *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (b2BucketInterface, error) {
 	if err := t.errs.getError("createBucket"); err != nil {
 		return nil, err
 	}
@@ -149,10 +240,17 @@ func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]
 	}
 	m := make(map[string]string)
 	t.bucketMap[name] = m
+	if t.bucketSettings == nil {
+		t.bucketSettings = make(map[string]testBucketSettings)
+	}
+	st := testBucketSettings{corsRules: append([]CORSRule(nil), corsRules...), fileLockEnabled: fileLockEnabled}
+	t.bucketSettings[name] = st
 	return &testBucket{
-		n:     name,
-		errs:  t.errs,
-		files: m,
+		n:               name,
+		errs:            t.errs,
+		files:           m,
+		corsRules:       st.corsRules,
+		fileLockEnabled: st.fileLockEnabled,
 	}, nil
 }
 
@@ -160,26 +258,33 @@ func (t *testRoot) listBuckets(context.Context, string, ...string) ([]b2BucketIn
 	var b []b2BucketInterface
 	for k, v := range t.bucketMap {
 		b = append(b, &testBucket{
-			n:     k,
-			errs:  t.errs,
-			files: v,
+			n:               k,
+			errs:            t.errs,
+			files:           v,
+			corsRules:       t.bucketSettings[k].corsRules,
+			fileLockEnabled: t.bucketSettings[k].fileLockEnabled,
 		})
 	}
 	return b, nil
 }
 
 type testBucket struct {
-	n     string
-	errs  *errCont
-	files map[string]string
+	n               string
+	idv             string
+	errs            *errCont
+	files           map[string]string
+	corsRules       []CORSRule
+	fileLockEnabled bool
 }
 
-func (t *testBucket) name() string                                     { return t.n }
-func (t *testBucket) btype() string                                    { return "allPrivate" }
-func (t *testBucket) attrs() *BucketAttrs                              { return nil }
+func (t *testBucket) name() string  { return t.n }
+func (t *testBucket) btype() string { return "allPrivate" }
+func (t *testBucket) attrs() *BucketAttrs {
+	return &BucketAttrs{CORSRules: t.corsRules, FileLockEnabled: t.fileLockEnabled}
+}
 func (t *testBucket) deleteBucket(context.Context) error               { return nil }
 func (t *testBucket) updateBucket(context.Context, *BucketAttrs) error { return nil }
-func (t *testBucket) id() string                                       { return "" }
+func (t *testBucket) id() string                                       { return t.idv }
 
 func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	if err := t.errs.getError("getUploadURL"); err != nil {
@@ -331,7 +436,11 @@ type testFileChunk struct {
 func (t *testFileChunk) reload(context.Context) error { return nil }
 
 func (t *testFileChunk) uploadPart(_ context.Context, r io.Reader, _ string, _, index int) (int, error) {
-	if err := t.errs.getError("uploadPart"); err != nil {
+	name := fmt.Sprintf("uploadPart:%d", index)
+	if _, ok := t.errs.errMap[name]; !ok {
+		name = "uploadPart"
+	}
+	if err := t.errs.getError(name); err != nil {
 		return 0, err
 	}
 	buf := &bytes.Buffer{}
@@ -346,11 +455,12 @@ func (t *testFileChunk) uploadPart(_ context.Context, r io.Reader, _ string, _, 
 }
 
 type testFile struct {
-	n     string
-	s     int64
-	t     time.Time
-	a     string
-	files map[string]string
+	n                string
+	s                int64
+	t                time.Time
+	a                string
+	files            map[string]string
+	bypassGovernance bool
 }
 
 func (t *testFile) id() string           { return t.n }
@@ -371,11 +481,36 @@ func (t *testFile) listParts(context.Context, int, int) ([]b2FilePartInterface, 
 	return nil, 0, nil
 }
 
-func (t *testFile) deleteFileVersion(context.Context) error {
+func (t *testFile) deleteFileVersion(_ context.Context, bypassGovernance bool) error {
 	gmux.Lock()
 	defer gmux.Unlock()
+	t.bypassGovernance = bypassGovernance
 	delete(t.files, t.n)
 	return nil
+}
+
+func TestObjectDeleteBypassGovernanceOption(t *testing.T) {
+	ctx := context.Background()
+	standard := &testFile{n: "standard", a: "upload", files: make(map[string]string)}
+	if err := objectForDeleteOptionTest(standard).Delete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if standard.bypassGovernance {
+		t.Fatal("Delete without BypassGovernance requested a bypass")
+	}
+
+	bypass := &testFile{n: "bypass", a: "upload", files: make(map[string]string)}
+	if err := objectForDeleteOptionTest(bypass).Delete(ctx, BypassGovernance()); err != nil {
+		t.Fatal(err)
+	}
+	if !bypass.bypassGovernance {
+		t.Fatal("Delete with BypassGovernance did not request a bypass")
+	}
+}
+
+func objectForDeleteOptionTest(file *testFile) *Object {
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	return &Object{f: &beFile{b2file: file, ri: root}}
 }
 
 type testFileReader struct {
@@ -507,14 +642,6 @@ func TestBackoff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
-
 	table := []struct {
 		root *testRoot
 		want int
@@ -548,8 +675,9 @@ func TestBackoff(t *testing.T) {
 		},
 	}
 
-	var total int
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -567,10 +695,9 @@ func TestBackoff(t *testing.T) {
 		if err := w.Close(); err != nil {
 			t.Fatal(err)
 		}
-		total += ent.want
-	}
-	if len(calls) != total {
-		t.Errorf("got %d calls, wanted %d", len(calls), total)
+		if got := timer.count(); got != ent.want {
+			t.Errorf("got %d calls, wanted %d", got, ent.want)
+		}
 	}
 }
 
@@ -579,18 +706,10 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	var calls []time.Duration
-	var cmux = &sync.Mutex{}
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		cmux.Lock()
-		defer cmux.Unlock()
-		calls = append(calls, d)
-		return ch
-	}
+	timer := newTestAfter()
 
 	root := &testRoot{
+		afterFunc: timer.wait,
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{
 			errMap: map[string]map[int]error{
@@ -609,8 +728,8 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err != nil {
 		t.Errorf("bucket should not err, got %v", err)
 	}
-	if len(calls) != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	if got := timer.count(); got != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", got)
 	}
 }
 
@@ -618,14 +737,6 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -662,6 +773,8 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -670,10 +783,9 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 		if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err == nil {
 			t.Fatalf("bucket should err")
 		}
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -681,14 +793,6 @@ func TestReuploadFile(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -725,6 +829,8 @@ func TestReuploadFile(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -744,10 +850,9 @@ func TestReuploadFile(t *testing.T) {
 			t.Fatalf("writer should have returned an error")
 		}
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -841,19 +946,10 @@ func TestReuploadFileWithoutReuploadAfter(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	var cmux = &sync.Mutex{}
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		cmux.Lock()
-		defer cmux.Unlock()
-		calls = append(calls, d)
-		return ch
-	}
+	timer := newTestAfter()
 
 	root := &testRoot{
+		afterFunc: timer.wait,
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{
 			errMap: map[string]map[int]error{
@@ -883,8 +979,8 @@ func TestReuploadFileWithoutReuploadAfter(t *testing.T) {
 		t.Fatalf("writer should have not returned an error")
 	}
 
-	if len(calls) != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	if got := timer.count(); got != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", got)
 	}
 }
 
@@ -892,14 +988,6 @@ func TestReuploadFileWithMaxReuploadsReached(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -936,6 +1024,8 @@ func TestReuploadFileWithMaxReuploadsReached(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -955,10 +1045,9 @@ func TestReuploadFileWithMaxReuploadsReached(t *testing.T) {
 			t.Fatalf("writer should have returned an error")
 		}
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -966,14 +1055,6 @@ func TestReuploadPart(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -984,7 +1065,7 @@ func TestReuploadPart(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 2},
 							1: testError{reupload: true, maxReuploads: 2},
 							2: testError{reupload: true, maxReuploads: 2},
@@ -999,7 +1080,7 @@ func TestReuploadPart(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 0},
 						},
 					},
@@ -1010,6 +1091,8 @@ func TestReuploadPart(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -1024,15 +1107,15 @@ func TestReuploadPart(t *testing.T) {
 		w.ChunkSize = 1e4
 		w.ConcurrentUploads = 2
 		r := io.LimitReader(zReader{}, 1e5)
-		if _, err := io.Copy(w, r); err == nil {
-			t.Fatalf("writer should have returned an error: %v", err)
+		_, writeErr := io.Copy(w, r)
+		closeErr := w.Close()
+		if writeErr == nil && closeErr == nil {
+			t.Fatal("writer should have returned an error")
 		}
-		w.Close()
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -1040,19 +1123,10 @@ func TestReuploadPartWithoutReuploadAfter(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	var cmux = &sync.Mutex{}
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		cmux.Lock()
-		defer cmux.Unlock()
-		calls = append(calls, d)
-		return ch
-	}
+	timer := newTestAfter()
 
 	root := &testRoot{
+		afterFunc: timer.wait,
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{
 			errMap: map[string]map[int]error{
@@ -1084,8 +1158,8 @@ func TestReuploadPartWithoutReuploadAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(calls) != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", len(calls))
+	if got := timer.count(); got != 2 {
+		t.Errorf("wrong number of calls; got %d, want 2", got)
 	}
 }
 
@@ -1093,14 +1167,6 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	var calls []time.Duration
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		calls = append(calls, d)
-		return ch
-	}
 
 	table := []struct {
 		root *testRoot
@@ -1111,7 +1177,7 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 2},
 							1: testError{reupload: true, maxReuploads: 2},
 							2: testError{reupload: true, maxReuploads: 2},
@@ -1126,7 +1192,7 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 				bucketMap: make(map[string]map[string]string),
 				errs: &errCont{
 					errMap: map[string]map[int]error{
-						"uploadPart": {
+						"uploadPart:1": {
 							0: testError{reupload: true, maxReuploads: 0},
 						},
 					},
@@ -1137,6 +1203,8 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 	}
 
 	for _, ent := range table {
+		timer := newTestAfter()
+		ent.root.afterFunc = timer.wait
 		client := &Client{
 			backend: &beRoot{
 				b2i: ent.root,
@@ -1151,15 +1219,15 @@ func TestReuploadPartWithMaxReuploadsReached(t *testing.T) {
 		w.ChunkSize = 1e4
 		w.ConcurrentUploads = 2
 		r := io.LimitReader(zReader{}, 1e5)
-		if _, err := io.Copy(w, r); err == nil {
-			t.Fatalf("writer should have returned an error")
+		_, writeErr := io.Copy(w, r)
+		closeErr := w.Close()
+		if writeErr == nil && closeErr == nil {
+			t.Fatal("writer should have returned an error")
 		}
-		w.Close()
 
-		if len(calls) != ent.want {
-			t.Fatalf("got %d calls, wanted %d", len(calls), ent.want)
+		if got := timer.count(); got != ent.want {
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
 		}
-		calls = nil
 	}
 }
 
@@ -1539,4 +1607,163 @@ func readFile(ctx context.Context, obj *Object, sha string, chunk, concur int) e
 		return fmt.Errorf("bad hash: got %s, want %s", rsha, sha)
 	}
 	return nil
+}
+
+func TestBucketDefaultEncryptionRejected(t *testing.T) {
+	ctx := context.Background()
+	client := &Client{
+		backend: &beRoot{
+			b2i: &testRoot{
+				bucketMap: make(map[string]map[string]string),
+				errs:      &errCont{},
+			},
+		},
+	}
+	bucket, err := client.NewBucket(ctx, "bkt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	table := []struct {
+		name string
+		sse  *ServerSideEncryption
+		ok   bool
+	}{
+		{name: "unset", sse: nil, ok: true},
+		{name: "sse-b2", sse: SSEB2WithAES256(), ok: true},
+		{name: "none", sse: &ServerSideEncryption{Mode: "none"}},
+		{name: "sse-c", sse: &ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"}},
+		{name: "empty", sse: &ServerSideEncryption{}},
+		{name: "sse-b2 without algorithm", sse: &ServerSideEncryption{Mode: "SSE-B2"}},
+	}
+	for _, ent := range table {
+		t.Run(ent.name, func(t *testing.T) {
+			attrs := &BucketAttrs{DefaultServerSideEncryption: ent.sse}
+			_, err := client.NewBucket(ctx, "new-"+ent.name, attrs)
+			if (err == nil) != ent.ok {
+				t.Errorf("NewBucket(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
+			}
+			// Attrs are ignored when the bucket already exists.
+			if _, err := client.NewBucket(ctx, "bkt", attrs); err != nil {
+				t.Errorf("NewBucket(existing, %+v): err = %v, want nil", ent.sse, err)
+			}
+			err = bucket.Update(ctx, attrs)
+			if (err == nil) != ent.ok {
+				t.Errorf("Update(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
+			}
+		})
+	}
+}
+
+func TestCreateKeyDispatch(t *testing.T) {
+	ctx := context.Background()
+
+	newClient := func() (*Client, *testRoot) {
+		root := &testRoot{
+			bucketMap: make(map[string]map[string]string),
+			errs:      &errCont{},
+		}
+		return &Client{backend: &beRoot{b2i: root}}, root
+	}
+
+	t.Run("ClientCreateKey routes to createKey", func(t *testing.T) {
+		client, root := newClient()
+		if _, err := client.CreateKey(ctx, "kn"); err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKey" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKey")
+		}
+		if root.lastKeyBucketID != "" {
+			t.Errorf("lastKeyBucketID = %q, want empty", root.lastKeyBucketID)
+		}
+	})
+
+	t.Run("ClientCreateKey with one BucketID routes to createKey", func(t *testing.T) {
+		client, root := newClient()
+		if _, err := client.CreateKey(ctx, "kn", BucketIDs("buck-a")); err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKey" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKey")
+		}
+		if root.lastKeyBucketID != "buck-a" {
+			t.Errorf("lastKeyBucketID = %q, want %q", root.lastKeyBucketID, "buck-a")
+		}
+	})
+
+	t.Run("ClientCreateKey with BucketIDs routes to createKeyMultiBucket", func(t *testing.T) {
+		client, root := newClient()
+		if _, err := client.CreateKey(ctx, "kn", BucketIDs("buck-a", "buck-b"), Prefix("p/")); err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKeyMultiBucket" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKeyMultiBucket")
+		}
+		if got, want := root.lastKeyBucketIDs, []string{"buck-a", "buck-b"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("lastKeyBucketIDs = %v, want %v", got, want)
+		}
+		if root.lastKeyPrefix != "p/" {
+			t.Errorf("lastKeyPrefix = %q, want %q", root.lastKeyPrefix, "p/")
+		}
+	})
+
+	t.Run("BucketCreateKey routes to createKey", func(t *testing.T) {
+		// testBucket.id() is "", so we only assert that Bucket.CreateKey
+		// avoids the multi-bucket path, not the propagated bucket id.
+		client, root := newClient()
+		bucket, err := client.NewBucket(ctx, "b", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatalf("NewBucket: %v", err)
+		}
+		if _, err := bucket.CreateKey(ctx, "kn", Capabilities("listFiles")); err != nil {
+			t.Fatalf("Bucket.CreateKey: %v", err)
+		}
+		if root.lastKeyMethod != "createKey" {
+			t.Errorf("lastKeyMethod = %q, want %q", root.lastKeyMethod, "createKey")
+		}
+	})
+
+	t.Run("BucketCreateKey rejects BucketIDs", func(t *testing.T) {
+		client, _ := newClient()
+		bucket, err := client.NewBucket(ctx, "b2", &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatalf("NewBucket: %v", err)
+		}
+		if _, err := bucket.CreateKey(ctx, "kn", BucketIDs("x")); err == nil {
+			t.Errorf("Bucket.CreateKey with BucketIDs: want error, got nil")
+		}
+	})
+}
+
+func TestBucketAttrsCORSAndFileLockPerBucket(t *testing.T) {
+	ctx := context.Background()
+	wantCORS := []CORSRule{{Name: "browser", AllowedOrigins: []string{"https://example.com"}}}
+	client := &Client{backend: &beRoot{b2i: &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs:      &errCont{},
+	}}}
+	locked, err := client.NewBucket(ctx, "locked-bucket", &BucketAttrs{Type: Private, CORSRules: wantCORS, FileLockEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := client.NewBucket(ctx, "plain-bucket", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := locked.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.CORSRules, wantCORS) || !got.FileLockEnabled {
+		t.Errorf("locked bucket attrs = %+v, want its own CORS rules and file lock", got)
+	}
+	got, err = plain.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.CORSRules) != 0 || got.FileLockEnabled {
+		t.Errorf("plain bucket attrs = %+v, want no CORS rules and no file lock", got)
+	}
 }

@@ -35,9 +35,10 @@ type b2RootInterface interface {
 	retry(error) bool
 	reauth(error) bool
 	reupload(error) bool
-	createBucket(context.Context, string, string, map[string]string, []LifecycleRule) (b2BucketInterface, error)
+	createBucket(context.Context, string, string, map[string]string, []LifecycleRule, *ServerSideEncryption, []CORSRule, bool) (b2BucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]b2BucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error)
+	createKeyMultiBucket(context.Context, string, []string, time.Duration, []string, string) (b2KeyInterface, error)
 	listKeys(context.Context, int, string) ([]b2KeyInterface, string, error)
 }
 
@@ -72,7 +73,7 @@ type b2FileInterface interface {
 	size() int64
 	timestamp() time.Time
 	status() string
-	deleteFileVersion(context.Context) error
+	deleteFileVersion(context.Context, bool) error
 	getFileInfo(context.Context) (b2FileInfoInterface, error)
 	listParts(context.Context, int, int) ([]b2FilePartInterface, int, error)
 	compileParts(int64, map[int]string) b2LargeFileInterface
@@ -215,7 +216,7 @@ func (*b2Root) reupload(err error) bool {
 	return base.Action(err) == base.AttemptNewUpload
 }
 
-func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule) (b2BucketInterface, error) {
+func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (b2BucketInterface, error) {
 	var baseRules []base.LifecycleRule
 	for _, rule := range rules {
 		baseRules = append(baseRules, base.LifecycleRule{
@@ -224,7 +225,14 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 			Prefix:                 rule.Prefix,
 		})
 	}
-	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules)
+	var baseSSE *b2types.ServerSideEncryption
+	if sse != nil {
+		baseSSE = &b2types.ServerSideEncryption{
+			Mode:      sse.Mode,
+			Algorithm: sse.Algorithm,
+		}
+	}
+	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE, toBaseCORSRules(corsRules), fileLockEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +249,21 @@ func (b *b2Root) listBuckets(ctx context.Context, name string, bucketTypes ...st
 		rtn = append(rtn, &b2Bucket{bucket})
 	}
 	return rtn, err
+}
+
+func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
+	var out []b2types.CORSRule
+	for _, rule := range rules {
+		out = append(out, b2types.CORSRule{
+			Name:              rule.Name,
+			AllowedOrigins:    rule.AllowedOrigins,
+			AllowedHeaders:    rule.AllowedHeaders,
+			AllowedOperations: rule.AllowedOperations,
+			ExposeHeaders:     rule.ExposeHeaders,
+			MaxAgeSeconds:     rule.MaxAgeSeconds,
+		})
+	}
+	return out
 }
 
 func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
@@ -265,17 +288,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.LifecycleRules = rules
 	}
 	if len(attrs.CORSRules) > 0 {
-		rules := []b2types.CORSRule{}
-		for _, rule := range attrs.CORSRules {
-			rules = append(rules, b2types.CORSRule{
-				AllowedOrigins:    rule.AllowedOrigins,
-				AllowedHeaders:    rule.AllowedHeaders,
-				AllowedOperations: rule.AllowedOperations,
-				ExposeHeaders:     rule.ExposeHeaders,
-				MaxAgeSeconds:     rule.MaxAgeSeconds,
-			})
-		}
-		b.b.CORSRules = rules
+		b.b.CORSRules = toBaseCORSRules(attrs.CORSRules)
 	}
 
 	if attrs.DefaultRetention != nil {
@@ -297,7 +310,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 
 	b.b.FileLockEnabled = attrs.FileLockEnabled
 
-	if b.b.ReplicationConfiguration != nil {
+	if attrs.ReplicationConfig != nil {
 		asRepSource := b2types.AsReplicationSource{
 			KeyID:            attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID,
 			ReplicationRules: make([]b2types.ReplicationRules, len(attrs.ReplicationConfig.AsReplicationSource.ReplicationRules)),
@@ -341,6 +354,14 @@ func (b *b2Root) createKey(ctx context.Context, name string, caps []string, vali
 	return &b2Key{k}, nil
 }
 
+func (b *b2Root) createKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (b2KeyInterface, error) {
+	k, err := b.b.CreateKeyMultiBucket(ctx, name, caps, valid, bucketIDs, prefix)
+	if err != nil {
+		return nil, err
+	}
+	return &b2Key{k}, nil
+}
+
 func (b *b2Root) listKeys(ctx context.Context, max int, next string) ([]b2KeyInterface, string, error) {
 	keys, next, err := b.b.ListKeys(ctx, max, next)
 	if err != nil {
@@ -374,11 +395,29 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 			Prefix:                 rule.Prefix,
 		})
 	}
-	return &BucketAttrs{
-		LifecycleRules: rules,
-		Info:           b.b.Info,
-		Type:           BucketType(b.b.Type),
+	attrs := &BucketAttrs{
+		LifecycleRules:  rules,
+		Info:            b.b.Info,
+		Type:            BucketType(b.b.Type),
+		FileLockEnabled: b.b.FileLockEnabled,
 	}
+	for _, rule := range b.b.CORSRules {
+		attrs.CORSRules = append(attrs.CORSRules, CORSRule{
+			Name:              rule.Name,
+			AllowedOrigins:    rule.AllowedOrigins,
+			AllowedHeaders:    rule.AllowedHeaders,
+			AllowedOperations: rule.AllowedOperations,
+			ExposeHeaders:     rule.ExposeHeaders,
+			MaxAgeSeconds:     rule.MaxAgeSeconds,
+		})
+	}
+	if sse := b.b.DefaultServerSideEncryption; sse != nil {
+		attrs.DefaultServerSideEncryption = &ServerSideEncryption{
+			Mode:      sse.Mode,
+			Algorithm: sse.Algorithm,
+		}
+	}
+	return attrs
 }
 
 func (b *b2Bucket) id() string { return b.b.ID }
@@ -484,8 +523,8 @@ func (b *b2URL) reload(ctx context.Context) error {
 	return b.b.Reload(ctx)
 }
 
-func (b *b2File) deleteFileVersion(ctx context.Context) error {
-	return b.b.DeleteFileVersion(ctx)
+func (b *b2File) deleteFileVersion(ctx context.Context, bypassGovernance bool) error {
+	return b.b.DeleteFileVersion(ctx, bypassGovernance)
 }
 
 func (b *b2File) name() string {

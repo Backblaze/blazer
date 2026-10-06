@@ -1,0 +1,506 @@
+#!/usr/bin/env bash
+# RESILIENCE blazer x upload.retry_503 -- the contract is bin/resilience/README.md;
+# the question is the upload.retry_503 row of bin/resilience/scenarios.tsv. What is
+# armed, what is asserted and which B2 page says so: the header of the Go
+# program at the end of this file.
+#
+# Written from the reference check, bin/resilience/b2-sdk-python/upload.retry_503.
+# Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+say() { printf 'RESILIENCE blazer upload.retry_503 @simulator: %s\n' "$1"; }
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard "" RESILIENCE_SIMULATOR_URL RESILIENCE_CONTROL_URL; then
+  say "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+  say "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-res-blazer.XXXXXX")" || {
+  say "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# The Go program is carried at the end of this file as an INERT heredoc, so
+# `bash -n` parses this check as the shell script it is.
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<MOD
+module sdkharness-resilience-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+MOD
+
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+"$work/check"
+exit $?
+
+: <<'__EOF_GO__'
+// blazer x upload.retry_503.
+//
+// Fault   fault b2_upload_file 503 service_unavailable (count 1), armed after
+//         setup, so the first upload attempt is the one that gets it
+// Assert  the recovery path, from GET /journal: exactly one injected 503 on
+//         b2_upload_file, then a successful b2_upload_file on a DIFFERENT
+//         uploadUrlId; and the end state: the file downloads intact
+//
+// The expected behaviour is B2's, not the tool's. b2_upload_file's 503
+// service_unavailable: "Call b2_get_upload_url again to get a new auth token."
+// https://www.backblaze.com/apidocs/b2-upload-file
+// The Integration Checklist, Uploading Files: if "The HTTP response status is
+// between 500-599, including 503 Service Unavailable", "the developer should call
+// b2_get_upload_url or b2_get_upload_part_url and re-attempt the upload using the
+// new URL and auth key pair".
+// https://www.backblaze.com/docs/cloud-storage-integration-checklist
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
+)
+
+const scenario = "upload.retry_503"
+
+func runCheck(ctx context.Context) error {
+	if err := resetControlState(); err != nil {
+		return err
+	}
+	_, bucket, err := setup(ctx)
+	if err != nil {
+		return err
+	}
+	payload := payloadOf(1024)
+	name := "res/retry_503.txt"
+	if err := arm("/faults", map[string]interface{}{"on": "b2_upload_file", "status": 503, "code": "service_unavailable", "count": 1}); err != nil {
+		return err
+	}
+	if err := uploadOrFail(ctx, bucket, name, payload, nil); err != nil {
+		return err
+	}
+	if err := roundTrip(ctx, bucket, name, payload); err != nil {
+		return err
+	}
+	entries, err := journal()
+	if err != nil {
+		return err
+	}
+	return assertFreshURLRetry(entries, injected("b2_upload_file", 503), "injected 503")
+}
+
+// ---------------------------------------------------------------------------
+// Shared plumbing. Identical in every blazer resilience check; runCheck above is
+// the only part that differs. Contract: bin/resilience/README.md.
+// ---------------------------------------------------------------------------
+
+const slug = "blazer"
+
+// The closed reason set, mirrored from bin/resilience/README.md. not-claimed is
+// the runner's alone; no-client-option is valid only on a scenario whose
+// `needs` is not `-`, and the runner enforces both.
+const (
+	reasonNoRuntime = "missing-runtime"
+	reasonNoOption  = "no-client-option"
+)
+
+type amberErr struct{ reason, detail string }
+
+func (e *amberErr) Error() string { return e.reason + ": " + e.detail }
+
+type failErr struct{ step, detail string }
+
+func (e *failErr) Error() string { return e.step + ": " + e.detail }
+
+func failf(step, format string, args ...interface{}) error {
+	return &failErr{step: step, detail: tidy(fmt.Sprintf(format, args...), 180)}
+}
+
+// stepErr is a FAIL naming the step. There is no unreachable/unauthorized amber
+// here: the runner supplies the server and the credential, so either failing
+// is a harness defect.
+func stepErr(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch err.(type) {
+	case *amberErr, *failErr:
+		return err
+	}
+	return failf(step, "%T: %s", err, err.Error())
+}
+
+// tidy keeps a detail to one short printable line. The only credential in play
+// is the fixed simulator one, but a detail still never carries a token.
+var opaqueToken = regexp.MustCompile(`[A-Za-z0-9+/=_-]{25,}`)
+
+func tidy(s string, limit int) string {
+	s = opaqueToken.ReplaceAllString(strings.Join(strings.Fields(s), " "), "REDACTED")
+	if len(s) > limit {
+		s = s[:limit] + "..."
+	}
+	return s
+}
+
+func say(verdict string) {
+	fmt.Printf("RESILIENCE %s %s @simulator: %s\n", slug, scenario, verdict)
+}
+
+func note(format string, args ...interface{}) {
+	fmt.Printf("NOTE %s %s: %s\n", slug, scenario, tidy(fmt.Sprintf(format, args...), 600))
+}
+
+// --- the control plane ------------------------------------------------------
+
+func control(method, path string, body interface{}) ([]byte, error) {
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequest(method, os.Getenv("RESILIENCE_CONTROL_URL")+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("content-type", "application/json")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("control %s %s: HTTP %d %s", method, path, resp.StatusCode, data)
+	}
+	return data, nil
+}
+
+func arm(path string, spec map[string]interface{}) error {
+	_, err := control("POST", path, spec)
+	return stepErr("arm fault", err)
+}
+
+type entry struct {
+	Seq         int     `json:"seq"`
+	Endpoint    string  `json:"endpoint"`
+	Status      *int    `json:"status"`
+	Fault       *string `json:"fault"`
+	UploadURLID *string `json:"uploadUrlId"`
+}
+
+func (e entry) status() int {
+	if e.Status == nil {
+		return 0
+	}
+	return *e.Status
+}
+
+func (e entry) fault() string {
+	if e.Fault == nil {
+		return ""
+	}
+	return *e.Fault
+}
+
+func (e entry) urlID() string {
+	if e.UploadURLID == nil {
+		return ""
+	}
+	return *e.UploadURLID
+}
+
+func journal() ([]entry, error) {
+	data, err := control("GET", "/journal", nil)
+	if err != nil {
+		return nil, stepErr("journal", err)
+	}
+	var parsed struct {
+		Entries []entry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, stepErr("journal", err)
+	}
+	var current []entry
+	for _, e := range parsed.Entries {
+		if e.Seq > journalFloor {
+			current = append(current, e)
+		}
+	}
+	return current, nil
+}
+
+// journalFloor is the highest journal seq present when this check started. The
+// simulator's journal is global and has no clear route, so a check that reads
+// it must ignore what earlier checks on the same simulator left behind.
+var journalFloor int
+
+// resetControlState makes the check hermetic on a reused simulator: it clears
+// every armed fault (DELETE /faults, which also drops queued wire faults) and
+// remembers where the journal stands so earlier traffic is not counted. It does
+// not rewind the simulator clock (POST /clock only moves forward).
+func resetControlState() error {
+	if _, err := control("DELETE", "/faults", nil); err != nil {
+		return stepErr("reset faults", err)
+	}
+	data, err := control("GET", "/journal", nil)
+	if err != nil {
+		return stepErr("journal baseline", err)
+	}
+	var parsed struct {
+		Entries []entry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return stepErr("journal baseline", err)
+	}
+	journalFloor = 0
+	for _, e := range parsed.Entries {
+		if e.Seq > journalFloor {
+			journalFloor = e.Seq
+		}
+	}
+	return nil
+}
+
+// after: entries on endpoint later than seq, with status (0 = any).
+func after(entries []entry, seq int, endpoint string, status int) []entry {
+	var found []entry
+	for _, e := range entries {
+		if e.Seq > seq && e.Endpoint == endpoint && (status == 0 || e.status() == status) {
+			found = append(found, e)
+		}
+	}
+	return found
+}
+
+func matching(entries []entry, pred func(entry) bool) []entry {
+	var found []entry
+	for _, e := range entries {
+		if pred(e) {
+			found = append(found, e)
+		}
+	}
+	return found
+}
+
+func injected(endpoint string, status int) func(entry) bool {
+	return func(e entry) bool { return e.Endpoint == endpoint && e.fault() == "injected" && e.status() == status }
+}
+
+func wired(endpoint, kind string) func(entry) bool {
+	return func(e entry) bool { return e.Endpoint == endpoint && e.fault() == kind }
+}
+
+func countOn(entries []entry, endpoint string) int {
+	return len(matching(entries, func(e entry) bool { return e.Endpoint == endpoint }))
+}
+
+// assertFreshURLRetry is the upload scenarios' shared recovery path: exactly one
+// faulted b2_upload_file, then a successful one on a DIFFERENT uploadUrlId.
+func assertFreshURLRetry(entries []entry, faulted func(entry) bool, what string) error {
+	hits := matching(entries, faulted)
+	if len(hits) != 1 {
+		return failf("journal", "%d %s on b2_upload_file, expected 1", len(hits), what)
+	}
+	retries := after(entries, hits[0].Seq, "b2_upload_file", 200)
+	if len(retries) == 0 {
+		return failf("journal", "no successful b2_upload_file after the %s", what)
+	}
+	if retries[0].urlID() == "" || retries[0].urlID() == hits[0].urlID() {
+		return failf("recovery path", "the retry reused the upload URL that got the %s", what)
+	}
+	return nil
+}
+
+// --- the tool -----------------------------------------------------------------
+
+func newClient(ctx context.Context, extra ...b2.ClientOption) (*b2.Client, error) {
+	opts := append([]b2.ClientOption{
+		b2.APIBase(os.Getenv("RESILIENCE_SIMULATOR_URL")),
+		b2.UserAgent("sdkharness-resilience/blazer"),
+	}, extra...)
+	client, err := b2.NewClient(ctx, "test-key-id", "test-key", opts...)
+	return client, stepErr("authenticate", err)
+}
+
+// newBucket: every server is fresh and discarded, so no remote cleanup is owed.
+func newBucket(ctx context.Context, client *b2.Client) (*b2.Bucket, error) {
+	buf := make([]byte, 6)
+	_, _ = rand.Read(buf)
+	bucket, err := client.NewBucket(ctx, "sdkharness-res-"+hex.EncodeToString(buf), &b2.BucketAttrs{Type: b2.Private})
+	return bucket, stepErr("create bucket", err)
+}
+
+func setup(ctx context.Context, extra ...b2.ClientOption) (*b2.Client, *b2.Bucket, error) {
+	client, err := newClient(ctx, extra...)
+	if err != nil {
+		return nil, nil, err
+	}
+	bucket, err := newBucket(ctx, client)
+	return client, bucket, err
+}
+
+func payloadOf(n int) []byte {
+	seed := []byte("sdkharness resilience blazer payload ")
+	buf := make([]byte, n)
+	for i := range buf {
+		buf[i] = seed[i%len(seed)] ^ byte(i*31)
+	}
+	return buf
+}
+
+func sha1hex(payload []byte) string {
+	sum := sha1.Sum(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+// upload writes payload to name; tune runs before the first Write, because
+// blazer requires Writer fields to be set before then (godoc, Writer). The
+// error is returned raw so a scenario can decide what it means.
+func upload(ctx context.Context, bucket *b2.Bucket, name string, payload []byte, tune func(*b2.Writer)) error {
+	writer := bucket.Object(name).NewWriter(ctx)
+	if tune != nil {
+		tune(writer)
+	}
+	if _, err := writer.Write(payload); err != nil {
+		writer.Close()
+		return err
+	}
+	return writer.Close()
+}
+
+// uploadOrFail is upload, where any error reaching the caller is the FAIL.
+func uploadOrFail(ctx context.Context, bucket *b2.Bucket, name string, payload []byte, tune func(*b2.Writer)) error {
+	if err := upload(ctx, bucket, name, payload, tune); err != nil {
+		tries := -1
+		if entries, jerr := journal(); jerr == nil {
+			tries = countOn(entries, "b2_upload_file") + countOn(entries, "b2_upload_part")
+		}
+		return failf("upload", "%T reached the caller after %d upload attempt(s); the upload was not recovered: %s", err, tries, err.Error())
+	}
+	return nil
+}
+
+// roundTrip downloads name and compares it with payload.
+func roundTrip(ctx context.Context, bucket *b2.Bucket, name string, payload []byte) error {
+	reader := bucket.Object(name).NewReader(ctx)
+	got, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		return stepErr("download", err)
+	}
+	if !bytes.Equal(got, payload) {
+		return failf("round trip", "downloaded %d bytes and they differ from the %d uploaded", len(got), len(payload))
+	}
+	return nil
+}
+
+func listNames(ctx context.Context, bucket *b2.Bucket) ([]string, error) {
+	var names []string
+	iter := bucket.List(ctx)
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	return names, stepErr("list", iter.Err())
+}
+
+// listFixture: the listing scenarios' setup -- one fixture object, uploaded
+// BEFORE anything is armed.
+const fixtureName = "res/listing.txt"
+
+func listFixture(ctx context.Context, extra ...b2.ClientOption) (*b2.Bucket, error) {
+	_, bucket, err := setup(ctx, extra...)
+	if err != nil {
+		return nil, err
+	}
+	if err := upload(ctx, bucket, fixtureName, []byte("sdkharness resilience listing"), nil); err != nil {
+		return nil, stepErr("upload fixture", err)
+	}
+	return bucket, nil
+}
+
+func listExactlyFixture(ctx context.Context, bucket *b2.Bucket) error {
+	names, err := listNames(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	if len(names) != 1 || names[0] != fixtureName {
+		return failf("listing", "listed %d names, expected exactly the one fixture", len(names))
+	}
+	return nil
+}
+
+// Keeps every import used whichever scenario body sits above.
+var (
+	_ = errors.New
+	_ = time.Second
+)
+
+func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			say(fmt.Sprintf("FAIL (panic -- %s)", tidy(fmt.Sprint(r), 180)))
+			os.Exit(1)
+		}
+	}()
+	// A ceiling well inside the runner's 600 s, so a tool that never gives up
+	// is reported by this check, with its step, rather than by the watchdog.
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	err := runCheck(ctx)
+	cancel()
+	switch e := err.(type) {
+	case nil:
+		say("PASS")
+	case *amberErr:
+		say(fmt.Sprintf("COULD-NOT-RUN (%s -- %s)", e.reason, e.detail))
+	case *failErr:
+		say(fmt.Sprintf("FAIL (%s -- %s)", e.step, e.detail))
+		os.Exit(1)
+	default:
+		say(fmt.Sprintf("FAIL (check -- %s)", tidy(err.Error(), 180)))
+		os.Exit(1)
+	}
+}
+__EOF_GO__
