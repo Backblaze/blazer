@@ -173,7 +173,7 @@ func (ct *clientTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if m == "b2_list_buckets" {
 		if capture, ok := r.Context().Value(replicationReadKey{}).(*replicationRead); ok && resp.Body != nil {
 			body, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if readErr != nil {
 				return nil, readErr
 			}

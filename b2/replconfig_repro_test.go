@@ -185,9 +185,9 @@ func newListReplFixture(t *testing.T, bucketJSON string, canRead bool) (*Client,
 			if canRead {
 				auth = strings.ReplaceAll(auth, `"capabilities":[]`, `"capabilities":["readBucketReplications"]`)
 			}
-			fmt.Fprint(w, auth)
+			_, _ = fmt.Fprint(w, auth)
 		case strings.HasSuffix(r.URL.Path, "/b2_list_buckets"):
-			fmt.Fprintf(w, `{"buckets":[%s]}`, bucketJSON)
+			_, _ = fmt.Fprintf(w, `{"buckets":[%s]}`, bucketJSON)
 		case strings.HasSuffix(r.URL.Path, "/b2_update_bucket"):
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -198,7 +198,7 @@ func newListReplFixture(t *testing.T, bucketJSON string, canRead bool) (*Client,
 				t.Errorf("decode update body: %v", err)
 			}
 			*updates = append(*updates, sent)
-			fmt.Fprint(w, bucketJSON)
+			_, _ = fmt.Fprint(w, bucketJSON)
 		default:
 			t.Errorf("unexpected request path: %s", r.URL.Path)
 			http.NotFound(w, r)
