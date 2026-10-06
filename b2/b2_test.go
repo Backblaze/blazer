@@ -112,13 +112,17 @@ type testRoot struct {
 	auths     int
 	bucketMap map[string]map[string]string
 
-	corsRules       []CORSRule
-	fileLockEnabled bool
+	bucketSettings map[string]testBucketSettings
 
 	lastKeyMethod    string
 	lastKeyBucketID  string
 	lastKeyBucketIDs []string
 	lastKeyPrefix    string
+}
+
+type testBucketSettings struct {
+	corsRules       []CORSRule
+	fileLockEnabled bool
 }
 
 func (t *testRoot) authorizeAccount(context.Context, string, string, clientOptions) error {
@@ -208,14 +212,17 @@ func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]
 	}
 	m := make(map[string]string)
 	t.bucketMap[name] = m
-	t.corsRules = append([]CORSRule(nil), corsRules...)
-	t.fileLockEnabled = fileLockEnabled
+	if t.bucketSettings == nil {
+		t.bucketSettings = make(map[string]testBucketSettings)
+	}
+	st := testBucketSettings{corsRules: append([]CORSRule(nil), corsRules...), fileLockEnabled: fileLockEnabled}
+	t.bucketSettings[name] = st
 	return &testBucket{
 		n:               name,
 		errs:            t.errs,
 		files:           m,
-		corsRules:       t.corsRules,
-		fileLockEnabled: t.fileLockEnabled,
+		corsRules:       st.corsRules,
+		fileLockEnabled: st.fileLockEnabled,
 	}, nil
 }
 
@@ -226,8 +233,8 @@ func (t *testRoot) listBuckets(context.Context, string, ...string) ([]b2BucketIn
 			n:               k,
 			errs:            t.errs,
 			files:           v,
-			corsRules:       t.corsRules,
-			fileLockEnabled: t.fileLockEnabled,
+			corsRules:       t.bucketSettings[k].corsRules,
+			fileLockEnabled: t.bucketSettings[k].fileLockEnabled,
 		})
 	}
 	return b, nil
@@ -1650,4 +1657,36 @@ func TestCreateKeyDispatch(t *testing.T) {
 			t.Errorf("Bucket.CreateKey with BucketIDs: want error, got nil")
 		}
 	})
+}
+
+func TestBucketAttrsCORSAndFileLockPerBucket(t *testing.T) {
+	ctx := context.Background()
+	wantCORS := []CORSRule{{Name: "browser", AllowedOrigins: []string{"https://example.com"}}}
+	client := &Client{backend: &beRoot{b2i: &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs:      &errCont{},
+	}}}
+	locked, err := client.NewBucket(ctx, "locked-bucket", &BucketAttrs{Type: Private, CORSRules: wantCORS, FileLockEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := client.NewBucket(ctx, "plain-bucket", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := locked.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.CORSRules, wantCORS) || !got.FileLockEnabled {
+		t.Errorf("locked bucket attrs = %+v, want its own CORS rules and file lock", got)
+	}
+	got, err = plain.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.CORSRules) != 0 || got.FileLockEnabled {
+		t.Errorf("plain bucket attrs = %+v, want no CORS rules and no file lock", got)
+	}
 }
