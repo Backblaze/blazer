@@ -232,18 +232,7 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 			Algorithm: sse.Algorithm,
 		}
 	}
-	var baseCORSRules []b2types.CORSRule
-	for _, rule := range corsRules {
-		baseCORSRules = append(baseCORSRules, b2types.CORSRule{
-			Name:              rule.Name,
-			AllowedOrigins:    rule.AllowedOrigins,
-			AllowedHeaders:    rule.AllowedHeaders,
-			AllowedOperations: rule.AllowedOperations,
-			ExposeHeaders:     rule.ExposeHeaders,
-			MaxAgeSeconds:     rule.MaxAgeSeconds,
-		})
-	}
-	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE, baseCORSRules, fileLockEnabled)
+	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE, toBaseCORSRules(corsRules), fileLockEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +249,21 @@ func (b *b2Root) listBuckets(ctx context.Context, name string, bucketTypes ...st
 		rtn = append(rtn, &b2Bucket{bucket})
 	}
 	return rtn, err
+}
+
+func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
+	var out []b2types.CORSRule
+	for _, rule := range rules {
+		out = append(out, b2types.CORSRule{
+			Name:              rule.Name,
+			AllowedOrigins:    rule.AllowedOrigins,
+			AllowedHeaders:    rule.AllowedHeaders,
+			AllowedOperations: rule.AllowedOperations,
+			ExposeHeaders:     rule.ExposeHeaders,
+			MaxAgeSeconds:     rule.MaxAgeSeconds,
+		})
+	}
+	return out
 }
 
 func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
@@ -284,17 +288,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.LifecycleRules = rules
 	}
 	if len(attrs.CORSRules) > 0 {
-		rules := []b2types.CORSRule{}
-		for _, rule := range attrs.CORSRules {
-			rules = append(rules, b2types.CORSRule{
-				AllowedOrigins:    rule.AllowedOrigins,
-				AllowedHeaders:    rule.AllowedHeaders,
-				AllowedOperations: rule.AllowedOperations,
-				ExposeHeaders:     rule.ExposeHeaders,
-				MaxAgeSeconds:     rule.MaxAgeSeconds,
-			})
-		}
-		b.b.CORSRules = rules
+		b.b.CORSRules = toBaseCORSRules(attrs.CORSRules)
 	}
 
 	if attrs.DefaultRetention != nil {

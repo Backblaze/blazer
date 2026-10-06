@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Client.NewBucket` sends `BucketAttrs.CORSRules` and `BucketAttrs.FileLockEnabled` in `b2_create_bucket`; they were dropped.
 - `Bucket.Attrs` and the buckets returned by `Client.Bucket` and `Client.ListBuckets` report `CORSRules` and `FileLockEnabled`.
+- `Bucket.Update` sends `CORSRule.Name` as `corsRuleName`; it was dropped.
 
 ## [0.8.0] - 2026-09-15
 
