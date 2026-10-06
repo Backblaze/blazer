@@ -1,0 +1,199 @@
+name: Require area-owner approvals
+
+# Posts a commit status (`area-owner-approvals`) that stays red until every
+# AREA the PR touches has been approved by at least one of that area's owners.
+# Areas + owners are defined ONCE in .github/CODEOWNERS. This workflow derives
+# the required reviewers from CODEOWNERS + the PR's changed files, so there is
+# no roster to keep in sync.
+#
+# This is intentionally a SOFT guardrail: it is NOT wired into branch protection, so it
+# never blocks a merge. The red/green status is a notification signal that flags which area
+# owners still need to review; merging stays at the team's discretion.
+#
+# Behaviour:
+# - The PR author counts as implicitly approved for areas they own.
+# - An approval stays valid even after new commits are pushed (latest review per user).
+# - For each touched area: satisfied when >=1 owner's latest review is APPROVED and
+#   no owner's latest review is CHANGES_REQUESTED.
+# - A trailing `*` catch-all in CODEOWNERS makes the default owners responsible for any
+#   path no more-specific rule matches, so every changed file resolves to some area. As
+#   defense-in-depth, if (despite the catch-all) no rule matches, the gate fails safe
+#   (red) rather than passing, add a rule in .github/CODEOWNERS to resolve it.
+#
+# To change ownership, edit .github/CODEOWNERS only.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+
+permissions:
+  pull-requests: read
+  statuses: write
+  contents: read
+
+jobs:
+  check:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compute area-owner approval status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.review.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Fallback SHA so the failure trap can still post a status if the
+          # PR_JSON fetch below fails before HEAD_SHA is computed.
+          HEAD_SHA="$EVENT_HEAD_SHA"
+          STATUS_POSTED=0
+
+          post_status() {
+            local state="$1"
+            local description="${2:0:140}"
+            [ -n "$HEAD_SHA" ] || return 0
+            gh api "repos/$REPO/statuses/$HEAD_SHA" \
+              -f state="$state" \
+              -f context="area-owner-approvals" \
+              -f description="$description" \
+              -f target_url="$RUN_URL" >/dev/null
+            STATUS_POSTED=1
+          }
+
+          on_error() {
+            if [ "$STATUS_POSTED" -eq 0 ]; then
+              post_status error "Workflow failed; see Actions logs." || true
+            fi
+          }
+          trap on_error ERR
+
+          # Match GitHub's native CODEOWNERS engine (gitignore-style globs).
+          python3 -m pip install --quiet --disable-pip-version-check pathspec==1.1.1
+
+          PR_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER")
+          HEAD_SHA=$(jq -r .head.sha <<<"$PR_JSON")
+          BASE_SHA=$(jq -r .base.sha <<<"$PR_JSON")
+          AUTHOR=$(jq -r .user.login <<<"$PR_JSON")
+          export AUTHOR
+
+          # Read CODEOWNERS from the PR's BASE commit, not the checked-out merge ref, so a
+          # PR that edits CODEOWNERS cannot grade itself against its own modified version.
+          # Tolerate a 404 (CODEOWNERS may not exist on the base for the first PR that adds it).
+          CODEOWNERS_FILE="$RUNNER_TEMP/CODEOWNERS"
+          export CODEOWNERS_FILE
+          if ! gh api "repos/$REPO/contents/.github/CODEOWNERS?ref=$BASE_SHA" --jq '.content' 2>/dev/null | base64 --decode > "$CODEOWNERS_FILE"; then
+            : > "$CODEOWNERS_FILE"
+          fi
+
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' \
+            > "$RUNNER_TEMP/files.txt"
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            > "$RUNNER_TEMP/reviews.json"
+
+          python3 - <<'PY'
+          import json, os
+          from pathspec.patterns import GitWildMatchPattern
+
+          tmp = os.environ["RUNNER_TEMP"]
+          author = os.environ.get("AUTHOR", "").lower()
+
+          # --- parse CODEOWNERS into ordered (pattern, [owners_lc]) rules ---
+          rules = []
+          with open(os.environ["CODEOWNERS_FILE"]) as f:
+              for line in f:
+                  line = line.strip()
+                  if not line or line.startswith("#"):
+                      continue
+                  parts = line.split()
+                  pattern = parts[0]
+                  owners = [o.lstrip("@").lower() for o in parts[1:]]
+                  rules.append((pattern, owners))
+
+          # GitHub's CODEOWNERS engine is gitignore-style; defer to pathspec's
+          # gitwildmatch so `*`, `genblaze-*`, anchored dirs, etc. all match correctly.
+          def matches(pattern, path):
+              return GitWildMatchPattern(pattern).match_file(path)
+
+          def owners_for(path):
+              chosen = None
+              for pattern, owners in rules:   # last match wins
+                  if matches(pattern, path):
+                      chosen = (pattern, owners)
+              return chosen
+
+          # --- changed files -> touched areas with owners ---
+          areas = {}  # pattern -> set(owners_lc)
+          with open(os.path.join(tmp, "files.txt")) as f:
+              for line in f:
+                  path = line.strip()
+                  if not path:
+                      continue
+                  res = owners_for(path)
+                  if not res:
+                      continue
+                  pattern, owners = res
+                  if owners:
+                      areas.setdefault(pattern, set()).update(owners)
+
+          # --- latest review state per user ---
+          with open(os.path.join(tmp, "reviews.json")) as f:
+              reviews = json.load(f)
+          state_by_user = {}
+          for r in sorted(reviews, key=lambda r: r.get("submitted_at") or ""):
+              login = ((r.get("user") or {}).get("login") or "").lower()
+              st = r.get("state")
+              if st in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+                  state_by_user[login] = st
+
+          # --- evaluate each touched area ---
+          blocked = []  # (pattern, "changes"|"awaiting", [users])
+          for pattern, owners in areas.items():
+              o = set(owners)
+              o.discard(author)  # author implicitly approves their own area
+              if not o:
+                  continue
+              changes = sorted(u for u in o if state_by_user.get(u) == "CHANGES_REQUESTED")
+              approved = [u for u in o if state_by_user.get(u) == "APPROVED"]
+              if changes:
+                  blocked.append((pattern, "changes", changes))
+              elif approved:
+                  continue
+              else:
+                  blocked.append((pattern, "awaiting", sorted(o)))
+
+          if not areas:
+              # Fail-safe: with the `*` catch-all this is near-unreachable, but if no rule
+              # matched we go red rather than waving the PR through (defense-in-depth).
+              state, desc = "failure", "No CODEOWNERS rule matched the changed files, add a rule in .github/CODEOWNERS."
+          elif not blocked:
+              state, desc = "success", "All required area owners have approved."
+          else:
+              state = "failure"
+              parts = []
+              for pattern, kind, users in blocked:
+                  if kind == "changes":
+                      parts.append(f"{pattern}: changes requested by {','.join(users)}")
+                  else:
+                      parts.append(f"{pattern}: awaiting {','.join(users)}")
+              desc = "; ".join(parts)
+
+          with open(os.path.join(tmp, "gate.out"), "w") as f:
+              f.write(state + "\n")
+              f.write(desc + "\n")
+          PY
+
+          state=$(sed -n '1p' "$RUNNER_TEMP/gate.out")
+          description=$(sed -n '2p' "$RUNNER_TEMP/gate.out")
+          echo "state=$state"
+          echo "description=$description"
+
+          post_status "$state" "$description"
