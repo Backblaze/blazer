@@ -724,6 +724,9 @@ func TestNewBucket(t *testing.T) {
 			continue
 		}
 		defer bucket.Delete(ctx)
+		if bucket.ID() == "" {
+			t.Errorf("%s: Bucket.ID() is empty after NewBucket", ent.name)
+		}
 		if err := bucket.Update(ctx, nil); err != nil {
 			t.Errorf("%s: Update(ctx, nil): %v", ent.name, err)
 			continue

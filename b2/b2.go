@@ -522,6 +522,12 @@ func (b *Bucket) Name() string {
 	return b.b.name()
 }
 
+// ID returns the bucket's B2 identifier, as reported when the bucket was
+// created or listed. It makes no network call.
+func (b *Bucket) ID() string {
+	return b.b.id()
+}
+
 // Object represents a B2 object.
 type Object struct {
 	attrs *Attrs
