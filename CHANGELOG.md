@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `b2_authorize_account` and the other general API calls now target the B2 Native API v4. `(*base.B2).CreateKey` and `(*b2.Bucket).CreateKey` continue to target the v3 `b2_create_key` endpoint and produce legacy single-bucket keys.
 - `base.CreateBucket` takes the bucket's CORS rules and whether Object Lock is enabled as additional arguments.
+- A connection error on an upload now names the request, so its message reads `b2_upload_file: 0: connection reset` instead of `b2 error: connection reset`. Connection errors on every other request are unchanged.
 
 ### Fixed
 
@@ -29,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ObjectIterator` no longer ends a listing early, with no error, when a page is empty or all its entries are filtered out (hidden listings skip unfinished uploads) but B2 returned a cursor to the next page. This affected `List`, `ListHidden` and `ListUnfinished`. If a backend keeps returning an empty page with the same cursor, the iterator now stops with an error instead of repeating the request.
 - `Bucket.Update` removes every lifecycle rule when `BucketAttrs.LifecycleRules` is an empty, non-nil slice, as its documentation says. The empty list was dropped from the request, so the rules stayed and the call reported success.
 - `Bucket.Update` sends lifecycle rules only when `BucketAttrs.LifecycleRules` is set. It used to re-send the cached rules on every update, which replaced rules changed elsewhere, such as through the S3-compatible API, since B2 replaces them wholesale. A nil `LifecycleRules` now leaves them untouched.
+- Uploads fetch a new upload URL after a connection-level failure (a reset or a stall), as B2's Integration Checklist asks, instead of retrying the broken one. An HTTP response such as 429 or 503 with `Retry-After` still waits as told and retries the same URL.
+- A `Reader` gives up on a chunk that keeps arriving truncated after 21 attempts (the first plus the 20 retries allowed for any download), with an error that wraps `io.ErrUnexpectedEOF`. It used to retry forever, until the caller's context ended. The wait between attempts grows from 1 ms to a cap of about 16 s, so an interruption of around two minutes is still survived.
 
 ## [0.8.0] - 2026-09-15
 
