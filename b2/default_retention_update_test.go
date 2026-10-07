@@ -33,10 +33,25 @@ type drFixture struct {
 	t                   *testing.T
 	allowRetentionWrite bool
 	unlocked            bool // the bucket does not have Object Lock enabled yet
+	retention           *drRetention
 	updates             []map[string]json.RawMessage
 }
 
-func (f *drFixture) bucketJSON(duration int, unit string) map[string]interface{} {
+// drRetention is the default retention the stub currently holds. An accepted
+// update that carries defaultRetention changes it, as the real service would.
+type drRetention struct {
+	Mode   string `json:"mode"`
+	Period struct {
+		Duration int    `json:"duration"`
+		Unit     string `json:"unit"`
+	} `json:"period"`
+}
+
+func (f *drFixture) bucketJSON() map[string]interface{} {
+	if f.retention == nil {
+		f.retention = &drRetention{Mode: "governance"}
+		f.retention.Period.Duration, f.retention.Period.Unit = 1, "days"
+	}
 	if f.unlocked {
 		return map[string]interface{}{
 			"bucketId": "bucket-id", "bucketName": "bucket", "bucketType": "allPrivate",
@@ -59,7 +74,7 @@ func (f *drFixture) bucketJSON(duration int, unit string) map[string]interface{}
 			"value": map[string]interface{}{
 				"isFileLockEnabled": true,
 				"defaultRetention": map[string]interface{}{
-					"mode": "governance", "period": map[string]interface{}{"duration": duration, "unit": unit},
+					"mode": f.retention.Mode, "period": map[string]interface{}{"duration": f.retention.Period.Duration, "unit": f.retention.Period.Unit},
 				},
 			},
 		},
@@ -79,7 +94,7 @@ func (f *drFixture) client() *Client {
 				}},
 			})
 		case strings.HasSuffix(req.URL.Path, "/b2_list_buckets"):
-			return drJSON(req, http.StatusOK, map[string]interface{}{"buckets": []interface{}{f.bucketJSON(1, "days")}})
+			return drJSON(req, http.StatusOK, map[string]interface{}{"buckets": []interface{}{f.bucketJSON()}})
 		case strings.HasSuffix(req.URL.Path, "/b2_update_bucket"):
 			var body map[string]json.RawMessage
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -93,7 +108,14 @@ func (f *drFixture) client() *Client {
 					})
 				}
 			}
-			return drJSON(req, http.StatusOK, f.bucketJSON(30, "days"))
+			if raw, ok := body["defaultRetention"]; ok {
+				var r drRetention
+				if err := json.Unmarshal(raw, &r); err != nil {
+					return nil, err
+				}
+				f.retention = &r
+			}
+			return drJSON(req, http.StatusOK, f.bucketJSON())
 		}
 		f.t.Errorf("unexpected request %s", req.URL)
 		return drJSON(req, http.StatusNotFound, map[string]interface{}{"status": 404, "code": "not_found", "message": "unexpected"})
@@ -181,8 +203,8 @@ func TestChangedDefaultRetentionIsSent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(attrs.DefaultRetention, &Retention{Mode: "governance", Period: &RetentionPeriod{Duration: 1, Unit: "days"}}) {
-		t.Logf("Attrs() after update reads the stubbed list response: %+v", attrs.DefaultRetention)
+	if !reflect.DeepEqual(attrs.DefaultRetention, want) {
+		t.Errorf("Attrs().DefaultRetention after the update = %+v, want %+v", attrs.DefaultRetention, want)
 	}
 }
 
