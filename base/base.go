@@ -589,6 +589,13 @@ type LifecycleRule struct {
 	DaysHiddenUntilDeleted int
 }
 
+func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2types.ServerSideEncryption {
+	if sse == nil || sse.Mode == "" {
+		return nil
+	}
+	return sse
+}
+
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
 func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool) (*Bucket, error) {
@@ -610,7 +617,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		Info:           info,
 		LifecycleRules: b2rules,
 
-		DefaultServerSideEncryption: sse,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(sse),
 		CORSRules:                   corsRules,
 		FileLockEnabled:             fileLockEnabled,
 	}
@@ -637,7 +644,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		rev:                         b2resp.Revision,
 		b2:                          b,
 		CORSRules:                   b2resp.CORSRules,
-		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 	}
 	if b2resp.FileLockConfig != nil {
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
@@ -704,7 +711,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 
 		CORSRules:                   b.CORSRules,
 		DefaultRetention:            b.DefaultRetention,
-		DefaultServerSideEncryption: b.DefaultServerSideEncryption,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b.DefaultServerSideEncryption),
 		FileLockEnabled:             b.FileLockEnabled,
 		ReplicationConfiguration:    b.ReplicationConfiguration,
 	}
@@ -731,7 +738,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		ID:                          b2resp.BucketID,
 		b2:                          b.b2,
 		CORSRules:                   b2resp.CORSRules,
-		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
 		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
 	}
@@ -816,7 +823,7 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 			rev:                         bucket.Revision,
 			b2:                          b,
 			CORSRules:                   bucket.CORSRules,
-			DefaultServerSideEncryption: bucket.DefaultServerSideEncryption.Value,
+			DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(bucket.DefaultServerSideEncryption.Value),
 		}
 		if bucket.FileLockConfig != nil {
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
