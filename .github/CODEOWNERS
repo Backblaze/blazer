@@ -1,0 +1,6 @@
+# Area ownership, opt-in. Add your @handle to an area to get review requests and the
+# `area-owner-approvals` check on PRs touching it. The last matching rule wins, so
+# keep the catch-all first and the specific rules after it.
+
+*            @goanpeca @sophiecarreras @ffumero2003
+/.github/    @goanpeca @sophiecarreras
