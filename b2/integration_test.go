@@ -215,6 +215,36 @@ func TestHideShowLive(t *testing.T) {
 	}
 }
 
+func TestCopyLive(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	bucket, done := startLiveTest(ctx, t)
+	defer done()
+
+	source, _, err := writeFile(ctx, bucket, "copy-source", 1024, 1e8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := bucket.Copy(ctx, source.ID(), "copy-destination")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination.ID() == "" || destination.ID() == source.ID() {
+		t.Errorf("copy fileId = %q, want a new id different from the source %q", destination.ID(), source.ID())
+	}
+	attrs, err := destination.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Size != 1024 {
+		t.Errorf("copied object size: got %d, want %d", attrs.Size, 1024)
+	}
+	if err := readFile(ctx, destination, attrs.SHA1, 1024, 1); err != nil {
+		t.Error(err)
+	}
+}
+
 type cancelReader struct {
 	r    io.Reader
 	n, l int

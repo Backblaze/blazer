@@ -361,6 +361,9 @@ func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, 
 }
 
 func (t *testBucket) hideFile(context.Context, string) (b2FileInterface, error) { return nil, nil }
+func (t *testBucket) copyFile(context.Context, string, string, string, string, string, string, map[string]string) (b2FileInterface, error) {
+	return nil, nil
+}
 func (t *testBucket) getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error) {
 	return "", nil
 }
@@ -513,6 +516,18 @@ func objectForDeleteOptionTest(file *testFile) *Object {
 	return &Object{f: &beFile{b2file: file, ri: root}}
 }
 
+func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
+	file := &testFile{n: "copy", a: "copy", files: map[string]string{"copy": "present"}}
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	object := &Object{f: &beFile{b2file: file, ri: root}}
+
+	if err := object.Delete(context.Background()); err != nil {
+		t.Fatalf("Delete copy-status object: %v", err)
+	}
+	if _, ok := file.files[file.n]; ok {
+		t.Fatal("Delete did not remove the copy-status object")
+	}
+}
 func (t *testFile) updateFileRetention(context.Context, *FileRetention, bool) error { return nil }
 func (t *testFile) updateFileLegalHold(context.Context, LegalHold) error            { return nil }
 

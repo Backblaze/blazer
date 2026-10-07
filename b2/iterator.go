@@ -270,8 +270,8 @@ func (b *Bucket) listObjects(ctx context.Context, count int, c *cursor) ([]*Obje
 	var objects []*Object
 	for _, f := range fs {
 		// b2_list_file_versions returns unfinished large files ("start"), but we're only interested in
-		// regular ("upload") and hidden ("hide") files.
-		if f.status() == "upload" || f.status() == "hide" {
+		// regular ("upload", or "copy" for a server-side copy) and hidden ("hide") files.
+		if st := f.status(); st == "upload" || st == "copy" || st == "hide" {
 			objects = append(objects, &Object{
 				name: f.name(),
 				f:    f,

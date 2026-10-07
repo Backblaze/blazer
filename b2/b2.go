@@ -578,7 +578,7 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 	retention, legalHold := fi.fileLock()
 	var state ObjectState
 	switch st {
-	case "upload":
+	case "upload", "copy":
 		state = Uploaded
 	case "start":
 		state = Started
@@ -727,7 +727,7 @@ func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
 		opt(options)
 	}
 	status := o.f.status()
-	if status == "upload" || status == "hide" {
+	if status == "upload" || status == "hide" || status == "copy" {
 		return o.f.deleteFileVersion(ctx, options.bypassGovernance)
 	} else {
 		return fmt.Errorf("%s is not a regular file or hide marker: %s", o.name, status)
