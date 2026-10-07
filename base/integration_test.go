@@ -36,8 +36,8 @@ import (
 )
 
 const (
-	apiID  = "B2_ACCOUNT_ID"
-	apiKey = "B2_SECRET_KEY"
+	apiID  = "B2_APPLICATION_KEY_ID"
+	apiKey = "B2_APPLICATION_KEY"
 )
 
 const (
@@ -57,7 +57,7 @@ func TestStorage(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 
@@ -433,7 +433,7 @@ func TestUploadAuthAfterConnectionHang(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 
@@ -503,7 +503,7 @@ func TestCancelledContextCancelsHTTPRequest(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 
@@ -550,7 +550,7 @@ func TestDeadlineExceededContextCancelsHTTPRequest(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 
@@ -593,7 +593,7 @@ func TestUnknownCA(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 
@@ -766,7 +766,7 @@ func TestUploadDownloadFilenameEscaping(t *testing.T) {
 	key := os.Getenv(apiKey)
 
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
 	ctx := context.Background()
 
