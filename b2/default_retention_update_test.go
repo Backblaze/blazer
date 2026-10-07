@@ -26,16 +26,31 @@ func drJSON(req *http.Request, status int, body interface{}) (*http.Response, er
 }
 
 // drFixture serves an Object Lock bucket whose default retention is 1 day of
-// governance. A request that carries defaultRetention is refused with a 401
-// unless allowRetentionWrite is set, as B2 does for a key that lacks
-// writeBucketRetentions. Every b2_update_bucket body is recorded.
+// governance. A request that carries defaultRetention or fileLockEnabled is
+// refused with a 401 unless allowRetentionWrite is set, as B2 does for a key
+// that lacks writeBucketRetentions. Every b2_update_bucket body is recorded.
 type drFixture struct {
 	t                   *testing.T
 	allowRetentionWrite bool
+	unlocked            bool // the bucket does not have Object Lock enabled yet
 	updates             []map[string]json.RawMessage
 }
 
 func (f *drFixture) bucketJSON(duration int, unit string) map[string]interface{} {
+	if f.unlocked {
+		return map[string]interface{}{
+			"bucketId": "bucket-id", "bucketName": "bucket", "bucketType": "allPrivate",
+			"bucketInfo": map[string]string{}, "revision": 1,
+			"fileLockConfiguration": map[string]interface{}{
+				"isClientAuthorizedToRead": true,
+				"value": map[string]interface{}{
+					"isFileLockEnabled": false,
+					"defaultRetention":  map[string]interface{}{"mode": nil, "period": nil},
+				},
+			},
+			"replicationConfiguration": map[string]interface{}{"value": nil},
+		}
+	}
 	return map[string]interface{}{
 		"bucketId": "bucket-id", "bucketName": "bucket", "bucketType": "allPrivate",
 		"bucketInfo": map[string]string{}, "revision": 1,
@@ -71,10 +86,12 @@ func (f *drFixture) client() *Client {
 				return nil, err
 			}
 			f.updates = append(f.updates, body)
-			if _, ok := body["defaultRetention"]; ok && !f.allowRetentionWrite {
-				return drJSON(req, http.StatusUnauthorized, map[string]interface{}{
-					"status": 401, "code": "unauthorized", "message": "requires writeBucketRetentions",
-				})
+			for _, field := range []string{"defaultRetention", "fileLockEnabled"} {
+				if _, ok := body[field]; ok && !f.allowRetentionWrite {
+					return drJSON(req, http.StatusUnauthorized, map[string]interface{}{
+						"status": 401, "code": "unauthorized", "message": field + " requires writeBucketRetentions",
+					})
+				}
 			}
 			return drJSON(req, http.StatusOK, f.bucketJSON(30, "days"))
 		}
@@ -98,8 +115,10 @@ func TestUnrelatedUpdateDoesNotSendCachedDefaultRetention(t *testing.T) {
 	if err := bucket.Update(ctx, &BucketAttrs{Info: map[string]string{"owner": "me"}}); err != nil {
 		t.Fatalf("an update that does not touch default retention failed: %v", err)
 	}
-	if _, sent := f.updates[0]["defaultRetention"]; sent {
-		t.Errorf("update sent defaultRetention %s although the caller did not change it", f.updates[0]["defaultRetention"])
+	for _, field := range []string{"defaultRetention", "fileLockEnabled"} {
+		if _, sent := f.updates[0][field]; sent {
+			t.Errorf("update sent %s %s although the caller did not change it", field, f.updates[0][field])
+		}
 	}
 }
 
@@ -123,8 +142,10 @@ func TestReadModifyWriteWithUnchangedRetentionDoesNotSendIt(t *testing.T) {
 	if err := bucket.Update(ctx, attrs); err != nil {
 		t.Fatalf("read-modify-write with an unchanged retention failed: %v", err)
 	}
-	if _, sent := f.updates[0]["defaultRetention"]; sent {
-		t.Errorf("update sent the unchanged defaultRetention %s", f.updates[0]["defaultRetention"])
+	for _, field := range []string{"defaultRetention", "fileLockEnabled"} {
+		if _, sent := f.updates[0][field]; sent {
+			t.Errorf("update sent the unchanged %s %s", field, f.updates[0][field])
+		}
 	}
 }
 
@@ -199,5 +220,41 @@ func TestUpdateWithRetentionWithoutPeriodDoesNotPanic(t *testing.T) {
 	}
 	if err := bucket.Update(ctx, &BucketAttrs{DefaultRetention: &Retention{Mode: "compliance"}}); err != nil {
 		t.Fatalf("Update: %v", err)
+	}
+}
+
+// Enabling Object Lock on a bucket that does not have it must still be sent.
+func TestEnablingObjectLockIsSent(t *testing.T) {
+	f := &drFixture{t: t, allowRetentionWrite: true, unlocked: true}
+	ctx := context.Background()
+	bucket, err := f.client().Bucket(ctx, "bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bucket.Update(ctx, &BucketAttrs{FileLockEnabled: true}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := string(f.updates[0]["fileLockEnabled"]); got != "true" {
+		t.Errorf("fileLockEnabled in the request = %q, want true", got)
+	}
+}
+
+// A failed update must leave the cached Object Lock state as it was.
+func TestFailedUpdateRestoresCachedFileLockEnabled(t *testing.T) {
+	f := &drFixture{t: t, unlocked: true} // refuses fileLockEnabled
+	ctx := context.Background()
+	bucket, err := f.client().Bucket(ctx, "bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached := func() bool { return bucket.b.(*beBucket).b2bucket.(*b2Bucket).b.FileLockEnabled }
+	if cached() {
+		t.Fatal("setup: the bucket should not have Object Lock enabled")
+	}
+	if err := bucket.Update(ctx, &BucketAttrs{FileLockEnabled: true}); err == nil {
+		t.Fatal("Update succeeded, want the refused request to fail")
+	}
+	if cached() {
+		t.Error("cached FileLockEnabled after a failed update = true, want the previous false")
 	}
 }

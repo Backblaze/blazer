@@ -323,7 +323,11 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		}
 	}
 
-	b.b.FileLockEnabled = attrs.FileLockEnabled
+	// Object Lock can only be enabled, never disabled, and sending true needs the
+	// writeBucketRetentions capability. Send it only when enabling a bucket that
+	// does not have it yet; the cached value is what goes on the wire.
+	previousFileLock := b.b.FileLockEnabled
+	b.b.FileLockEnabled = attrs.FileLockEnabled && !previousFileLock
 
 	if attrs.ReplicationConfig != nil {
 		asRepSource := b2types.AsReplicationSource{
@@ -352,6 +356,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b = newBucket
 	} else {
 		b.b.DefaultRetention = previousRetention
+		b.b.FileLockEnabled = previousFileLock
 	}
 	code, _ := base.Code(err)
 	if code == 409 {
