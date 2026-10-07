@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Writer` no longer hangs when a part of a large upload fails permanently. `sendChunk` held a read lock while blocked handing the next chunk to a worker, so the failing worker could never record the error and cancel the upload. `Write` also no longer takes its read lock recursively, which could deadlock against a waiting `Close`.
 - `Writer` upload workers exit when the writer's context is cancelled. With `ConcurrentUploads` of 2 or more, a failed part cancelled the context, `Close` then returned before signalling the remaining workers, and an idle worker goroutine stayed parked forever.
 - `ObjectIterator` no longer ends a listing early, with no error, when a page is empty or all its entries are filtered out (hidden listings skip unfinished uploads) but B2 returned a cursor to the next page. This affected `List`, `ListHidden` and `ListUnfinished`. If a backend keeps returning an empty page with the same cursor, the iterator now stops with an error instead of repeating the request.
+- `Bucket.Attrs`, and the buckets returned by `Client.Bucket`, `Client.NewBucket` and `Client.ListBuckets`, report `DefaultRetention`. It was decoded only by `Update` and never mapped to `BucketAttrs`.
+- `Bucket.Update` sends the default retention only when the caller changes it. It is the cached value that goes on the wire, and setting it needs the `writeBucketRetentions` capability, so an update of unrelated settings on an Object Lock bucket would otherwise be refused for keys without that capability. `Update` also no longer panics when B2 reports a default retention without a period unit.
 
 ## [0.8.0] - 2026-09-15
 
