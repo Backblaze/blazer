@@ -30,8 +30,10 @@ import (
 
 var errNoMoreContent = errors.New("416: out of content")
 
-// maxShortReadAttempts bounds retries of a chunk whose body arrives truncated.
-const maxShortReadAttempts = 10
+// maxShortReadAttempts bounds attempts at a chunk whose body arrives truncated.
+// It matches the 20 retries base allows for a download, which with the backoff
+// below rides out a network interruption of about a minute and a half.
+const maxShortReadAttempts = 20
 
 // Reader reads files from B2.
 type Reader struct {
@@ -171,12 +173,12 @@ func (r *Reader) thread() {
 				// Probably the network connection was closed early.  Retry.
 				attempts++
 				if attempts >= maxShortReadAttempts {
-					r.setErr(fmt.Errorf("b2 reader %d: got %dB of %dB after %d attempts", chunkID, i, rsize, attempts))
+					r.setErr(fmt.Errorf("b2 reader %d: got %dB of %dB after %d attempts: %w", chunkID, i, rsize, attempts, io.ErrUnexpectedEOF))
 					r.rcond.Broadcast()
 					return
 				}
 				blog.V(1).Infof("b2 reader %d: got %dB of %dB; retrying after %v", chunkID, i, rsize, b)
-				if err := b.wait(r.ctx); err != nil {
+				if err := b.wait(r.ctx, retryAfterFor(r.o.b.r)); err != nil {
 					r.setErr(err)
 					r.rcond.Broadcast()
 					return
@@ -340,12 +342,12 @@ func (noopResetter) Reset() error { return nil }
 
 type backoff time.Duration
 
-func (b *backoff) wait(ctx context.Context) error {
+func (b *backoff) wait(ctx context.Context, after func(time.Duration) <-chan time.Time) error {
 	if *b == 0 {
 		*b = backoff(time.Millisecond)
 	}
 	select {
-	case <-time.After(time.Duration(*b)):
+	case <-after(time.Duration(*b)):
 		if time.Duration(*b) < time.Second*10 {
 			*b <<= 1
 		}
