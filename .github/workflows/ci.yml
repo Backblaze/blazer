@@ -56,7 +56,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: ['1.18', stable]
+        # Go supports only the latest two releases. Test the oldest still-supported
+        # version and latest (stable). When a new Go ships, bump the pinned version
+        # to the new latest-minus-one release (for example, 1.26 becomes 1.27 when
+        # 1.28 is stable).
+        go-version: ['1.26', stable]
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
