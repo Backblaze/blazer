@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	apiID      = "B2_ACCOUNT_ID"
-	apiKey     = "B2_SECRET_KEY"
+	apiID      = "B2_APPLICATION_KEY_ID"
+	apiKey     = "B2_APPLICATION_KEY"
 	bucketName = "consistobucket"
 )
 
@@ -176,7 +176,7 @@ func startLiveTest(ctx context.Context, t *testing.T) (*b2.Bucket, func()) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
 	if id == "" || key == "" {
-		t.Skipf("B2_ACCOUNT_ID or B2_SECRET_KEY unset; skipping integration tests")
+		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 		return nil, nil
 	}
 	client, err := b2.NewClient(ctx, id, key)

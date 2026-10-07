@@ -1,0 +1,55 @@
+name: Live integration tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: '17 6 * * 5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-live
+  cancel-in-progress: false
+
+jobs:
+  test-live:
+    if: ${{ github.repository == 'Backblaze/blazer' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: live-tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: stable
+          cache-dependency-path: go.sum
+      - name: Check live credentials
+        id: creds
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+        run: |
+          if [[ -z "$B2_APPLICATION_KEY_ID" || -z "$B2_APPLICATION_KEY" ]]; then
+            echo '::error::The live-tests environment requires B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY.'
+            exit 1
+          fi
+      - name: Remove stale test buckets
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+        run: go run ./internal/bin/cleanup/cleanup.go
+      - name: Run live integration tests
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+        run: go test -v -count=1 -timeout 30m ./b2/... ./base/...
+      - name: Remove test buckets
+        if: ${{ always() && steps.creds.outcome == 'success' }}
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+        run: go run ./internal/bin/cleanup/cleanup.go

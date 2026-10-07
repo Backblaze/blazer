@@ -54,12 +54,13 @@ type beBucketInterface interface {
 	updateBucket(context.Context, *BucketAttrs) error
 	deleteBucket(context.Context) error
 	getUploadURL(context.Context) (beURLInterface, error)
-	startLargeFile(ctx context.Context, name, contentType string, info map[string]string) (beLargeFileInterface, error)
+	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold) (beLargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]beFileInterface, string, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]beFileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (beFileReaderInterface, error)
 	hideFile(context.Context, string) (beFileInterface, error)
+	copyFile(context.Context, string, string, string, string, string, string, map[string]string) (beFileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
 	baseURL() string
 	s3URL() string
@@ -72,7 +73,7 @@ type beBucket struct {
 }
 
 type beURLInterface interface {
-	uploadFile(context.Context, readResetter, int, string, string, string, map[string]string) (beFileInterface, error)
+	uploadFile(context.Context, readResetter, int, string, string, string, map[string]string, *FileRetention, LegalHold) (beFileInterface, error)
 }
 
 type beURL struct {
@@ -87,6 +88,8 @@ type beFileInterface interface {
 	timestamp() time.Time
 	status() string
 	deleteFileVersion(context.Context, bool) error
+	updateFileRetention(context.Context, *FileRetention, bool) error
+	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (beFileInfoInterface, error)
 	listParts(context.Context, int, int) ([]beFilePartInterface, int, error)
 	compileParts(int64, map[int]string) beLargeFileInterface
@@ -133,6 +136,7 @@ type beFileReader struct {
 
 type beFileInfoInterface interface {
 	stats() (string, string, int64, string, map[string]string, string, time.Time)
+	fileLock() (*FileRetention, LegalHold)
 }
 
 type beFilePartInterface interface {
@@ -147,13 +151,15 @@ type beFilePart struct {
 }
 
 type beFileInfo struct {
-	name   string
-	sha    string
-	size   int64
-	ct     string
-	info   map[string]string
-	status string
-	stamp  time.Time
+	name      string
+	sha       string
+	size      int64
+	ct        string
+	info      map[string]string
+	status    string
+	stamp     time.Time
+	retention *FileRetention
+	legalHold LegalHold
 }
 
 type beKeyInterface interface {
@@ -365,11 +371,11 @@ func (b *beBucket) getUploadURL(ctx context.Context) (beURLInterface, error) {
 	return url, nil
 }
 
-func (b *beBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string) (beLargeFileInterface, error) {
+func (b *beBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, retention *FileRetention, legalHold LegalHold) (beLargeFileInterface, error) {
 	var file beLargeFileInterface
 	f := func() error {
 		g := func() error {
-			f, err := b.b2bucket.startLargeFile(ctx, name, ct, info)
+			f, err := b.b2bucket.startLargeFile(ctx, name, ct, info, retention, legalHold)
 			if err != nil {
 				return err
 			}
@@ -510,6 +516,25 @@ func (b *beBucket) hideFile(ctx context.Context, name string) (beFileInterface, 
 	return file, nil
 }
 
+func (b *beBucket) copyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (beFileInterface, error) {
+	var file beFileInterface
+	f := func() error {
+		g := func() error {
+			copied, err := b.b2bucket.copyFile(ctx, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType, info)
+			if err != nil {
+				return err
+			}
+			file = &beFile{b2file: copied, ri: b.ri}
+			return nil
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
 func (b *beBucket) getDownloadAuthorization(ctx context.Context, p string, v time.Duration, s string) (string, error) {
 	var tok string
 	f := func() error {
@@ -544,13 +569,13 @@ func (b *beBucket) file(id, name string) beFileInterface {
 	}
 }
 
-func (b *beURL) uploadFile(ctx context.Context, r readResetter, size int, name, ct, sha1 string, info map[string]string) (beFileInterface, error) {
+func (b *beURL) uploadFile(ctx context.Context, r readResetter, size int, name, ct, sha1 string, info map[string]string, retention *FileRetention, legalHold LegalHold) (beFileInterface, error) {
 	var file beFileInterface
 	f := func() error {
 		if err := r.Reset(); err != nil {
 			return err
 		}
-		f, err := b.b2url.uploadFile(ctx, r, size, name, ct, sha1, info)
+		f, err := b.b2url.uploadFile(ctx, r, size, name, ct, sha1, info, retention, legalHold)
 		if err != nil {
 			return err
 		}
@@ -575,6 +600,22 @@ func (b *beFile) deleteFileVersion(ctx context.Context, bypassGovernance bool) e
 		return withReauth(ctx, b.ri, g)
 	}
 	return withBackoff(ctx, b.ri, f)
+}
+
+func (b *beFile) updateFileRetention(ctx context.Context, retention *FileRetention, bypassGovernance bool) error {
+	return withBackoff(ctx, b.ri, func() error {
+		return withReauth(ctx, b.ri, func() error {
+			return b.b2file.updateFileRetention(ctx, retention, bypassGovernance)
+		})
+	})
+}
+
+func (b *beFile) updateFileLegalHold(ctx context.Context, legalHold LegalHold) error {
+	return withBackoff(ctx, b.ri, func() error {
+		return withReauth(ctx, b.ri, func() error {
+			return b.b2file.updateFileLegalHold(ctx, legalHold)
+		})
+	})
 }
 
 func (b *beFile) size() int64 {
@@ -606,14 +647,17 @@ func (b *beFile) getFileInfo(ctx context.Context) (beFileInfoInterface, error) {
 				return err
 			}
 			name, sha, size, ct, info, status, stamp := fi.stats()
+			retention, legalHold := fi.fileLock()
 			fileInfo = &beFileInfo{
-				name:   name,
-				sha:    sha,
-				size:   size,
-				ct:     ct,
-				info:   info,
-				status: status,
-				stamp:  stamp,
+				name:      name,
+				sha:       sha,
+				size:      size,
+				ct:        ct,
+				info:      info,
+				status:    status,
+				stamp:     stamp,
+				retention: retention,
+				legalHold: legalHold,
 			}
 			return nil
 		}
@@ -771,6 +815,8 @@ func (b *beFileReader) id() string { return b.b2fileReader.id() }
 func (b *beFileInfo) stats() (string, string, int64, string, map[string]string, string, time.Time) {
 	return b.name, b.sha, b.size, b.ct, b.info, b.status, b.stamp
 }
+
+func (b *beFileInfo) fileLock() (*FileRetention, LegalHold) { return b.retention, b.legalHold }
 
 func (b *beFilePart) number() int  { return b.b2filePart.number() }
 func (b *beFilePart) sha1() string { return b.b2filePart.sha1() }
