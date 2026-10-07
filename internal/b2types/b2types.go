@@ -423,13 +423,14 @@ type ReplicationRules struct {
 }
 
 type CopyFileRequest struct {
-	SourceFileID        string            `json:"sourceFileId"`
-	FileName            string            `json:"fileName"`
-	DestinationBucketID string            `json:"destinationBucketId,omitempty"`
-	Range               string            `json:"range,omitempty"`
-	MetadataDirective   string            `json:"metadataDirective"`
-	ContentType         *string           `json:"contentType,omitempty"`
-	FileInfo            map[string]string `json:"fileInfo,omitempty"`
+	SourceFileID        string  `json:"sourceFileId"`
+	FileName            string  `json:"fileName"`
+	DestinationBucketID string  `json:"destinationBucketId,omitempty"`
+	Range               string  `json:"range,omitempty"`
+	MetadataDirective   string  `json:"metadataDirective"`
+	ContentType         *string `json:"contentType,omitempty"`
+	// A nil pointer omits fileInfo (COPY); a pointer to an empty map sends {}.
+	FileInfo *map[string]string `json:"fileInfo,omitempty"`
 }
 
 type CopyFileResponse UploadFileResponse

@@ -7,6 +7,7 @@ import (
 
 func TestCopyFileRequestWireShape(t *testing.T) {
 	empty, full := "", "text/plain"
+	info, noInfo := map[string]string{"k": "v"}, map[string]string{}
 	tests := []struct {
 		name string
 		in   CopyFileRequest
@@ -24,8 +25,13 @@ func TestCopyFileRequestWireShape(t *testing.T) {
 		},
 		{
 			name: "REPLACE sends contentType and fileInfo",
-			in:   CopyFileRequest{SourceFileID: "src", FileName: "dst", MetadataDirective: "REPLACE", ContentType: &full, FileInfo: map[string]string{"k": "v"}},
+			in:   CopyFileRequest{SourceFileID: "src", FileName: "dst", MetadataDirective: "REPLACE", ContentType: &full, FileInfo: &info},
 			want: `{"sourceFileId":"src","fileName":"dst","metadataDirective":"REPLACE","contentType":"text/plain","fileInfo":{"k":"v"}}`,
+		},
+		{
+			name: "REPLACE with an empty fileInfo sends {}",
+			in:   CopyFileRequest{SourceFileID: "src", FileName: "dst", MetadataDirective: "REPLACE", ContentType: &full, FileInfo: &noInfo},
+			want: `{"sourceFileId":"src","fileName":"dst","metadataDirective":"REPLACE","contentType":"text/plain","fileInfo":{}}`,
 		},
 		{
 			name: "a pointer to an empty contentType is still sent",

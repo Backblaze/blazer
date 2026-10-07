@@ -1510,7 +1510,10 @@ func (b *Bucket) CopyFile(ctx context.Context, sourceFileID, name, destinationBu
 	}
 	if metadataDirective == "REPLACE" {
 		b2req.ContentType = &contentType
-		b2req.FileInfo = info
+		if info == nil {
+			info = map[string]string{}
+		}
+		b2req.FileInfo = &info
 	}
 	b2resp := &b2types.CopyFileResponse{}
 	headers := map[string]string{"Authorization": b.b2.authToken}

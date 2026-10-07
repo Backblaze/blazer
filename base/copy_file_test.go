@@ -77,6 +77,13 @@ func TestCopyFileRequests(t *testing.T) {
 			want: map[string]any{"metadataDirective": "REPLACE", "contentType": "text/plain", "fileInfo": map[string]any{"k": "v"}},
 		},
 		{
+			name: "REPLACE with no info sends an explicit empty fileInfo",
+			call: func() (*File, error) {
+				return bucket.CopyFile(context.Background(), "src", "dst", "", "", "REPLACE", "text/plain", nil)
+			},
+			want: map[string]any{"metadataDirective": "REPLACE", "contentType": "text/plain", "fileInfo": map[string]any{}},
+		},
+		{
 			name: "destination bucket and range",
 			call: func() (*File, error) {
 				return bucket.CopyFile(context.Background(), "src", "dst", "other-bucket", "bytes=0-99", "COPY", "", nil)

@@ -13,10 +13,11 @@ import (
 // copyFixture serves two buckets, "a" and "b", and records every b2_copy_file
 // request body.
 type copyFixture struct {
-	t      *testing.T
-	copies []map[string]any
-	client *Client
-	srv    *httptest.Server
+	t          *testing.T
+	copies     []map[string]any
+	client     *Client
+	srv        *httptest.Server
+	listAction string // action reported for the copied version in listings and get_file_info
 }
 
 func newCopyFixture(t *testing.T) *copyFixture {
@@ -38,6 +39,11 @@ func newCopyFixture(t *testing.T) *copyFixture {
 			}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			_, _ = fmt.Fprintf(w, `{"buckets":[%s]}`, bucketJSON(req.Name))
+		case strings.HasSuffix(r.URL.Path, "/b2_list_file_versions"):
+			_, _ = fmt.Fprintf(w, `{"files":[{"fileId":"copied-id","fileName":"dst","accountId":"a","bucketId":"x","contentLength":5,"contentSha1":"x","contentType":"text/plain","fileInfo":{},"action":%q,"uploadTimestamp":1},`+
+				`{"fileId":"big-id","fileName":"unfinished","accountId":"a","bucketId":"x","contentLength":0,"contentSha1":"none","contentType":"text/plain","fileInfo":{},"action":"start","uploadTimestamp":1}],"nextFileName":null,"nextFileId":null}`, f.listAction)
+		case strings.HasSuffix(r.URL.Path, "/b2_get_file_info"):
+			_, _ = fmt.Fprintf(w, `{"fileId":"copied-id","fileName":"dst","accountId":"a","bucketId":"x","contentLength":5,"contentSha1":"x","contentType":"text/plain","fileInfo":{},"action":%q,"uploadTimestamp":1}`, f.listAction)
 		case strings.HasSuffix(r.URL.Path, "/b2_copy_file"):
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -151,5 +157,50 @@ func TestCopyRejectsInvalidMetadataOptions(t *testing.T) {
 				t.Errorf("%d b2_copy_file request(s) were sent, want none", len(f.copies))
 			}
 		})
+	}
+}
+
+// B2 reports a server-side copy with the action "copy". It is a regular
+// completed object everywhere an "upload" is.
+func TestCopiedVersionIsAListedAndCompletedObject(t *testing.T) {
+	f := newCopyFixture(t)
+	f.listAction = "copy"
+	ctx := context.Background()
+	b := f.bucket("b")
+
+	var names []string
+	iter := b.List(ctx, ListHidden())
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "dst" {
+		t.Errorf("ListHidden = %v, want the copied version [dst] and not the unfinished upload", names)
+	}
+
+	obj, err := b.Copy(ctx, "src", "dst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Status != Uploaded {
+		t.Errorf("Attrs().Status for a copy = %v, want Uploaded", attrs.Status)
+	}
+}
+
+func TestCopyWithReplaceAndNoInfoSendsAnEmptyFileInfo(t *testing.T) {
+	f := newCopyFixture(t)
+	b := f.bucket("b")
+	if _, err := b.Copy(context.Background(), "src", "dst", CopyWithMetadata(ReplaceMetadata, "text/plain", nil)); err != nil {
+		t.Fatal(err)
+	}
+	fi, ok := f.copies[0]["fileInfo"].(map[string]any)
+	if !ok || len(fi) != 0 {
+		t.Errorf("fileInfo = %v, want an explicit empty object", f.copies[0]["fileInfo"])
 	}
 }

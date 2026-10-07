@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Writer` no longer hangs when a part of a large upload fails permanently. `sendChunk` held a read lock while blocked handing the next chunk to a worker, so the failing worker could never record the error and cancel the upload. `Write` also no longer takes its read lock recursively, which could deadlock against a waiting `Close`.
 - `Writer` upload workers exit when the writer's context is cancelled. With `ConcurrentUploads` of 2 or more, a failed part cancelled the context, `Close` then returned before signalling the remaining workers, and an idle worker goroutine stayed parked forever.
 - `ObjectIterator` no longer ends a listing early, with no error, when a page is empty or all its entries are filtered out (hidden listings skip unfinished uploads) but B2 returned a cursor to the next page. This affected `List`, `ListHidden` and `ListUnfinished`. If a backend keeps returning an empty page with the same cursor, the iterator now stops with an error instead of repeating the request.
-- `(*b2.Object).Delete` accepts the object returned by `Copy`, whose status is `copy`.
+- A file made by `Copy` has the action `copy`; `(*b2.Object).Delete`, `Attrs` and `List` with `ListHidden` now treat it like an uploaded file.
 
 ## [0.8.0] - 2026-09-15
 

@@ -230,6 +230,9 @@ func TestCopyLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if destination.ID() == "" || destination.ID() == source.ID() {
+		t.Errorf("copy fileId = %q, want a new id different from the source %q", destination.ID(), source.ID())
+	}
 	attrs, err := destination.Attrs(ctx)
 	if err != nil {
 		t.Fatal(err)

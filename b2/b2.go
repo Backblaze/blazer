@@ -575,7 +575,7 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 	name, sha, size, ct, info, st, stamp := fi.stats()
 	var state ObjectState
 	switch st {
-	case "upload":
+	case "upload", "copy":
 		state = Uploaded
 	case "start":
 		state = Started
