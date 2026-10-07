@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `b2_authorize_account` and the other general API calls now target the B2 Native API v4. `(*base.B2).CreateKey` and `(*b2.Bucket).CreateKey` continue to target the v3 `b2_create_key` endpoint and produce legacy single-bucket keys.
 - `base.CreateBucket` takes the bucket's CORS rules and whether Object Lock is enabled as additional arguments.
+- Connection errors now carry the name of the request they belong to, so their message reads `b2_upload_file: 0: connection reset` instead of `b2 error: connection reset`, and downloads retry a connection error up to 20 times, as they do for other retryable errors, where it was 5.
 
 ### Fixed
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Writer` no longer hangs when a part of a large upload fails permanently. `sendChunk` held a read lock while blocked handing the next chunk to a worker, so the failing worker could never record the error and cancel the upload. `Write` also no longer takes its read lock recursively, which could deadlock against a waiting `Close`.
 - `Writer` upload workers exit when the writer's context is cancelled. With `ConcurrentUploads` of 2 or more, a failed part cancelled the context, `Close` then returned before signalling the remaining workers, and an idle worker goroutine stayed parked forever.
 - `ObjectIterator` no longer ends a listing early, with no error, when a page is empty or all its entries are filtered out (hidden listings skip unfinished uploads) but B2 returned a cursor to the next page. This affected `List`, `ListHidden` and `ListUnfinished`. If a backend keeps returning an empty page with the same cursor, the iterator now stops with an error instead of repeating the request.
+- Uploads fetch a new upload URL after a connection-level failure (a reset or a stall), as B2's Integration Checklist asks, instead of retrying the broken one. An HTTP response such as 429 or 503 with `Retry-After` still waits as told and retries the same URL.
 
 ## [0.8.0] - 2026-09-15
 
