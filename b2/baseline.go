@@ -123,14 +123,6 @@ type b2Root struct {
 	b *base.B2
 }
 
-type replicationReadKey struct{}
-
-// base.ListBuckets does not retain the wrapped replication response, so the
-// transport records it for this one list call before base decodes the body.
-type replicationRead struct {
-	byID map[string]*b2types.ReplicationConfiguration
-}
-
 type b2Bucket struct {
 	b *base.Bucket
 }
@@ -252,15 +244,12 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 }
 
 func (b *b2Root) listBuckets(ctx context.Context, name string, bucketTypes ...string) ([]b2BucketInterface, error) {
-	capture := &replicationRead{byID: make(map[string]*b2types.ReplicationConfiguration)}
-	ctx = context.WithValue(ctx, replicationReadKey{}, capture)
 	buckets, err := b.b.ListBuckets(ctx, name, bucketTypes...)
 	if err != nil {
 		return nil, err
 	}
 	var rtn []b2BucketInterface
 	for _, bucket := range buckets {
-		bucket.ReplicationConfiguration = capture.byID[bucket.ID]
 		rtn = append(rtn, &b2Bucket{bucket})
 	}
 	return rtn, err
