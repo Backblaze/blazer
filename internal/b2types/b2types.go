@@ -142,10 +142,11 @@ type ListBucketsResponse struct {
 }
 
 type UpdateBucketRequest struct {
-	AccountID string            `json:"accountId"`
-	BucketID  string            `json:"bucketId"`
-	Type      string            `json:"bucketType,omitempty"`
-	Info      map[string]string `json:"bucketInfo,omitempty"`
+	AccountID string `json:"accountId"`
+	BucketID  string `json:"bucketId"`
+	Type      string `json:"bucketType,omitempty"`
+	// A nil pointer omits bucketInfo; a pointer to an empty map sends {}.
+	Info *map[string]string `json:"bucketInfo,omitempty"`
 	// A nil pointer omits lifecycleRules (leave them unchanged); a pointer to an
 	// empty slice sends [] (remove them all).
 	LifecycleRules *[]LifecycleRule `json:"lifecycleRules,omitempty"`

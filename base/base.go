@@ -700,12 +700,16 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		}
 		rules = &rs
 	}
+	var info *map[string]string
+	if b.Info != nil {
+		info = &b.Info
+	}
 	b2req := &b2types.UpdateBucketRequest{
 		AccountID: b.b2.accountID,
 		BucketID:  b.ID,
 		// Name:           b.Name,
 		Type:           b.Type,
-		Info:           b.Info,
+		Info:           info,
 		LifecycleRules: rules,
 		IfRevisionIs:   b.rev,
 

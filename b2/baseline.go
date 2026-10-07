@@ -273,9 +273,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs.Type != UnknownType {
 		b.b.Type = string(attrs.Type)
 	}
-	if attrs.Info != nil {
-		b.b.Info = attrs.Info
-	}
+	previousInfo := b.b.Info
+	b.b.Info = attrs.Info
 	// base.Update sends the cached rules, and B2 replaces them wholesale, so send
 	// them only when the caller set them: nil leaves them unchanged and an empty
 	// non-nil slice removes them all.
@@ -342,6 +341,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if err == nil {
 		b.b = newBucket
 	} else {
+		b.b.Info = previousInfo
 		b.b.LifecycleRules = previousRules
 	}
 	code, _ := base.Code(err)
