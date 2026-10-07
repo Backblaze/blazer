@@ -69,6 +69,10 @@ func Action(err error) ErrAction {
 		return Punt
 	}
 	if e.retry > 0 {
+		// A zero status means the transport failed before an HTTP response arrived.
+		if e.code == 0 && (e.method == "b2_upload_file" || e.method == "b2_upload_part") {
+			return AttemptNewUpload
+		}
 		return Retry
 	}
 	if e.code >= 500 && e.code < 600 && (e.method == "b2_upload_file" || e.method == "b2_upload_part") {
@@ -342,6 +346,12 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 	default:
 		method := req.Header.Get("X-Blazer-Method")
 		blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		// Only an upload fault is classified by method (see Action). Other
+		// transport errors stay method-less so their retry budget and message
+		// do not change.
+		if method != "b2_upload_file" && method != "b2_upload_part" {
+			method = ""
+		}
 		// The following code will work regardless of whether err is an x509.UnknownAuthorityError
 		// (Go 1.19 and earlier) or a tls.CertificateVerificationError that wraps an
 		// x509.UnknownAuthorityError (Go 1.20 and later).
@@ -355,8 +365,9 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		}
 
 		return nil, b2err{
-			msg:   err.Error(),
-			retry: 1,
+			msg:    err.Error(),
+			method: method,
+			retry:  1,
 		}
 	}
 }
@@ -578,6 +589,13 @@ type LifecycleRule struct {
 	DaysHiddenUntilDeleted int
 }
 
+func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2types.ServerSideEncryption {
+	if sse == nil || sse.Mode == "" {
+		return nil
+	}
+	return sse
+}
+
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
 func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool) (*Bucket, error) {
@@ -599,7 +617,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		Info:           info,
 		LifecycleRules: b2rules,
 
-		DefaultServerSideEncryption: sse,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(sse),
 		CORSRules:                   corsRules,
 		FileLockEnabled:             fileLockEnabled,
 	}
@@ -626,7 +644,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		rev:                         b2resp.Revision,
 		b2:                          b,
 		CORSRules:                   b2resp.CORSRules,
-		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 	}
 	if b2resp.FileLockConfig != nil {
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
@@ -668,13 +686,19 @@ type Bucket struct {
 
 // Update wraps b2_update_bucket.
 func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
-	var rules []b2types.LifecycleRule
-	for _, rule := range b.LifecycleRules {
-		rules = append(rules, b2types.LifecycleRule{
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-			Prefix:                 rule.Prefix,
-		})
+	// Only a non-nil list is sent: nil leaves lifecycle rules unchanged, and an
+	// empty non-nil list removes them all.
+	var rules *[]b2types.LifecycleRule
+	if b.LifecycleRules != nil {
+		rs := make([]b2types.LifecycleRule, 0, len(b.LifecycleRules))
+		for _, rule := range b.LifecycleRules {
+			rs = append(rs, b2types.LifecycleRule{
+				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+				Prefix:                 rule.Prefix,
+			})
+		}
+		rules = &rs
 	}
 	var info *map[string]string
 	if b.Info != nil {
@@ -691,7 +715,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 
 		CORSRules:                   b.CORSRules,
 		DefaultRetention:            b.DefaultRetention,
-		DefaultServerSideEncryption: b.DefaultServerSideEncryption,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b.DefaultServerSideEncryption),
 		FileLockEnabled:             b.FileLockEnabled,
 		ReplicationConfiguration:    b.ReplicationConfiguration,
 	}
@@ -718,7 +742,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		ID:                          b2resp.BucketID,
 		b2:                          b.b2,
 		CORSRules:                   b2resp.CORSRules,
-		DefaultServerSideEncryption: b2resp.DefaultServerSideEncryption.Value,
+		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
 		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
 	}
@@ -803,7 +827,7 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 			rev:                         bucket.Revision,
 			b2:                          b,
 			CORSRules:                   bucket.CORSRules,
-			DefaultServerSideEncryption: bucket.DefaultServerSideEncryption.Value,
+			DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(bucket.DefaultServerSideEncryption.Value),
 		}
 		if bucket.FileLockConfig != nil {
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled

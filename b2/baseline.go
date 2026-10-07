@@ -275,6 +275,10 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	}
 	previousInfo := b.b.Info
 	b.b.Info = attrs.Info
+	// base.Update sends the cached rules, and B2 replaces them wholesale, so send
+	// them only when the caller set them: nil leaves them unchanged and an empty
+	// non-nil slice removes them all.
+	previousRules := b.b.LifecycleRules
 	if attrs.LifecycleRules != nil {
 		rules := []base.LifecycleRule{}
 		for _, rule := range attrs.LifecycleRules {
@@ -285,6 +289,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 			})
 		}
 		b.b.LifecycleRules = rules
+	} else {
+		b.b.LifecycleRules = nil
 	}
 	if len(attrs.CORSRules) > 0 {
 		b.b.CORSRules = toBaseCORSRules(attrs.CORSRules)
@@ -336,6 +342,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b = newBucket
 	} else {
 		b.b.Info = previousInfo
+		b.b.LifecycleRules = previousRules
 	}
 	code, _ := base.Code(err)
 	if code == 409 {
