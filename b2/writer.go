@@ -65,6 +65,8 @@ type Writer struct {
 
 	contentType string
 	info        map[string]string
+	retention   *FileRetention
+	legalHold   LegalHold
 
 	csize       int
 	ctx         context.Context
@@ -116,7 +118,7 @@ func (w *Writer) setErr(err error) {
 	blog.V(1).Infof("error writing %s: %v", w.name, err)
 	w.err = err
 	w.cancel()
-	if w.ctxf == nil {
+	if w.ctxf == nil || w.file == nil {
 		return
 	}
 	if w.errf == nil {
@@ -253,7 +255,17 @@ func (w *Writer) init() {
 			return
 		}
 		w.w = v
+		if err := w.checkObjectLock(); err != nil {
+			w.setErr(err)
+		}
 	})
+}
+
+func (w *Writer) checkObjectLock() error {
+	if err := w.retention.validate(); err != nil {
+		return err
+	}
+	return w.legalHold.validate(true)
 }
 
 // Write satisfies the io.Writer interface.
@@ -306,6 +318,9 @@ func (w *Writer) getUploadURL(ctx context.Context) (beURLInterface, error) {
 }
 
 func (w *Writer) simpleWriteFile() error {
+	if err := w.checkObjectLock(); err != nil {
+		return err
+	}
 	ue, err := w.getUploadURL(w.ctx)
 	if err != nil {
 		return err
@@ -337,7 +352,7 @@ func (w *Writer) simpleWriteFile() error {
 	err = retry.Do(
 		w.ctx,
 		func() error {
-			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info)
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold)
 			if err != nil {
 				return err
 			}
@@ -381,7 +396,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		if ctype == "" {
 			ctype = "application/octet-stream"
 		}
-		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info)
+		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold)
 	}
 	var got bool
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
@@ -399,6 +414,9 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	if !got {
 		w.Resume = false
 		return w.getLargeFile()
+	}
+	if err := w.checkResumedLock(fi); err != nil {
+		return nil, err
 	}
 
 	next := 1
@@ -426,6 +444,27 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		w.seen[id] = sha
 	}
 	return fi.compileParts(size, seen), nil
+}
+
+// checkResumedLock refuses to resume an unfinished upload whose Object Lock
+// settings are not the ones the writer asked for, since the file would then be
+// finished without them.
+func (w *Writer) checkResumedLock(fi beFileInterface) error {
+	if w.retention == nil && w.legalHold == "" {
+		return nil
+	}
+	info, err := fi.getFileInfo(w.ctx)
+	if err != nil {
+		return err
+	}
+	retention, legalHold := info.fileLock()
+	if rt := w.retention; rt != nil && (retention == nil || retention.Mode != rt.Mode || retention.toBase().RetainUntilTimestamp != rt.toBase().RetainUntilTimestamp) {
+		return fmt.Errorf("b2: cannot resume %q: the unfinished upload does not have the requested retention", w.name)
+	}
+	if w.legalHold != "" && legalHold != w.legalHold {
+		return fmt.Errorf("b2: cannot resume %q: the unfinished upload does not have the requested legal hold", w.name)
+	}
+	return nil
 }
 
 func (w *Writer) sendChunk() error {
@@ -620,10 +659,25 @@ func (w *Writer) withAttrs(attrs *Attrs) *Writer {
 // A WriterOption sets Writer-specific behavior.
 type WriterOption func(*Writer)
 
-// WithAttrs attaches the given Attrs to the writer.
+// WithAttrsOption attaches the given Attrs to the writer. It does not copy
+// Attrs.Retention or Attrs.LegalHold; use WithFileRetention and WithLegalHold.
 func WithAttrsOption(attrs *Attrs) WriterOption {
 	return func(w *Writer) {
 		w.withAttrs(attrs)
+	}
+}
+
+// WithFileRetention sets Object Lock retention for the file uploaded by the writer.
+func WithFileRetention(retention *FileRetention) WriterOption {
+	return func(w *Writer) {
+		w.retention = retention
+	}
+}
+
+// WithLegalHold sets Object Lock legal hold for the file uploaded by the writer.
+func WithLegalHold(legalHold LegalHold) WriterOption {
+	return func(w *Writer) {
+		w.legalHold = legalHold
 	}
 }
 

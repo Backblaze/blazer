@@ -296,7 +296,7 @@ func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	}, nil
 }
 
-func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string) (b2LargeFileInterface, error) {
+func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string, _ *FileRetention, _ LegalHold) (b2LargeFileInterface, error) {
 	return &testLargeFile{
 		name:  name,
 		parts: make(map[int][]byte),
@@ -361,6 +361,9 @@ func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, 
 }
 
 func (t *testBucket) hideFile(context.Context, string) (b2FileInterface, error) { return nil, nil }
+func (t *testBucket) copyFile(context.Context, string, string, string, string, string, string, map[string]string) (b2FileInterface, error) {
+	return nil, nil
+}
 func (t *testBucket) getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error) {
 	return "", nil
 }
@@ -375,7 +378,7 @@ type testURL struct {
 
 func (t *testURL) reload(context.Context) error { return nil }
 
-func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string) (b2FileInterface, error) {
+func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string, _ *FileRetention, _ LegalHold) (b2FileInterface, error) {
 	if err := t.errs.getError("uploadFile"); err != nil {
 		return nil, err
 	}
@@ -512,6 +515,21 @@ func objectForDeleteOptionTest(file *testFile) *Object {
 	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
 	return &Object{f: &beFile{b2file: file, ri: root}}
 }
+
+func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
+	file := &testFile{n: "copy", a: "copy", files: map[string]string{"copy": "present"}}
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	object := &Object{f: &beFile{b2file: file, ri: root}}
+
+	if err := object.Delete(context.Background()); err != nil {
+		t.Fatalf("Delete copy-status object: %v", err)
+	}
+	if _, ok := file.files[file.n]; ok {
+		t.Fatal("Delete did not remove the copy-status object")
+	}
+}
+func (t *testFile) updateFileRetention(context.Context, *FileRetention, bool) error { return nil }
+func (t *testFile) updateFileLegalHold(context.Context, LegalHold) error            { return nil }
 
 type testFileReader struct {
 	b io.ReadCloser

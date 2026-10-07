@@ -50,12 +50,13 @@ type b2BucketInterface interface {
 	updateBucket(context.Context, *BucketAttrs) error
 	deleteBucket(context.Context) error
 	getUploadURL(context.Context) (b2URLInterface, error)
-	startLargeFile(ctx context.Context, name, contentType string, info map[string]string) (b2LargeFileInterface, error)
+	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold) (b2LargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]b2FileInterface, string, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]b2FileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (b2FileReaderInterface, error)
 	hideFile(context.Context, string) (b2FileInterface, error)
+	copyFile(context.Context, string, string, string, string, string, string, map[string]string) (b2FileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
 	baseURL() string
 	s3URL() string
@@ -64,7 +65,7 @@ type b2BucketInterface interface {
 
 type b2URLInterface interface {
 	reload(context.Context) error
-	uploadFile(context.Context, io.Reader, int, string, string, string, map[string]string) (b2FileInterface, error)
+	uploadFile(context.Context, io.Reader, int, string, string, string, map[string]string, *FileRetention, LegalHold) (b2FileInterface, error)
 }
 
 type b2FileInterface interface {
@@ -74,6 +75,8 @@ type b2FileInterface interface {
 	timestamp() time.Time
 	status() string
 	deleteFileVersion(context.Context, bool) error
+	updateFileRetention(context.Context, *FileRetention, bool) error
+	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (b2FileInfoInterface, error)
 	listParts(context.Context, int, int) ([]b2FilePartInterface, int, error)
 	compileParts(int64, map[int]string) b2LargeFileInterface
@@ -98,6 +101,7 @@ type b2FileReaderInterface interface {
 
 type b2FileInfoInterface interface {
 	stats() (string, string, int64, string, map[string]string, string, time.Time) // bleck
+	fileLock() (*FileRetention, LegalHold)
 }
 
 type b2FilePartInterface interface {
@@ -273,9 +277,12 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs.Type != UnknownType {
 		b.b.Type = string(attrs.Type)
 	}
-	if attrs.Info != nil {
-		b.b.Info = attrs.Info
-	}
+	previousInfo := b.b.Info
+	b.b.Info = attrs.Info
+	// base.Update sends the cached rules, and B2 replaces them wholesale, so send
+	// them only when the caller set them: nil leaves them unchanged and an empty
+	// non-nil slice removes them all.
+	previousRules := b.b.LifecycleRules
 	if attrs.LifecycleRules != nil {
 		rules := []base.LifecycleRule{}
 		for _, rule := range attrs.LifecycleRules {
@@ -286,6 +293,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 			})
 		}
 		b.b.LifecycleRules = rules
+	} else {
+		b.b.LifecycleRules = nil
 	}
 	if len(attrs.CORSRules) > 0 {
 		b.b.CORSRules = toBaseCORSRules(attrs.CORSRules)
@@ -335,6 +344,9 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	newBucket, err := b.b.Update(ctx)
 	if err == nil {
 		b.b = newBucket
+	} else {
+		b.b.Info = previousInfo
+		b.b.LifecycleRules = previousRules
 	}
 	code, _ := base.Code(err)
 	if code == 409 {
@@ -430,8 +442,8 @@ func (b *b2Bucket) getUploadURL(ctx context.Context) (b2URLInterface, error) {
 	return &b2URL{url}, nil
 }
 
-func (b *b2Bucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string) (b2LargeFileInterface, error) {
-	lf, err := b.b.StartLargeFile(ctx, name, ct, info)
+func (b *b2Bucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, retention *FileRetention, legalHold LegalHold) (b2LargeFileInterface, error) {
+	lf, err := b.b.StartLargeFile(ctx, name, ct, info, base.FileLock{Retention: retention.toBase(), LegalHold: string(legalHold)})
 	if err != nil {
 		return nil, err
 	}
@@ -497,6 +509,14 @@ func (b *b2Bucket) hideFile(ctx context.Context, name string) (b2FileInterface, 
 	return &b2File{f}, nil
 }
 
+func (b *b2Bucket) copyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (b2FileInterface, error) {
+	f, err := b.b.CopyFile(ctx, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType, info)
+	if err != nil {
+		return nil, err
+	}
+	return &b2File{f}, nil
+}
+
 func (b *b2Bucket) getDownloadAuthorization(ctx context.Context, p string, v time.Duration, s string) (string, error) {
 	return b.b.GetDownloadAuthorization(ctx, p, v, s)
 }
@@ -511,8 +531,8 @@ func (b *b2Bucket) s3URL() string {
 
 func (b *b2Bucket) file(id, name string) b2FileInterface { return &b2File{b.b.File(id, name)} }
 
-func (b *b2URL) uploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string) (b2FileInterface, error) {
-	file, err := b.b.UploadFile(ctx, r, size, name, contentType, sha1, info)
+func (b *b2URL) uploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, retention *FileRetention, legalHold LegalHold) (b2FileInterface, error) {
+	file, err := b.b.UploadFile(ctx, r, size, name, contentType, sha1, info, base.FileLock{Retention: retention.toBase(), LegalHold: string(legalHold)})
 	if err != nil {
 		return nil, err
 	}
@@ -525,6 +545,22 @@ func (b *b2URL) reload(ctx context.Context) error {
 
 func (b *b2File) deleteFileVersion(ctx context.Context, bypassGovernance bool) error {
 	return b.b.DeleteFileVersion(ctx, bypassGovernance)
+}
+
+func (b *b2File) updateFileRetention(ctx context.Context, retention *FileRetention, bypassGovernance bool) error {
+	err := b.b.UpdateFileRetention(ctx, retention.toBase(), bypassGovernance)
+	if err == nil {
+		b.b.Info = nil
+	}
+	return err
+}
+
+func (b *b2File) updateFileLegalHold(ctx context.Context, legalHold LegalHold) error {
+	err := b.b.UpdateFileLegalHold(ctx, string(legalHold))
+	if err == nil {
+		b.b.Info = nil
+	}
+	return err
 }
 
 func (b *b2File) name() string {
@@ -618,6 +654,10 @@ func (b *b2FileReader) id() string { return b.b.ID }
 
 func (b *b2FileInfo) stats() (string, string, int64, string, map[string]string, string, time.Time) {
 	return b.b.Name, b.b.SHA1, b.b.Size, b.b.ContentType, b.b.Info, b.b.Status, b.b.Timestamp
+}
+
+func (b *b2FileInfo) fileLock() (*FileRetention, LegalHold) {
+	return retentionFromBase(b.b.Retention), LegalHold(b.b.LegalHold)
 }
 
 func (b *b2FilePart) number() int  { return b.b.Number }
