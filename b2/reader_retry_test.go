@@ -130,10 +130,11 @@ func TestReaderBudgetBoundary(t *testing.T) {
 	}
 }
 
-// base allows a download 20 attempts. A reader that gave up sooner would fail a
-// read that the rest of the library survives, so the budget is pinned.
+// base lets a download retry 20 times after its first attempt. A reader that gave
+// up sooner would fail a read the rest of the library survives, so the budget is
+// pinned: 20 truncated downloads followed by a good one must succeed.
 func TestReaderBudgetMatchesTheDownloadRetryBudget(t *testing.T) {
-	if _, _, err := readTruncated(t, 19); err != nil {
-		t.Fatalf("a chunk truncated 19 times before being served whole failed: %v", err)
+	if _, calls, err := readTruncated(t, 20); err != nil {
+		t.Fatalf("a chunk truncated 20 times before being served whole failed after %d attempts: %v", calls, err)
 	}
 }

@@ -31,9 +31,10 @@ import (
 var errNoMoreContent = errors.New("416: out of content")
 
 // maxShortReadAttempts bounds attempts at a chunk whose body arrives truncated.
-// It matches the 20 retries base allows for a download, which with the backoff
-// below rides out a network interruption of about a minute and a half.
-const maxShortReadAttempts = 20
+// It is the first attempt plus the 20 retries base allows for a download, as in
+// withBackoff, so the reader survives what the rest of the library survives.
+// With the backoff below that is about two minutes of waiting in total.
+const maxShortReadAttempts = 21
 
 // Reader reads files from B2.
 type Reader struct {
