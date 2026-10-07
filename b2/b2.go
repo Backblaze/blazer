@@ -551,6 +551,8 @@ type Attrs struct {
 	SHA1            string            // Can be "none" for large files.  If set on upload, will be used for large files.
 	LastModified    time.Time         // If present, and there are fewer than 10 keys in the Info field, this is saved on upload.
 	Info            map[string]string // Save arbitrary metadata on upload, but limited to 10 keys.
+	Retention       *FileRetention    // Object Lock retention of this file, nil when it has none or the key may not read it.
+	LegalHold       LegalHold         // Object Lock legal hold of this file, empty when unset or the key may not read it.
 }
 
 // Name returns an object's name
@@ -573,6 +575,7 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 		return nil, err
 	}
 	name, sha, size, ct, info, st, stamp := fi.stats()
+	retention, legalHold := fi.fileLock()
 	var state ObjectState
 	switch st {
 	case "upload", "copy":
@@ -605,6 +608,8 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 		Info:            info,
 		Status:          state,
 		LastModified:    mtime,
+		Retention:       retention,
+		LegalHold:       legalHold,
 	}, nil
 }
 
