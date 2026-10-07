@@ -679,13 +679,19 @@ type Bucket struct {
 
 // Update wraps b2_update_bucket.
 func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
-	var rules []b2types.LifecycleRule
-	for _, rule := range b.LifecycleRules {
-		rules = append(rules, b2types.LifecycleRule{
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-			Prefix:                 rule.Prefix,
-		})
+	// Only a non-nil list is sent: nil leaves lifecycle rules unchanged, and an
+	// empty non-nil list removes them all.
+	var rules *[]b2types.LifecycleRule
+	if b.LifecycleRules != nil {
+		rs := make([]b2types.LifecycleRule, 0, len(b.LifecycleRules))
+		for _, rule := range b.LifecycleRules {
+			rs = append(rs, b2types.LifecycleRule{
+				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+				Prefix:                 rule.Prefix,
+			})
+		}
+		rules = &rs
 	}
 	b2req := &b2types.UpdateBucketRequest{
 		AccountID: b.b2.accountID,
