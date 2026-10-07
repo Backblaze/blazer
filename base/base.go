@@ -1497,7 +1497,9 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 	return keys, b2resp.Next, nil
 }
 
-// CopyFile wraps b2_copy_file.
+// CopyFile wraps b2_copy_file. An empty destinationBucketID makes B2 put the
+// copy in the source file's bucket. contentType and info are sent only for the
+// REPLACE metadata directive.
 func (b *Bucket) CopyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (*File, error) {
 	b2req := &b2types.CopyFileRequest{
 		SourceFileID:        sourceFileID,
@@ -1512,7 +1514,7 @@ func (b *Bucket) CopyFile(ctx context.Context, sourceFileID, name, destinationBu
 	}
 	b2resp := &b2types.CopyFileResponse{}
 	headers := map[string]string{"Authorization": b.b2.authToken}
-	if err := b.b2.opts.makeRequest(ctx, "b2_copy_file", "POST", b.b2.apiURI+b2types.V3api+"b2_copy_file", b2req, b2resp, headers, nil); err != nil {
+	if err := b.b2.opts.makeRequest(ctx, "b2_copy_file", "POST", b.b2.apiURI+b2types.V4api+"b2_copy_file", b2req, b2resp, headers, nil); err != nil {
 		return nil, err
 	}
 	return &File{
