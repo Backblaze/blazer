@@ -24,13 +24,15 @@ func TestListBucketsReplicationConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		canRead    bool
+		value      string
 		wantConfig bool
 	}{
-		{name: "authorized", canRead: true, wantConfig: true},
-		{name: "unauthorized", canRead: false},
+		{name: "authorized", canRead: true, value: `{"asReplicationDestination":{"sourceToDestinationKeyMapping":{"source-key":"destination-key"}}}`, wantConfig: true},
+		{name: "unauthorized", canRead: false, value: `{"asReplicationDestination":{"sourceToDestinationKeyMapping":{"source-key":"destination-key"}}}`},
+		{name: "authorized without replication", canRead: true, value: `{"asReplicationSource":null,"asReplicationDestination":null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bucketJSON := fmt.Sprintf(`{"bucketId":"bid","bucketName":"name","bucketType":"allPrivate","replicationConfiguration":{"isClientAuthorizedToRead":%t,"value":{"asReplicationDestination":{"sourceToDestinationKeyMapping":{"source-key":"destination-key"}}}}}`, tc.canRead)
+			bucketJSON := fmt.Sprintf(`{"bucketId":"bid","bucketName":"name","bucketType":"allPrivate","replicationConfiguration":{"isClientAuthorizedToRead":%t,"value":%s}}`, tc.canRead, tc.value)
 			b, _, closeSrv := bucketFixture(t, bucketJSON)
 			defer closeSrv()
 
@@ -44,7 +46,7 @@ func TestListBucketsReplicationConfiguration(t *testing.T) {
 			cfg := buckets[0].ReplicationConfiguration
 			if !tc.wantConfig {
 				if cfg != nil {
-					t.Errorf("unauthorized replication configuration = %+v, want nil", cfg)
+					t.Errorf("replication configuration = %+v, want nil", cfg)
 				}
 				return
 			}

@@ -853,7 +853,8 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
 		}
 		listed.DefaultRetention = decodeDefaultRetention(bucket.FileLockConfig)
-		if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead {
+		if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
+			(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
 			listed.ReplicationConfiguration = cfg.Value
 		}
 		buckets = append(buckets, listed)

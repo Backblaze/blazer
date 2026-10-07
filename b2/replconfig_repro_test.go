@@ -268,3 +268,26 @@ func TestReplConfig_FilteredReadOmitsWrite(t *testing.T) {
 		t.Errorf("update sent replicationConfiguration with filtered key: %v", (*updates)[0]["replicationConfiguration"])
 	}
 }
+
+func TestReplConfig_NoReplicationReadModifyWrite(t *testing.T) {
+	client, updates := newListReplFixture(t, noReplicationBucketJSON, true)
+	ctx := context.Background()
+	buckets, err := client.ListBuckets(ctx)
+	if err != nil || len(buckets) != 1 {
+		t.Fatalf("ListBuckets = %v, %v; want one bucket", buckets, err)
+	}
+	attrs, err := buckets[0].Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.ReplicationConfig != nil {
+		t.Errorf("Attrs replication config = %+v, want nil for a bucket without replication", attrs.ReplicationConfig)
+	}
+	attrs.Info = map[string]string{"other": "change"}
+	if err := buckets[0].Update(ctx, attrs); err != nil {
+		t.Fatal(err)
+	}
+	if _, sent := (*updates)[0]["replicationConfiguration"]; sent {
+		t.Errorf("update sent replicationConfiguration for a bucket without replication: %v", (*updates)[0]["replicationConfiguration"])
+	}
+}
