@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `b2_authorize_account` and the other general API calls now target the B2 Native API v4. `(*base.B2).CreateKey` and `(*b2.Bucket).CreateKey` continue to target the v3 `b2_create_key` endpoint and produce legacy single-bucket keys.
 - `base.CreateBucket` takes the bucket's CORS rules and whether Object Lock is enabled as additional arguments.
-- Connection errors now carry the name of the request they belong to, so their message reads `b2_upload_file: 0: connection reset` instead of `b2 error: connection reset`, and downloads retry a connection error up to 20 times, as they do for other retryable errors, where it was 5.
+- A connection error on an upload now names the request, so its message reads `b2_upload_file: 0: connection reset` instead of `b2 error: connection reset`. Connection errors on every other request are unchanged.
 
 ### Fixed
 

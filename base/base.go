@@ -346,6 +346,12 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 	default:
 		method := req.Header.Get("X-Blazer-Method")
 		blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		// Only an upload fault is classified by method (see Action). Other
+		// transport errors stay method-less so their retry budget and message
+		// do not change.
+		if method != "b2_upload_file" && method != "b2_upload_part" {
+			method = ""
+		}
 		// The following code will work regardless of whether err is an x509.UnknownAuthorityError
 		// (Go 1.19 and earlier) or a tls.CertificateVerificationError that wraps an
 		// x509.UnknownAuthorityError (Go 1.20 and later).

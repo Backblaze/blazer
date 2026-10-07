@@ -118,3 +118,58 @@ func TestActionUploadRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+// A transport fault on anything but an upload must behave as before: a plain
+// same-request retry with the default budget and the method-less message.
+func TestTransportFaultOutsideUploadsIsUnchanged(t *testing.T) {
+	for _, method := range []string{
+		"b2_download_file_by_name", "b2_download_file_by_id", "b2_list_file_names",
+		"b2_authorize_account", "b2_get_upload_url", "",
+	} {
+		t.Run(method, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, "https://example.com/x", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if method != "" {
+				req.Header.Set("X-Blazer-Method", method)
+			}
+			_, err = makeNetRequest(req.Context(), req, errorTransport{})
+			if got := Action(err); got != Retry {
+				t.Errorf("Action = %v, want Retry", got)
+			}
+			if got := MaxRetries(err); got != 5 {
+				t.Errorf("MaxRetries = %d, want the default 5", got)
+			}
+			if got := MaxReuploads(err); got != 0 {
+				t.Errorf("MaxReuploads = %d, want 0", got)
+			}
+			if got, want := err.Error(), "b2 error: connection reset"; got != want {
+				t.Errorf("message = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// An upload fault is classified by method, with a bounded reupload budget.
+func TestUploadTransportFaultBudget(t *testing.T) {
+	for _, method := range []string{"b2_upload_file", "b2_upload_part"} {
+		t.Run(method, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, "https://example.com/upload", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("X-Blazer-Method", method)
+			_, err = makeNetRequest(req.Context(), req, errorTransport{})
+			if got := Action(err); got != AttemptNewUpload {
+				t.Errorf("Action = %v, want AttemptNewUpload", got)
+			}
+			if got := MaxReuploads(err); got != 5 {
+				t.Errorf("MaxReuploads = %d, want 5", got)
+			}
+			if got, want := err.Error(), method+": 0: connection reset"; got != want {
+				t.Errorf("message = %q, want %q", got, want)
+			}
+		})
+	}
+}
