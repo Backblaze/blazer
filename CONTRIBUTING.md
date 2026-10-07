@@ -51,8 +51,8 @@ When you're ready to submit, see the section below, [Submitting a Pull Request](
 Automated tests are run with `go test`. Integration tests run against Backblaze B2, and require that you create an application key with "all buckets" access and set the following environment variables:
 
 ```shell
-export B2_ACCOUNT_ID=<your application key id>
-export B2_SECRET_KEY=<your application key>
+export B2_APPLICATION_KEY_ID=<your application key id>
+export B2_APPLICATION_KEY=<your application key>
 ```
 
 To simply run all tests from the `blazer` directory, do:

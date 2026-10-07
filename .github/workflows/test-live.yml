@@ -28,6 +28,7 @@ jobs:
           go-version: stable
           cache-dependency-path: go.sum
       - name: Check live credentials
+        id: creds
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
@@ -47,7 +48,7 @@ jobs:
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
         run: go test -v -count=1 -timeout 30m ./b2/... ./base/...
       - name: Remove test buckets
-        if: ${{ always() }}
+        if: ${{ always() && steps.creds.outcome == 'success' }}
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
