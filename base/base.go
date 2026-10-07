@@ -589,6 +589,26 @@ type LifecycleRule struct {
 	DaysHiddenUntilDeleted int
 }
 
+// decodeDefaultRetention returns the default retention from a bucket's
+// fileLockConfiguration, or nil when the configuration is absent (the key may
+// not be allowed to read it) or no default retention is set.
+func decodeDefaultRetention(cfg *b2types.FileLockConfiguration) *b2types.Retention {
+	if cfg == nil {
+		return nil
+	}
+	dr := cfg.Val.DefaultRetention
+	if dr.Mode == nil || dr.Period.Unit == nil {
+		return nil
+	}
+	return &b2types.Retention{
+		Mode: *dr.Mode,
+		Period: &b2types.RetentionPeriod{
+			Duration: dr.Period.Duration,
+			Unit:     *dr.Period.Unit,
+		},
+	}
+}
+
 func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2types.ServerSideEncryption {
 	if sse == nil || sse.Mode == "" {
 		return nil
@@ -649,6 +669,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	if b2resp.FileLockConfig != nil {
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
+	bucket.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
 	return bucket, nil
 }
 
@@ -746,14 +767,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
 		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
 	}
-	if b2resp.FileLockConfig.Val.DefaultRetention.Mode != nil {
-		updated.DefaultRetention = &b2types.Retention{}
-		updated.DefaultRetention.Mode = *b2resp.FileLockConfig.Val.DefaultRetention.Mode
-		updated.DefaultRetention.Period = &b2types.RetentionPeriod{
-			Duration: b2resp.FileLockConfig.Val.DefaultRetention.Period.Duration,
-			Unit:     *b2resp.FileLockConfig.Val.DefaultRetention.Period.Unit,
-		}
-	}
+	updated.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
 
 	return updated, nil
 }
@@ -832,6 +846,7 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 		if bucket.FileLockConfig != nil {
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
 		}
+		listed.DefaultRetention = decodeDefaultRetention(bucket.FileLockConfig)
 		buckets = append(buckets, listed)
 	}
 	return buckets, nil
