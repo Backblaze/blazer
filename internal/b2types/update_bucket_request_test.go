@@ -20,34 +20,30 @@ import (
 	"testing"
 )
 
-func TestUpdateBucketRequestClearsLifecycle(t *testing.T) {
+func TestUpdateBucketRequestLifecycleRules(t *testing.T) {
+	empty := []LifecycleRule{}
+	populated := []LifecycleRule{{Prefix: "logs/"}}
 	tests := []struct {
-		name  string
-		rules []LifecycleRule
-		want  []byte
+		name    string
+		rules   *[]LifecycleRule
+		want    string // substring that must be present
+		notWant string // substring that must be absent
 	}{
-		{
-			name:  "empty",
-			rules: []LifecycleRule{},
-			want:  []byte(`"lifecycleRules":[]`),
-		},
-		{
-			name: "populated",
-			rules: []LifecycleRule{{
-				Prefix: "logs/",
-			}},
-			want: []byte(`"lifecycleRules":[{"fileNamePrefix":"logs/"}]`),
-		},
+		{name: "nil pointer omits the field", rules: nil, notWant: `lifecycleRules`},
+		{name: "pointer to an empty slice sends []", rules: &empty, want: `"lifecycleRules":[]`},
+		{name: "populated", rules: &populated, want: `"lifecycleRules":[{"fileNamePrefix":"logs/"}]`},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			contents, err := json.Marshal(UpdateBucketRequest{LifecycleRules: test.rules})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(contents, test.want) {
-				t.Errorf("json.Marshal(UpdateBucketRequest{LifecycleRules: %#v}) = %s; want %s", test.rules, contents, test.want)
+			if test.want != "" && !bytes.Contains(contents, []byte(test.want)) {
+				t.Errorf("request = %s; want it to contain %s", contents, test.want)
+			}
+			if test.notWant != "" && bytes.Contains(contents, []byte(test.notWant)) {
+				t.Errorf("request = %s; want it to omit %s", contents, test.notWant)
 			}
 		})
 	}
