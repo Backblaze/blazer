@@ -266,6 +266,18 @@ func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
 	return out
 }
 
+// retentionDiffers reports whether the caller's retention differs from the
+// bucket's cached default retention.
+func retentionDiffers(current *b2types.Retention, want *Retention) bool {
+	if current == nil || current.Mode != want.Mode {
+		return true
+	}
+	if (current.Period == nil) != (want.Period == nil) {
+		return true
+	}
+	return current.Period != nil && (current.Period.Duration != want.Period.Duration || current.Period.Unit != want.Period.Unit)
+}
+
 func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs == nil {
 		return nil
@@ -291,14 +303,17 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.CORSRules = toBaseCORSRules(attrs.CORSRules)
 	}
 
-	if attrs.DefaultRetention != nil {
-		b.b.DefaultRetention = &b2types.Retention{
-			Mode: attrs.DefaultRetention.Mode,
-			Period: &b2types.RetentionPeriod{
-				Duration: attrs.DefaultRetention.Period.Duration,
-				Unit:     attrs.DefaultRetention.Period.Unit,
-			},
+	// Setting a default retention needs the writeBucketRetentions capability, and
+	// the request carries the cached value, so leave it out unless the caller
+	// changed it.
+	previousRetention := b.b.DefaultRetention
+	if attrs.DefaultRetention != nil && retentionDiffers(previousRetention, attrs.DefaultRetention) {
+		b.b.DefaultRetention = &b2types.Retention{Mode: attrs.DefaultRetention.Mode}
+		if p := attrs.DefaultRetention.Period; p != nil {
+			b.b.DefaultRetention.Period = &b2types.RetentionPeriod{Duration: p.Duration, Unit: p.Unit}
 		}
+	} else {
+		b.b.DefaultRetention = nil
 	}
 
 	if attrs.DefaultServerSideEncryption != nil {
@@ -335,6 +350,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	newBucket, err := b.b.Update(ctx)
 	if err == nil {
 		b.b = newBucket
+	} else {
+		b.b.DefaultRetention = previousRetention
 	}
 	code, _ := base.Code(err)
 	if code == 409 {
