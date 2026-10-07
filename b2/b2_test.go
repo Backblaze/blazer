@@ -884,13 +884,9 @@ func TestFailedUploadDoesNotPoolURL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	ch := make(chan time.Time)
-	close(ch)
-	after = func(d time.Duration) <-chan time.Time {
-		return ch
-	}
-
+	timer := newTestAfter()
 	root := &testRoot{
+		afterFunc: timer.wait,
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{
 			errMap: map[string]map[int]error{
