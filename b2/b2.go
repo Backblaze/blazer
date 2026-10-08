@@ -296,7 +296,12 @@ type RetentionPeriod struct {
 }
 
 type ReplicationConfiguration struct {
-	AsReplicationSource AsReplicationSource
+	AsReplicationSource      AsReplicationSource
+	AsReplicationDestination *AsReplicationDestination
+}
+
+type AsReplicationDestination struct {
+	SourceToDestinationKeyMapping map[string]string
 }
 
 type AsReplicationSource struct {
