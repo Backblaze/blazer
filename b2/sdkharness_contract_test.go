@@ -15,7 +15,7 @@ func TestSDKHarnessContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(string(content), "\r\n", "\n")), "\n")
-	if len(lines) != 36 || lines[0] != "test_level\tscenario\ttarget\texecutable" {
+	if len(lines) != 42 || lines[0] != "test_level\tscenario\ttarget\texecutable" {
 		t.Fatalf("unexpected tests.tsv schema: %q", string(content))
 	}
 	wantExecutable := map[string]string{
@@ -23,7 +23,7 @@ func TestSDKHarnessContract(t *testing.T) {
 		"health":      "./.sdkharness/tests/run-health",
 		"resilience":  "./.sdkharness/tests/run-resilience",
 	}
-	wantCount := map[string]int{"conformance": 19, "health": 1, "resilience": 15}
+	wantCount := map[string]int{"conformance": 25, "health": 1, "resilience": 15}
 	seen := make(map[string]bool)
 	counts := make(map[string]int)
 	for _, line := range lines[1:] {
