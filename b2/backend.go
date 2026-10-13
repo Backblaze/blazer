@@ -53,6 +53,8 @@ type beBucketInterface interface {
 	id() string
 	updateBucket(context.Context, *BucketAttrs) error
 	deleteBucket(context.Context) error
+	notificationRules(context.Context) ([]NotificationRule, error)
+	setNotificationRules(context.Context, []NotificationRule) error
 	getUploadURL(context.Context) (beURLInterface, error)
 	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold) (beLargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]beFileInterface, string, error)
@@ -343,6 +345,32 @@ func (b *beBucket) deleteBucket(ctx context.Context) error {
 	f := func() error {
 		g := func() error {
 			return b.b2bucket.deleteBucket(ctx)
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	return withBackoff(ctx, b.ri, f)
+}
+
+func (b *beBucket) notificationRules(ctx context.Context) ([]NotificationRule, error) {
+	var rules []NotificationRule
+	f := func() error {
+		g := func() error {
+			var err error
+			rules, err = b.b2bucket.notificationRules(ctx)
+			return err
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func (b *beBucket) setNotificationRules(ctx context.Context, rules []NotificationRule) error {
+	f := func() error {
+		g := func() error {
+			return b.b2bucket.setNotificationRules(ctx, rules)
 		}
 		return withReauth(ctx, b.ri, g)
 	}

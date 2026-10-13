@@ -31,6 +31,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -786,6 +787,37 @@ func (b *Bucket) BaseURL() string {
 // S3URL returns the base URL for S3-compatible API calls.
 func (b *Bucket) S3URL() string {
 	return b.b2.s3URI
+}
+
+// NotificationRules wraps b2_get_bucket_notification_rules.
+func (b *Bucket) NotificationRules(ctx context.Context) ([]b2types.EventNotificationRule, error) {
+	query := url.Values{"bucketId": []string{b.ID}}
+	b2resp := &b2types.GetBucketNotificationRulesResponse{}
+	headers := map[string]string{
+		"Authorization": b.b2.authToken,
+	}
+	endpoint := b.b2.apiURI + b2types.V4api + "b2_get_bucket_notification_rules?" + query.Encode()
+	if err := b.b2.opts.makeRequest(ctx, "b2_get_bucket_notification_rules", "GET", endpoint, nil, b2resp, headers, nil); err != nil {
+		return nil, err
+	}
+	return b2resp.EventNotificationRules, nil
+}
+
+// SetNotificationRules replaces a bucket's complete notification rule set.
+func (b *Bucket) SetNotificationRules(ctx context.Context, rules []b2types.EventNotificationRule) error {
+	// A non-nil empty array clears rules. B2 does not treat null as an empty
+	// rule set, so allocate even when the caller supplied an empty slice.
+	b2rules := make([]b2types.EventNotificationRule, len(rules))
+	copy(b2rules, rules)
+	b2req := &b2types.SetBucketNotificationRulesRequest{
+		BucketID:               b.ID,
+		EventNotificationRules: b2rules,
+	}
+	b2resp := &b2types.SetBucketNotificationRulesResponse{}
+	headers := map[string]string{
+		"Authorization": b.b2.authToken,
+	}
+	return b.b2.opts.makeRequest(ctx, "b2_set_bucket_notification_rules", "POST", b.b2.apiURI+b2types.V4api+"b2_set_bucket_notification_rules", b2req, b2resp, headers, nil)
 }
 
 // ListBuckets wraps b2_list_buckets.  If name is non-empty, only that bucket

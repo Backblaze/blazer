@@ -49,6 +49,8 @@ type b2BucketInterface interface {
 	id() string
 	updateBucket(context.Context, *BucketAttrs) error
 	deleteBucket(context.Context) error
+	notificationRules(context.Context) ([]NotificationRule, error)
+	setNotificationRules(context.Context, []NotificationRule) error
 	getUploadURL(context.Context) (b2URLInterface, error)
 	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold) (b2LargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]b2FileInterface, string, error)
@@ -416,6 +418,18 @@ func (b *b2Root) listKeys(ctx context.Context, max int, next string) ([]b2KeyInt
 
 func (b *b2Bucket) deleteBucket(ctx context.Context) error {
 	return b.b.DeleteBucket(ctx)
+}
+
+func (b *b2Bucket) notificationRules(ctx context.Context) ([]NotificationRule, error) {
+	rules, err := b.b.NotificationRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return notificationRulesFromBase(rules), nil
+}
+
+func (b *b2Bucket) setNotificationRules(ctx context.Context, rules []NotificationRule) error {
+	return b.b.SetNotificationRules(ctx, notificationRulesToBase(rules))
 }
 
 func (b *b2Bucket) name() string {
