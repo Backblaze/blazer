@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -45,8 +45,8 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14.0
-          # Existing findings are scoped out; check this PR or the latest master push.
-          args: --new-from-rev=${{ github.event_name == 'pull_request' && 'origin/master' || 'HEAD^' }} ./...
+          # Existing findings are scoped out; check this PR or the latest push to the default branch.
+          args: --new-from-rev=${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^' }} ./...
 
   test:
     name: test / Go ${{ matrix.go-version }} / ${{ matrix.os }}
