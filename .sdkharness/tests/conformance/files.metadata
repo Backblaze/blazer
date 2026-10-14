@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # CONFORMANCE blazer x files.metadata -- the contract is bin/conformance/README.md.
 #
-# Scenario: read metadata by id then by name; PARTIAL: by-name needs a HEAD download
+# Scenario: read metadata by id and by exact name, without a download.
 #
 # The expected values are B2's published contract. By id: b2_get_file_info
 # "Gets information about a file" and returns contentType, contentLength,
 # contentSha1 and fileInfo ("The custom information that was uploaded with the
 # file").
 # https://www.backblaze.com/apidocs/b2-get-file-info
-# B2 has no get-file-info by NAME; that read is b2_download_file_by_name, whose
-# headers (Content-Length, Content-Type, X-Bz-Content-Sha1, X-Bz-Info-*)
-# "contain the same information they did when the file was uploaded".
-# https://www.backblaze.com/apidocs/b2-download-file-by-name
+# b2_list_file_names returns the current visible file's metadata, including
+# fileId, contentType, contentLength, contentSha1 and fileInfo. A one-result
+# request starting at the exact name avoids a download; an exact-name check
+# distinguishes a missing file from the next lexicographic name.
+# https://www.backblaze.com/apidocs/b2-list-file-names
 # A custom field name "is converted to lower case when it is stored and
 # returned in the fileInfo object" -- hence the lower-case key.
 # https://www.backblaze.com/apidocs/b2-upload-file
@@ -92,21 +93,12 @@ exit "$run_rc"
 : <<'__EOF_GO__'
 package main
 
-// blazer x files.metadata -- a PARTIAL (⚠) cell.
+// blazer x files.metadata.
 //
 // Setup   an object carrying a custom fileInfo entry
-// Action  read metadata by id, then by name
-// Assert  contentType/length/sha1/custom entry round-trip
-// Go ⚠    by-id works; by-name requires a HEAD download. RECORD WHICH PATH WAS
-//         TAKEN -- that boundary is the falsifiable half of this cell.
-//
-// The boundary is asserted, not routed around: blazer implements
-// b2_get_file_info (by id) but NOT b2_get_file_info_by_name, so a by-name read
-// must fall back to the HEAD-on-download at b2_download_file_by_name
-// (docs/sdks/blazer/card.md, raw-endpoint table; capabilities.tsv
-// files.metadata = partial). The two reads are separated by blazer's own
-// per-method RPC counters (Client.Status), which is the only observation of
-// the request path available from the published package.
+// Action  read metadata by id, then by exact name
+// Assert  the same metadata fields round-trip and the by-name path calls
+//         b2_list_file_names without any download request.
 //
 // The API came from docs/sdks/blazer/card.md and godoc for
 // github.com/Backblaze/blazer/b2. Never from b2sdks/.
@@ -175,8 +167,14 @@ func runCheck(ctx context.Context, target *string) error {
 	deltaID := rpcDelta(beforeID, rpcCounts(client))
 
 	// --- by name -------------------------------------------------------
+	lookup, ok := interface{}(bucket).(interface {
+		GetFileInfoByName(context.Context, string) (*b2.Attrs, error)
+	})
+	if !ok {
+		return failf("metadata by name", "Bucket.GetFileInfoByName is unavailable")
+	}
 	beforeName := rpcCounts(client)
-	attrsByName, err := bucket.Object(name).Attrs(ctx)
+	attrsByName, err := lookup.GetFileInfoByName(ctx, name)
 	if err != nil {
 		return classify("metadata by name", err)
 	}
@@ -202,41 +200,17 @@ func runCheck(ctx context.Context, target *string) error {
 		}
 	}
 
-	// --- the ⚠ boundary --------------------------------------------------
-	if len(deltaID) == 0 && len(deltaName) == 0 {
-		// No counters moved: the path is unobservable from the published
-		// package. Say so rather than claiming the boundary was proven.
-		note("blazer's RPC counters recorded nothing; WHICH request path each read took was NOT observed, so only the metadata equality above is evidence here")
-		return nil
+	// --- the request path -------------------------------------------------
+	if !anyContains(deltaID, "get_file_info") {
+		return failf("metadata by id", "b2_get_file_info was not observed: %v", deltaID)
 	}
-	note("by-id read moved RPC methods %v; by-name read moved %v", deltaID, deltaName)
-
-	nameIsDownload := anyContains(deltaName, "download")
-	idIsGetInfo := anyContains(deltaID, "get_file_info") || anyContains(deltaID, "getfileinfo")
-	if nameIsDownload && !anyContains(deltaID, "download") {
-		note("boundary confirmed: by-id used %v, by-name fell back to a HEAD on b2_download_file_by_name", deltaID)
-		return nil
+	if anyContains(deltaName, "download") {
+		return failf("metadata by name", "a download request was issued: %v", deltaName)
 	}
-	if idIsGetInfo && sameMethods(deltaID, deltaName) {
-		return failf("metadata boundary", "both reads took the same path %v; the card claims by-name needs a HEAD download and by-id does not", deltaID)
+	if !anyContains(deltaName, "list_file_names") {
+		return failf("metadata by name", "b2_list_file_names was not observed: %v", deltaName)
 	}
-	// Anything else is an observation the card does not describe. It is weaker
-	// than a proof and is reported as such rather than dressed up as either
-	// verdict.
-	note("the observed request paths (%v by id, %v by name) do not match the shapes this check knows; the metadata equality above is the only firm evidence", deltaID, deltaName)
 	return nil
-}
-
-func sameMethods(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // ---------------------------------------------------------------------------
