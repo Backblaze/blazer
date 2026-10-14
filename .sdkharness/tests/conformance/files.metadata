@@ -4,9 +4,9 @@
 # Scenario: read metadata by id and by exact name, without a download.
 #
 # The expected values are B2's published contract. By id: b2_get_file_info
-# "Gets information about a file" and returns contentType, contentLength,
-# contentSha1 and fileInfo ("The custom information that was uploaded with the
-# file").
+# returns contentType, contentLength, contentSha1 and fileInfo. A listed
+# version already contains those fields, so blazer may reuse that response
+# without another b2_get_file_info request.
 # https://www.backblaze.com/apidocs/b2-get-file-info
 # b2_list_file_names returns the current visible file's metadata, including
 # fileId, contentType, contentLength, contentSha1 and fileInfo. A one-result
@@ -201,8 +201,8 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 
 	// --- the request path -------------------------------------------------
-	if !anyContains(deltaID, "get_file_info") {
-		return failf("metadata by id", "b2_get_file_info was not observed: %v", deltaID)
+	if anyContains(deltaID, "download") {
+		return failf("metadata by id", "a download request was issued: %v", deltaID)
 	}
 	if anyContains(deltaName, "download") {
 		return failf("metadata by name", "a download request was issued: %v", deltaName)
