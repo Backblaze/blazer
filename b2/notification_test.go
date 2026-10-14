@@ -117,15 +117,15 @@ func TestNotificationRulesGetAndReplace(t *testing.T) {
 	}
 
 	want := []NotificationRule{{
-		EventTypes:        []string{"b2:ObjectCreated:Upload"},
-		IsEnabled:         true,
-		MaxEventsPerBatch: 2,
-		Name:              "uploads",
-		ObjectNamePrefix:  "st/",
+		EventTypes:       []string{"b2:ObjectCreated:Upload"},
+		IsEnabled:        true,
+		Name:             "uploads",
+		ObjectNamePrefix: "st/",
 		TargetConfiguration: NotificationTargetConfiguration{
 			TargetType: NotificationTargetWebhook,
 			Webhook: &WebhookNotificationTarget{
-				URL: "https://example.com/notify",
+				URL:               "https://example.com/notify",
+				MaxEventsPerBatch: 2,
 				CustomHeaders: []NotificationCustomHeader{{
 					Name:  "X-Notification-Test",
 					Value: "enabled",
@@ -193,12 +193,18 @@ func assertWebhookTargetEncoding(t *testing.T, request map[string]json.RawMessag
 	if len(rules) != 1 {
 		t.Fatalf("encoded rules = %#v, want one rule", rules)
 	}
+	if _, exists := rules[0]["maxEventsPerBatch"]; exists {
+		t.Errorf("rule contains maxEventsPerBatch; want it inside targetConfiguration")
+	}
 	target, ok := rules[0]["targetConfiguration"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("targetConfiguration = %#v, want object", rules[0]["targetConfiguration"])
 	}
 	if target["targetType"] != "webhook" || target["url"] != "https://example.com/notify" {
 		t.Errorf("targetConfiguration = %#v, want webhook target with its URL", target)
+	}
+	if target["maxEventsPerBatch"] != float64(2) {
+		t.Errorf("targetConfiguration.maxEventsPerBatch = %#v, want 2", target["maxEventsPerBatch"])
 	}
 	if _, nested := target["webhook"]; nested {
 		t.Errorf("targetConfiguration = %#v, want a tagged union flattened to B2's wire schema", target)

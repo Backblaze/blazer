@@ -192,7 +192,6 @@ type EventNotificationRule struct {
 	EventTypes          []string                             `json:"eventTypes"`
 	IsEnabled           bool                                 `json:"isEnabled"`
 	IsSuspended         bool                                 `json:"isSuspended,omitempty"`
-	MaxEventsPerBatch   int                                  `json:"maxEventsPerBatch,omitempty"`
 	Name                string                               `json:"name"`
 	ObjectNamePrefix    string                               `json:"objectNamePrefix"`
 	SuspensionReason    string                               `json:"suspensionReason,omitempty"`
@@ -211,6 +210,7 @@ type WebhookNotificationTarget struct {
 	URL                     string                     `json:"url"`
 	CustomHeaders           []NotificationCustomHeader `json:"customHeaders,omitempty"`
 	HMACSHA256SigningSecret string                     `json:"hmacSha256SigningSecret,omitempty"`
+	MaxEventsPerBatch       int                        `json:"maxEventsPerBatch,omitempty"`
 }
 
 // EventNotificationTargetConfiguration is a tagged union. B2 currently
@@ -227,12 +227,14 @@ func (c EventNotificationTargetConfiguration) MarshalJSON() ([]byte, error) {
 		URL                     string                     `json:"url,omitempty"`
 		CustomHeaders           []NotificationCustomHeader `json:"customHeaders,omitempty"`
 		HMACSHA256SigningSecret string                     `json:"hmacSha256SigningSecret,omitempty"`
+		MaxEventsPerBatch       int                        `json:"maxEventsPerBatch,omitempty"`
 	}
 	encoded := targetConfiguration{TargetType: c.TargetType}
 	if c.Webhook != nil {
 		encoded.URL = c.Webhook.URL
 		encoded.CustomHeaders = c.Webhook.CustomHeaders
 		encoded.HMACSHA256SigningSecret = c.Webhook.HMACSHA256SigningSecret
+		encoded.MaxEventsPerBatch = c.Webhook.MaxEventsPerBatch
 	}
 	return json.Marshal(encoded)
 }
@@ -243,6 +245,7 @@ func (c *EventNotificationTargetConfiguration) UnmarshalJSON(data []byte) error 
 		URL                     string                     `json:"url"`
 		CustomHeaders           []NotificationCustomHeader `json:"customHeaders"`
 		HMACSHA256SigningSecret string                     `json:"hmacSha256SigningSecret"`
+		MaxEventsPerBatch       int                        `json:"maxEventsPerBatch"`
 	}
 	var decoded targetConfiguration
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -255,6 +258,7 @@ func (c *EventNotificationTargetConfiguration) UnmarshalJSON(data []byte) error 
 			URL:                     decoded.URL,
 			CustomHeaders:           decoded.CustomHeaders,
 			HMACSHA256SigningSecret: decoded.HMACSHA256SigningSecret,
+			MaxEventsPerBatch:       decoded.MaxEventsPerBatch,
 		}
 	}
 	return nil

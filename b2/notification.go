@@ -39,6 +39,7 @@ type WebhookNotificationTarget struct {
 	URL                     string
 	CustomHeaders           []NotificationCustomHeader
 	HMACSHA256SigningSecret string
+	MaxEventsPerBatch       int
 }
 
 // NotificationTargetConfiguration is a tagged union. B2 currently supports
@@ -54,7 +55,6 @@ type NotificationRule struct {
 	EventTypes          []string
 	IsEnabled           bool
 	IsSuspended         bool
-	MaxEventsPerBatch   int
 	Name                string
 	ObjectNamePrefix    string
 	SuspensionReason    string
@@ -77,13 +77,12 @@ func notificationRulesFromBase(rules []b2types.EventNotificationRule) []Notifica
 	result := make([]NotificationRule, 0, len(rules))
 	for _, rule := range rules {
 		converted := NotificationRule{
-			EventTypes:        append([]string(nil), rule.EventTypes...),
-			IsEnabled:         rule.IsEnabled,
-			IsSuspended:       rule.IsSuspended,
-			MaxEventsPerBatch: rule.MaxEventsPerBatch,
-			Name:              rule.Name,
-			ObjectNamePrefix:  rule.ObjectNamePrefix,
-			SuspensionReason:  rule.SuspensionReason,
+			EventTypes:       append([]string(nil), rule.EventTypes...),
+			IsEnabled:        rule.IsEnabled,
+			IsSuspended:      rule.IsSuspended,
+			Name:             rule.Name,
+			ObjectNamePrefix: rule.ObjectNamePrefix,
+			SuspensionReason: rule.SuspensionReason,
 			TargetConfiguration: NotificationTargetConfiguration{
 				TargetType: NotificationTargetType(rule.TargetConfiguration.TargetType),
 			},
@@ -92,6 +91,7 @@ func notificationRulesFromBase(rules []b2types.EventNotificationRule) []Notifica
 			converted.TargetConfiguration.Webhook = &WebhookNotificationTarget{
 				URL:                     target.URL,
 				HMACSHA256SigningSecret: target.HMACSHA256SigningSecret,
+				MaxEventsPerBatch:       target.MaxEventsPerBatch,
 			}
 			for _, header := range target.CustomHeaders {
 				converted.TargetConfiguration.Webhook.CustomHeaders = append(converted.TargetConfiguration.Webhook.CustomHeaders, NotificationCustomHeader{
@@ -109,13 +109,12 @@ func notificationRulesToBase(rules []NotificationRule) []b2types.EventNotificati
 	result := make([]b2types.EventNotificationRule, 0, len(rules))
 	for _, rule := range rules {
 		converted := b2types.EventNotificationRule{
-			EventTypes:        append([]string(nil), rule.EventTypes...),
-			IsEnabled:         rule.IsEnabled,
-			IsSuspended:       rule.IsSuspended,
-			MaxEventsPerBatch: rule.MaxEventsPerBatch,
-			Name:              rule.Name,
-			ObjectNamePrefix:  rule.ObjectNamePrefix,
-			SuspensionReason:  rule.SuspensionReason,
+			EventTypes:       append([]string(nil), rule.EventTypes...),
+			IsEnabled:        rule.IsEnabled,
+			IsSuspended:      rule.IsSuspended,
+			Name:             rule.Name,
+			ObjectNamePrefix: rule.ObjectNamePrefix,
+			SuspensionReason: rule.SuspensionReason,
 			TargetConfiguration: b2types.EventNotificationTargetConfiguration{
 				TargetType: string(rule.TargetConfiguration.TargetType),
 			},
@@ -124,6 +123,7 @@ func notificationRulesToBase(rules []NotificationRule) []b2types.EventNotificati
 			converted.TargetConfiguration.Webhook = &b2types.WebhookNotificationTarget{
 				URL:                     target.URL,
 				HMACSHA256SigningSecret: target.HMACSHA256SigningSecret,
+				MaxEventsPerBatch:       target.MaxEventsPerBatch,
 			}
 			for _, header := range target.CustomHeaders {
 				converted.TargetConfiguration.Webhook.CustomHeaders = append(converted.TargetConfiguration.Webhook.CustomHeaders, b2types.NotificationCustomHeader{

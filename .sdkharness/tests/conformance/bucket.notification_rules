@@ -144,13 +144,13 @@ func runCheck(ctx context.Context, target *string) (err error) {
 	want := []b2.NotificationRule{{
 		EventTypes:        []string{"b2:ObjectCreated:Upload"},
 		IsEnabled:         true,
-		MaxEventsPerBatch: 2,
 		Name:              "sdkharness-conf",
 		ObjectNamePrefix:  "st/",
 		TargetConfiguration: b2.NotificationTargetConfiguration{
 			TargetType: b2.NotificationTargetWebhook,
 			Webhook: &b2.WebhookNotificationTarget{
-				URL: "https://example.com/sdkharness-notifications",
+				URL:               "https://example.com/sdkharness-notifications",
+				MaxEventsPerBatch: 2,
 				CustomHeaders: []b2.NotificationCustomHeader{{
 					Name:  "X-Sdkharness-Notification",
 					Value: "enabled",
