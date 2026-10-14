@@ -182,6 +182,9 @@ func runCheck(ctx context.Context, target *string) error {
 
 	// --- the metadata itself, on both paths -----------------------------
 	for label, attrs := range map[string]*b2.Attrs{"by id": attrsByID, "by name": attrsByName} {
+		if attrs.Name != name {
+			return failf("metadata "+label, "fileName %q, expected %q", attrs.Name, name)
+		}
 		if attrs.Size != int64(len(payload)) {
 			return failf("metadata "+label, "contentLength %d, expected %d", attrs.Size, len(payload))
 		}
@@ -198,6 +201,9 @@ func runCheck(ctx context.Context, target *string) error {
 		if got != infoValueWanted {
 			return failf("metadata "+label, "the custom fileInfo entry came back changed")
 		}
+	}
+	if !reflect.DeepEqual(attrsByName, attrsByID) {
+		return failf("metadata by name", "the by-name attributes differ from the by-id attributes")
 	}
 
 	// --- the request path -------------------------------------------------
