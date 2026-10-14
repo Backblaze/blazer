@@ -29,8 +29,10 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -615,6 +617,49 @@ func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
 		LastModified:    mtime,
 		Retention:       retention,
 		LegalHold:       legalHold,
+	}, nil
+}
+
+// GetFileInfoByName returns the current visible file's metadata without
+// downloading the file. A missing or hidden name returns a not-exist error.
+func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*Attrs, error) {
+	fi, err := b.b.getFileInfoByName(ctx, name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, b2err{err: err, notFoundErr: true}
+		}
+		return nil, err
+	}
+	fileName, sha, size, contentType, info, status, timestamp := fi.stats()
+	retention, legalHold := fi.fileLock()
+	var state ObjectState
+	switch status {
+	case "upload", "copy":
+		state = Uploaded
+	case "start":
+		state = Started
+	case "hide":
+		state = Hider
+	case "folder":
+		state = Folder
+	}
+	var lastModified time.Time
+	if value, ok := info["src_last_modified_millis"]; ok {
+		millis, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		lastModified = time.Unix(millis/1e3, (millis%1e3)*1e6)
+		delete(info, "src_last_modified_millis")
+	}
+	if value, ok := info["large_file_sha1"]; ok {
+		sha = value
+	}
+	return &Attrs{
+		Name: fileName, Size: size, ContentType: contentType,
+		UploadTimestamp: timestamp, SHA1: sha, Info: info,
+		Status: state, LastModified: lastModified,
+		Retention: retention, LegalHold: legalHold,
 	}, nil
 }
 

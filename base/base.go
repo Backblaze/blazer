@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"net/http"
 	"regexp"
@@ -1482,6 +1483,43 @@ type FileInfo struct {
 	Timestamp   time.Time
 	Retention   *FileRetention
 	LegalHold   string
+}
+
+// GetFileInfoByName returns metadata for the current visible file with name.
+// A one-result b2_list_file_names request avoids downloading the file and
+// returns no result for a hidden file or a name that only shares a prefix.
+func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*FileInfo, error) {
+	if name == "" {
+		return nil, fmt.Errorf("file %q: %w", name, fs.ErrNotExist)
+	}
+	request := &b2types.ListFileNamesRequest{
+		BucketID:     b.ID,
+		Count:        1,
+		Continuation: name,
+		Prefix:       name,
+	}
+	response := &b2types.ListFileNamesResponse{}
+	headers := map[string]string{"Authorization": b.b2.authToken}
+	if err := b.b2.opts.makeRequest(ctx, "b2_list_file_names", "POST", b.b2.apiURI+b2types.V4api+"b2_list_file_names", request, response, headers, nil); err != nil {
+		return nil, err
+	}
+	if len(response.Files) == 0 || response.Files[0].Name != name {
+		return nil, fmt.Errorf("file %q: %w", name, fs.ErrNotExist)
+	}
+	f := response.Files[0]
+	retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+	return &FileInfo{
+		Name:        f.Name,
+		SHA1:        f.SHA1,
+		MD5:         f.MD5,
+		Size:        f.Size,
+		ContentType: f.ContentType,
+		Info:        f.Info,
+		Status:      f.Action,
+		Timestamp:   millitime(f.Timestamp),
+		Retention:   retention,
+		LegalHold:   legalHold,
+	}, nil
 }
 
 func fileLockFromResponse(retention b2types.FileRetentionResponse, legalHold b2types.LegalHoldResponse) (*FileRetention, string) {
