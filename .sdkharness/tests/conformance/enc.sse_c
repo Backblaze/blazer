@@ -213,8 +213,13 @@ func runCheck(ctx context.Context, target *string) error {
 	if err != nil {
 		return classify("ranged download", err)
 	}
-	if !bytes.Equal(rangeGot, largePayload[rangeOffset:rangeOffset+rangeLength]) {
-		return failf("ranged download", "the keyed ranged bytes differ from the requested slice")
+	wantRange := largePayload[rangeOffset : rangeOffset+rangeLength]
+	if !bytes.Equal(rangeGot, wantRange) {
+		mismatch := 0
+		for mismatch < len(rangeGot) && mismatch < len(wantRange) && rangeGot[mismatch] == wantRange[mismatch] {
+			mismatch++
+		}
+		return failf("ranged download", "the keyed ranged bytes differ from the requested slice (got %d bytes, want %d; first mismatch %d)", len(rangeGot), len(wantRange), mismatch)
 	}
 
 	versions, err := versionsOf(ctx, bucket, name)

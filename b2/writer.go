@@ -67,6 +67,7 @@ type Writer struct {
 	info        map[string]string
 	retention   *FileRetention
 	legalHold   LegalHold
+	ssec        *SSECKey
 
 	csize       int
 	ctx         context.Context
@@ -265,7 +266,13 @@ func (w *Writer) checkObjectLock() error {
 	if err := w.retention.validate(); err != nil {
 		return err
 	}
-	return w.legalHold.validate(true)
+	if err := w.legalHold.validate(true); err != nil {
+		return err
+	}
+	if w.ssec != nil {
+		return w.ssec.validate()
+	}
+	return nil
 }
 
 // Write satisfies the io.Writer interface.
@@ -352,7 +359,7 @@ func (w *Writer) simpleWriteFile() error {
 	err = retry.Do(
 		w.ctx,
 		func() error {
-			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold)
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.ssec)
 			if err != nil {
 				return err
 			}
@@ -396,7 +403,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		if ctype == "" {
 			ctype = "application/octet-stream"
 		}
-		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold)
+		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold, w.ssec)
 	}
 	var got bool
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
@@ -443,7 +450,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	for id, sha := range seen {
 		w.seen[id] = sha
 	}
-	return fi.compileParts(size, seen), nil
+	return fi.compileParts(size, seen, w.ssec), nil
 }
 
 // checkResumedLock refuses to resume an unfinished upload whose Object Lock
@@ -678,6 +685,15 @@ func WithFileRetention(retention *FileRetention) WriterOption {
 func WithLegalHold(legalHold LegalHold) WriterOption {
 	return func(w *Writer) {
 		w.legalHold = legalHold
+	}
+}
+
+// WithSSECKey encrypts this upload with a caller-provided AES-256 key. The key
+// is used for the simple upload request or for the large-file start request and
+// every part upload; it is never retained by the Object, Bucket or Client.
+func WithSSECKey(key *SSECKey) WriterOption {
+	return func(w *Writer) {
+		w.ssec = key
 	}
 }
 
