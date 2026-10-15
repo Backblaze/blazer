@@ -2,6 +2,7 @@ test_level	scenario	target	executable
 conformance	bucket.cors	simulator	./.sdkharness/tests/run-conformance
 conformance	bucket.crud	simulator	./.sdkharness/tests/run-conformance
 conformance	bucket.lifecycle	simulator	./.sdkharness/tests/run-conformance
+conformance	bucket.notification_rules	simulator	./.sdkharness/tests/run-conformance
 conformance	bucket.replication_config	simulator	./.sdkharness/tests/run-conformance
 conformance	client.progress	simulator	./.sdkharness/tests/run-conformance
 conformance	client.simulator	simulator	./.sdkharness/tests/run-conformance

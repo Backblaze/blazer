@@ -269,12 +269,13 @@ func (t *testRoot) listBuckets(context.Context, string, ...string) ([]b2BucketIn
 }
 
 type testBucket struct {
-	n               string
-	idv             string
-	errs            *errCont
-	files           map[string]string
-	corsRules       []CORSRule
-	fileLockEnabled bool
+	n                      string
+	idv                    string
+	errs                   *errCont
+	files                  map[string]string
+	corsRules              []CORSRule
+	fileLockEnabled        bool
+	notificationRulesValue []NotificationRule
 }
 
 func (t *testBucket) name() string  { return t.n }
@@ -285,6 +286,13 @@ func (t *testBucket) attrs() *BucketAttrs {
 func (t *testBucket) deleteBucket(context.Context) error               { return nil }
 func (t *testBucket) updateBucket(context.Context, *BucketAttrs) error { return nil }
 func (t *testBucket) id() string                                       { return t.idv }
+func (t *testBucket) notificationRules(context.Context) ([]NotificationRule, error) {
+	return append([]NotificationRule(nil), t.notificationRulesValue...), nil
+}
+func (t *testBucket) setNotificationRules(_ context.Context, rules []NotificationRule) error {
+	t.notificationRulesValue = append([]NotificationRule(nil), rules...)
+	return nil
+}
 
 func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	if err := t.errs.getError("getUploadURL"); err != nil {
