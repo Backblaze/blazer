@@ -1370,12 +1370,13 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 			b2:        b.b2,
 			ID:        f.FileID,
 			Info: &FileInfo{
-				Name:        f.Name,
-				ContentType: f.ContentType,
-				Info:        f.Info,
-				Timestamp:   millitime(f.Timestamp),
-				Retention:   retention,
-				LegalHold:   legalHold,
+				Name:                 f.Name,
+				ContentType:          f.ContentType,
+				Info:                 f.Info,
+				Timestamp:            millitime(f.Timestamp),
+				Retention:            retention,
+				LegalHold:            legalHold,
+				ServerSideEncryption: f.ServerSideEncryption,
 			},
 		})
 	}
@@ -1411,16 +1412,17 @@ func (b *Bucket) ListFileNames(ctx context.Context, count int, continuation, pre
 			Status:    f.Action,
 			Timestamp: millitime(f.Timestamp),
 			Info: &FileInfo{
-				Name:        f.Name,
-				SHA1:        f.SHA1,
-				MD5:         f.MD5,
-				Size:        f.Size,
-				ContentType: f.ContentType,
-				Info:        f.Info,
-				Status:      f.Action,
-				Timestamp:   millitime(f.Timestamp),
-				Retention:   retention,
-				LegalHold:   legalHold,
+				Name:                 f.Name,
+				SHA1:                 f.SHA1,
+				MD5:                  f.MD5,
+				Size:                 f.Size,
+				ContentType:          f.ContentType,
+				Info:                 f.Info,
+				Status:               f.Action,
+				Timestamp:            millitime(f.Timestamp),
+				Retention:            retention,
+				LegalHold:            legalHold,
+				ServerSideEncryption: f.ServerSideEncryption,
 			},
 			ID: f.FileID,
 			b2: b.b2,
@@ -1458,16 +1460,17 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 			Status:    f.Action,
 			Timestamp: millitime(f.Timestamp),
 			Info: &FileInfo{
-				Name:        f.Name,
-				SHA1:        f.SHA1,
-				MD5:         f.MD5,
-				Size:        f.Size,
-				ContentType: f.ContentType,
-				Info:        f.Info,
-				Status:      f.Action,
-				Timestamp:   millitime(f.Timestamp),
-				Retention:   retention,
-				LegalHold:   legalHold,
+				Name:                 f.Name,
+				SHA1:                 f.SHA1,
+				MD5:                  f.MD5,
+				Size:                 f.Size,
+				ContentType:          f.ContentType,
+				Info:                 f.Info,
+				Status:               f.Action,
+				Timestamp:            millitime(f.Timestamp),
+				Retention:            retention,
+				LegalHold:            legalHold,
+				ServerSideEncryption: f.ServerSideEncryption,
 			},
 			ID: f.FileID,
 			b2: b.b2,
@@ -1616,16 +1619,17 @@ func (b *Bucket) HideFile(ctx context.Context, name string) (*File, error) {
 
 // FileInfo holds information about a specific file.
 type FileInfo struct {
-	Name        string
-	SHA1        string
-	MD5         string
-	Size        int64
-	ContentType string
-	Info        map[string]string
-	Status      string
-	Timestamp   time.Time
-	Retention   *FileRetention
-	LegalHold   string
+	Name                 string
+	SHA1                 string
+	MD5                  string
+	Size                 int64
+	ContentType          string
+	Info                 map[string]string
+	Status               string
+	Timestamp            time.Time
+	Retention            *FileRetention
+	LegalHold            string
+	ServerSideEncryption *b2types.ServerSideEncryption
 }
 
 // GetFileInfoByName returns metadata for the current visible file with name.
@@ -1652,16 +1656,17 @@ func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*FileInfo,
 	f := response.Files[0]
 	retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
 	return &FileInfo{
-		Name:        f.Name,
-		SHA1:        f.SHA1,
-		MD5:         f.MD5,
-		Size:        f.Size,
-		ContentType: f.ContentType,
-		Info:        f.Info,
-		Status:      f.Action,
-		Timestamp:   millitime(f.Timestamp),
-		Retention:   retention,
-		LegalHold:   legalHold,
+		Name:                 f.Name,
+		SHA1:                 f.SHA1,
+		MD5:                  f.MD5,
+		Size:                 f.Size,
+		ContentType:          f.ContentType,
+		Info:                 f.Info,
+		Status:               f.Action,
+		Timestamp:            millitime(f.Timestamp),
+		Retention:            retention,
+		LegalHold:            legalHold,
+		ServerSideEncryption: f.ServerSideEncryption,
 	}, nil
 }
 
@@ -1694,16 +1699,17 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 	f.Timestamp = millitime(b2resp.Timestamp)
 	retention, legalHold := fileLockFromResponse(b2resp.Retention, b2resp.LegalHold)
 	f.Info = &FileInfo{
-		Name:        b2resp.Name,
-		SHA1:        b2resp.SHA1,
-		MD5:         b2resp.MD5,
-		Size:        b2resp.Size,
-		ContentType: b2resp.ContentType,
-		Info:        b2resp.Info,
-		Status:      b2resp.Action,
-		Timestamp:   millitime(b2resp.Timestamp),
-		Retention:   retention,
-		LegalHold:   legalHold,
+		Name:                 b2resp.Name,
+		SHA1:                 b2resp.SHA1,
+		MD5:                  b2resp.MD5,
+		Size:                 b2resp.Size,
+		ContentType:          b2resp.ContentType,
+		Info:                 b2resp.Info,
+		Status:               b2resp.Action,
+		Timestamp:            millitime(b2resp.Timestamp),
+		Retention:            retention,
+		LegalHold:            legalHold,
+		ServerSideEncryption: b2resp.ServerSideEncryption,
 	}
 	return f.Info, nil
 }

@@ -56,7 +56,7 @@ type beBucketInterface interface {
 	notificationRules(context.Context) ([]NotificationRule, error)
 	setNotificationRules(context.Context, []NotificationRule) error
 	getUploadURL(context.Context) (beURLInterface, error)
-	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold, ssec *SSECKey) (beLargeFileInterface, error)
+	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold, encryption *uploadEncryption) (beLargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]beFileInterface, string, error)
 	getFileInfoByName(context.Context, string) (beFileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]beFileInterface, string, string, error)
@@ -76,7 +76,7 @@ type beBucket struct {
 }
 
 type beURLInterface interface {
-	uploadFile(context.Context, readResetter, int, string, string, string, map[string]string, *FileRetention, LegalHold, *SSECKey) (beFileInterface, error)
+	uploadFile(context.Context, readResetter, int, string, string, string, map[string]string, *FileRetention, LegalHold, *uploadEncryption) (beFileInterface, error)
 }
 
 type beURL struct {
@@ -95,7 +95,7 @@ type beFileInterface interface {
 	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (beFileInfoInterface, error)
 	listParts(context.Context, int, int) ([]beFilePartInterface, int, error)
-	compileParts(int64, map[int]string, *SSECKey) beLargeFileInterface
+	compileParts(int64, map[int]string, *uploadEncryption) beLargeFileInterface
 	AsLargeFile() beLargeFileInterface
 }
 
@@ -140,6 +140,7 @@ type beFileReader struct {
 type beFileInfoInterface interface {
 	stats() (string, string, int64, string, map[string]string, string, time.Time)
 	fileLock() (*FileRetention, LegalHold)
+	serverSideEncryption() *ServerSideEncryption
 }
 
 type beFilePartInterface interface {
@@ -154,15 +155,16 @@ type beFilePart struct {
 }
 
 type beFileInfo struct {
-	name      string
-	sha       string
-	size      int64
-	ct        string
-	info      map[string]string
-	status    string
-	stamp     time.Time
-	retention *FileRetention
-	legalHold LegalHold
+	name       string
+	sha        string
+	size       int64
+	ct         string
+	info       map[string]string
+	status     string
+	stamp      time.Time
+	retention  *FileRetention
+	legalHold  LegalHold
+	encryption *ServerSideEncryption
 }
 
 type beKeyInterface interface {
@@ -400,11 +402,11 @@ func (b *beBucket) getUploadURL(ctx context.Context) (beURLInterface, error) {
 	return url, nil
 }
 
-func (b *beBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, retention *FileRetention, legalHold LegalHold, ssec *SSECKey) (beLargeFileInterface, error) {
+func (b *beBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, retention *FileRetention, legalHold LegalHold, encryption *uploadEncryption) (beLargeFileInterface, error) {
 	var file beLargeFileInterface
 	f := func() error {
 		g := func() error {
-			f, err := b.b2bucket.startLargeFile(ctx, name, ct, info, retention, legalHold, ssec)
+			f, err := b.b2bucket.startLargeFile(ctx, name, ct, info, retention, legalHold, encryption)
 			if err != nil {
 				return err
 			}
@@ -458,10 +460,11 @@ func (b *beBucket) getFileInfoByName(ctx context.Context, name string) (beFileIn
 			}
 			fileName, sha, size, contentType, metadata, status, timestamp := info.stats()
 			retention, legalHold := info.fileLock()
+			encryption := info.serverSideEncryption()
 			result = &beFileInfo{
 				name: fileName, sha: sha, size: size, ct: contentType,
 				info: metadata, status: status, stamp: timestamp,
-				retention: retention, legalHold: legalHold,
+				retention: retention, legalHold: legalHold, encryption: encryption,
 			}
 			return nil
 		})
@@ -622,13 +625,13 @@ func (b *beBucket) file(id, name string) beFileInterface {
 	}
 }
 
-func (b *beURL) uploadFile(ctx context.Context, r readResetter, size int, name, ct, sha1 string, info map[string]string, retention *FileRetention, legalHold LegalHold, ssec *SSECKey) (beFileInterface, error) {
+func (b *beURL) uploadFile(ctx context.Context, r readResetter, size int, name, ct, sha1 string, info map[string]string, retention *FileRetention, legalHold LegalHold, encryption *uploadEncryption) (beFileInterface, error) {
 	var file beFileInterface
 	f := func() error {
 		if err := r.Reset(); err != nil {
 			return err
 		}
-		f, err := b.b2url.uploadFile(ctx, r, size, name, ct, sha1, info, retention, legalHold, ssec)
+		f, err := b.b2url.uploadFile(ctx, r, size, name, ct, sha1, info, retention, legalHold, encryption)
 		if err != nil {
 			return err
 		}
@@ -701,16 +704,18 @@ func (b *beFile) getFileInfo(ctx context.Context) (beFileInfoInterface, error) {
 			}
 			name, sha, size, ct, info, status, stamp := fi.stats()
 			retention, legalHold := fi.fileLock()
+			encryption := fi.serverSideEncryption()
 			fileInfo = &beFileInfo{
-				name:      name,
-				sha:       sha,
-				size:      size,
-				ct:        ct,
-				info:      info,
-				status:    status,
-				stamp:     stamp,
-				retention: retention,
-				legalHold: legalHold,
+				name:       name,
+				sha:        sha,
+				size:       size,
+				ct:         ct,
+				info:       info,
+				status:     status,
+				stamp:      stamp,
+				retention:  retention,
+				legalHold:  legalHold,
+				encryption: encryption,
 			}
 			return nil
 		}
@@ -748,9 +753,9 @@ func (b *beFile) listParts(ctx context.Context, next, count int) ([]beFilePartIn
 	return fpi, rnxt, nil
 }
 
-func (b *beFile) compileParts(size int64, seen map[int]string, ssec *SSECKey) beLargeFileInterface {
+func (b *beFile) compileParts(size int64, seen map[int]string, encryption *uploadEncryption) beLargeFileInterface {
 	return &beLargeFile{
-		b2largeFile: b.b2file.compileParts(size, seen, ssec),
+		b2largeFile: b.b2file.compileParts(size, seen, encryption),
 		ri:          b.ri,
 	}
 }
@@ -870,6 +875,8 @@ func (b *beFileInfo) stats() (string, string, int64, string, map[string]string, 
 }
 
 func (b *beFileInfo) fileLock() (*FileRetention, LegalHold) { return b.retention, b.legalHold }
+
+func (b *beFileInfo) serverSideEncryption() *ServerSideEncryption { return b.encryption }
 
 func (b *beFilePart) number() int  { return b.b2filePart.number() }
 func (b *beFilePart) sha1() string { return b.b2filePart.sha1() }

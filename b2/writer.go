@@ -67,7 +67,7 @@ type Writer struct {
 	info        map[string]string
 	retention   *FileRetention
 	legalHold   LegalHold
-	ssec        *SSECKey
+	encryption  *uploadEncryption
 
 	csize       int
 	ctx         context.Context
@@ -100,6 +100,21 @@ type Writer struct {
 
 	smux sync.RWMutex
 	smap map[int]*meteredReader
+}
+
+// uploadEncryption is the single per-request encryption setting shared by
+// simple uploads and large-file starts. SSE-C carries key material for each
+// part; SSE-B2 applies only when the file is created.
+type uploadEncryption struct {
+	sse  *ServerSideEncryption
+	ssec *SSECKey
+}
+
+func (e *uploadEncryption) validate() error {
+	if e == nil || e.ssec == nil {
+		return nil
+	}
+	return e.ssec.validate()
 }
 
 type chunk struct {
@@ -269,10 +284,7 @@ func (w *Writer) checkObjectLock() error {
 	if err := w.legalHold.validate(true); err != nil {
 		return err
 	}
-	if w.ssec != nil {
-		return w.ssec.validate()
-	}
-	return nil
+	return w.encryption.validate()
 }
 
 // Write satisfies the io.Writer interface.
@@ -359,7 +371,7 @@ func (w *Writer) simpleWriteFile() error {
 	err = retry.Do(
 		w.ctx,
 		func() error {
-			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.ssec)
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.encryption)
 			if err != nil {
 				return err
 			}
@@ -403,7 +415,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		if ctype == "" {
 			ctype = "application/octet-stream"
 		}
-		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold, w.ssec)
+		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold, w.encryption)
 	}
 	var got bool
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
@@ -450,7 +462,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	for id, sha := range seen {
 		w.seen[id] = sha
 	}
-	return fi.compileParts(size, seen, w.ssec), nil
+	return fi.compileParts(size, seen, w.encryption), nil
 }
 
 // checkResumedLock refuses to resume an unfinished upload whose Object Lock
@@ -693,7 +705,17 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 // every part upload; it is never retained by the Object, Bucket or Client.
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
-		w.ssec = key
+		w.encryption = &uploadEncryption{ssec: key}
+	}
+}
+
+// WithSSEB2 encrypts this upload with a B2-managed key using algorithm. It
+// overrides the bucket's default for this upload only; the setting is used for
+// a simple upload request or the large-file start request, never retained by
+// the Object, Bucket or Client.
+func WithSSEB2(algorithm string) WriterOption {
+	return func(w *Writer) {
+		w.encryption = &uploadEncryption{sse: newServerSideEncryption("SSE-B2", algorithm)}
 	}
 }
 
