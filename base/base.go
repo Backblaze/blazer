@@ -626,7 +626,7 @@ func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2
 
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
-func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool) (*Bucket, error) {
+func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool, replicationConfiguration *b2types.ReplicationConfiguration) (*Bucket, error) {
 	if btype != "allPublic" {
 		btype = "allPrivate"
 	}
@@ -648,6 +648,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(sse),
 		CORSRules:                   corsRules,
 		FileLockEnabled:             fileLockEnabled,
+		ReplicationConfiguration:    replicationConfiguration,
 	}
 	b2resp := &b2types.CreateBucketResponse{}
 	headers := map[string]string{
@@ -678,6 +679,10 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	bucket.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
+	if cfg := b2resp.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
+		(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
+		bucket.ReplicationConfiguration = cfg.Value
+	}
 	return bucket, nil
 }
 

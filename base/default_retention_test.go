@@ -89,7 +89,7 @@ func TestDefaultRetentionFromBucketResponses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	created, err := b2.CreateBucket(ctx, "bucket-name", "allPrivate", nil, nil, nil, nil, false)
+	created, err := b2.CreateBucket(ctx, "bucket-name", "allPrivate", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
