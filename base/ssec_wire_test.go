@@ -142,7 +142,9 @@ func TestSSECWireShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
 	assertSSECHeaders(t, (*requests)[len(*requests)-1].headers, "key-base64", "md5-base64")
 	if got := (*requests)[len(*requests)-1].headers.Get("Range"); got != "" {
 		t.Errorf("HEAD Range = %q, want empty", got)
@@ -152,7 +154,9 @@ func TestSSECWireShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
 	assertSSECHeaders(t, (*requests)[len(*requests)-1].headers, "key-base64", "md5-base64")
 	if got := (*requests)[len(*requests)-1].headers.Get("Range"); got != "bytes=2-4" {
 		t.Errorf("GET Range = %q, want bytes=2-4", got)
