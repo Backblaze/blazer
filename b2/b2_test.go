@@ -304,7 +304,7 @@ func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	}, nil
 }
 
-func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string, _ *FileRetention, _ LegalHold) (b2LargeFileInterface, error) {
+func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *SSECKey) (b2LargeFileInterface, error) {
 	return &testLargeFile{
 		name:  name,
 		parts: make(map[int][]byte),
@@ -354,7 +354,7 @@ func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, co
 	return nil, "", fmt.Errorf("testBucket.listUnfinishedLargeFiles(ctx, %d, %q): not implemented", count, cont)
 }
 
-func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool) (b2FileReaderInterface, error) {
+func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool, _ *SSECKey) (b2FileReaderInterface, error) {
 	gmux.Lock()
 	defer gmux.Unlock()
 	f := t.files[name]
@@ -373,7 +373,7 @@ func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, 
 }
 
 func (t *testBucket) hideFile(context.Context, string) (b2FileInterface, error) { return nil, nil }
-func (t *testBucket) copyFile(context.Context, string, string, string, string, string, string, map[string]string) (b2FileInterface, error) {
+func (t *testBucket) copyFile(context.Context, string, string, string, string, string, string, map[string]string, *SSECKey, *SSECKey) (b2FileInterface, error) {
 	return nil, nil
 }
 func (t *testBucket) getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error) {
@@ -390,7 +390,7 @@ type testURL struct {
 
 func (t *testURL) reload(context.Context) error { return nil }
 
-func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string, _ *FileRetention, _ LegalHold) (b2FileInterface, error) {
+func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *SSECKey) (b2FileInterface, error) {
 	if err := t.errs.getError("uploadFile"); err != nil {
 		return nil, err
 	}
@@ -484,7 +484,7 @@ func (t *testFile) size() int64          { return t.s }
 func (t *testFile) timestamp() time.Time { return t.t }
 func (t *testFile) status() string       { return t.a }
 
-func (t *testFile) compileParts(int64, map[int]string) b2LargeFileInterface {
+func (t *testFile) compileParts(int64, map[int]string, *SSECKey) b2LargeFileInterface {
 	panic("not implemented")
 }
 
@@ -1444,6 +1444,25 @@ func TestReadRangeReturnsRight(t *testing.T) {
 	}
 	if i != 1400 {
 		t.Errorf("NewRangeReader(_, 200, 1400): want 1400, got %d", i)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
+
+	// Exact multiples of ChunkSize must still mark the final requested chunk.
+	// With more than one worker, the remaining-length calculation is shared.
+	r = obj.NewRangeReader(ctx, 200, 2000)
+	r.ChunkSize = 1000
+	r.ConcurrentDownloads = 2
+	i, err = io.Copy(ioutil.Discard, r)
+	if err != nil {
+		t.Error(err)
+	}
+	if i != 2000 {
+		t.Errorf("parallel NewRangeReader(_, 200, 2000): want 2000, got %d", i)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
 	}
 }
 
