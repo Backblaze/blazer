@@ -380,19 +380,20 @@ type GetFileInfoRequest struct {
 }
 
 type GetFileInfoResponse struct {
-	FileID      string                `json:"fileId,omitempty"`
-	Name        string                `json:"fileName,omitempty"`
-	AccountID   string                `json:"accountId,omitempty"`
-	BucketID    string                `json:"bucketId,omitempty"`
-	Size        int64                 `json:"contentLength,omitempty"`
-	SHA1        string                `json:"contentSha1,omitempty"`
-	MD5         string                `json:"contentMd5,omitempty"`
-	ContentType string                `json:"contentType,omitempty"`
-	Info        map[string]string     `json:"fileInfo,omitempty"`
-	Action      string                `json:"action,omitempty"`
-	Timestamp   int64                 `json:"uploadTimestamp,omitempty"`
-	Retention   FileRetentionResponse `json:"fileRetention,omitempty"`
-	LegalHold   LegalHoldResponse     `json:"legalHold,omitempty"`
+	FileID               string                `json:"fileId,omitempty"`
+	Name                 string                `json:"fileName,omitempty"`
+	AccountID            string                `json:"accountId,omitempty"`
+	BucketID             string                `json:"bucketId,omitempty"`
+	Size                 int64                 `json:"contentLength,omitempty"`
+	SHA1                 string                `json:"contentSha1,omitempty"`
+	MD5                  string                `json:"contentMd5,omitempty"`
+	ContentType          string                `json:"contentType,omitempty"`
+	Info                 map[string]string     `json:"fileInfo,omitempty"`
+	Action               string                `json:"action,omitempty"`
+	Timestamp            int64                 `json:"uploadTimestamp,omitempty"`
+	Retention            FileRetentionResponse `json:"fileRetention,omitempty"`
+	LegalHold            LegalHoldResponse     `json:"legalHold,omitempty"`
+	ServerSideEncryption *ServerSideEncryption `json:"serverSideEncryption,omitempty"`
 }
 
 type UpdateFileRetentionRequest struct {
