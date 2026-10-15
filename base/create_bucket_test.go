@@ -39,6 +39,34 @@ const corsAndLockBucketJSON = `{
 	"fileLockConfiguration": {"isClientAuthorizedToRead": true, "value": {"isFileLockEnabled": true, "defaultRetention": {"mode": null, "period": null}}}
 }`
 
+const replicationBucketJSON = `{
+	"bucketId": "bid",
+	"bucketName": "name",
+	"bucketType": "allPrivate",
+	"bucketInfo": {},
+	"lifecycleRules": [],
+	"revision": 1,
+	"replicationConfiguration": {
+		"isClientAuthorizedToRead": true,
+		"value": {
+			"asReplicationSource": {
+				"sourceApplicationKeyId": "source-key",
+				"replicationRules": [{
+					"replicationRuleName": "rule",
+					"destinationBucketId": "destination-bucket-id",
+					"fileNamePrefix": "prefix/",
+					"includeExistingFiles": true,
+					"isEnabled": true,
+					"priority": 1
+				}]
+			},
+			"asReplicationDestination": {
+				"sourceToDestinationKeyMapping": {"source-key": "destination-key"}
+			}
+		}
+	}
+}`
+
 const plainBucketJSON = `{"bucketId": "bid", "bucketName": "name", "bucketType": "allPrivate", "bucketInfo": {}, "lifecycleRules": [], "revision": 1}`
 
 // bucketFixture serves authorize_account, then answers b2_create_bucket and
@@ -85,7 +113,7 @@ func TestCreateBucketSendsAndReadsCORSAndFileLock(t *testing.T) {
 		AllowedOperations: []string{"b2_download_file_by_name"},
 		MaxAgeSeconds:     60,
 	}}
-	bucket, err := b.CreateBucket(context.Background(), "name", "allPrivate", nil, nil, nil, rules, true)
+	bucket, err := b.CreateBucket(context.Background(), "name", "allPrivate", nil, nil, nil, rules, true, nil)
 	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
@@ -113,17 +141,49 @@ func TestCreateBucketOmitsUnsetCORSAndFileLock(t *testing.T) {
 	b, sent, closeSrv := bucketFixture(t, plainBucketJSON)
 	defer closeSrv()
 
-	bucket, err := b.CreateBucket(context.Background(), "name", "allPrivate", nil, nil, nil, nil, false)
+	bucket, err := b.CreateBucket(context.Background(), "name", "allPrivate", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
-	for _, k := range []string{"corsRules", "fileLockEnabled"} {
+	for _, k := range []string{"corsRules", "fileLockEnabled", "replicationConfiguration"} {
 		if v, ok := (*sent)[k]; ok {
 			t.Errorf("request unexpectedly contained %s: %v", k, v)
 		}
 	}
 	if bucket.FileLockEnabled || len(bucket.CORSRules) != 0 {
 		t.Errorf("bucket = %+v, want no CORS and no file lock", bucket)
+	}
+}
+
+func TestCreateBucketSendsAndReadsReplicationConfiguration(t *testing.T) {
+	b, sent, closeSrv := bucketFixture(t, replicationBucketJSON)
+	defer closeSrv()
+
+	want := &b2types.ReplicationConfiguration{
+		AsReplicationSource: &b2types.AsReplicationSource{
+			KeyID: "source-key",
+			ReplicationRules: []b2types.ReplicationRules{{
+				ReplicationRuleName:  "rule",
+				DestinationBucketID:  "destination-bucket-id",
+				FileNamePrefix:       "prefix/",
+				IncludeExistingFiles: true,
+				IsEnabled:            true,
+				Priority:             1,
+			}},
+		},
+		AsReplicationDestination: &b2types.AsReplicationDestination{
+			SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"},
+		},
+	}
+	bucket, err := b.CreateBucket(context.Background(), "name", "allPrivate", nil, nil, nil, nil, false, want)
+	if err != nil {
+		t.Fatalf("CreateBucket: %v", err)
+	}
+	if got, ok := (*sent)["replicationConfiguration"]; !ok || got == nil {
+		t.Errorf("request replicationConfiguration = %v, want the caller's config", got)
+	}
+	if !reflect.DeepEqual(bucket.ReplicationConfiguration, want) {
+		t.Errorf("bucket.ReplicationConfiguration = %#v, want %#v", bucket.ReplicationConfiguration, want)
 	}
 }
 
