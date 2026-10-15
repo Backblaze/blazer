@@ -66,7 +66,7 @@ func newReplFixture(t *testing.T, updateResponses ...string) *replFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bb, err := root.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false)
+	bb, err := root.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
