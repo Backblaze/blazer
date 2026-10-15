@@ -58,6 +58,7 @@ type beBucketInterface interface {
 	getUploadURL(context.Context) (beURLInterface, error)
 	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold) (beLargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]beFileInterface, string, error)
+	getFileInfoByName(context.Context, string) (beFileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]beFileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (beFileReaderInterface, error)
@@ -445,6 +446,30 @@ func (b *beBucket) listFileNames(ctx context.Context, count int, continuation, p
 		return nil, "", err
 	}
 	return files, cont, nil
+}
+
+func (b *beBucket) getFileInfoByName(ctx context.Context, name string) (beFileInfoInterface, error) {
+	var result beFileInfoInterface
+	err := withBackoff(ctx, b.ri, func() error {
+		return withReauth(ctx, b.ri, func() error {
+			info, err := b.b2bucket.getFileInfoByName(ctx, name)
+			if err != nil {
+				return err
+			}
+			fileName, sha, size, contentType, metadata, status, timestamp := info.stats()
+			retention, legalHold := info.fileLock()
+			result = &beFileInfo{
+				name: fileName, sha: sha, size: size, ct: contentType,
+				info: metadata, status: status, stamp: timestamp,
+				retention: retention, legalHold: legalHold,
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (b *beBucket) listFileVersions(ctx context.Context, count int, nextName, nextID, prefix, delimiter string) ([]beFileInterface, string, string, error) {

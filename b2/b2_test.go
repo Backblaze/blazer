@@ -341,6 +341,10 @@ func (t *testBucket) listFileNames(ctx context.Context, count int, cont, pfx, de
 	return b, next, nil
 }
 
+func (t *testBucket) getFileInfoByName(context.Context, string) (b2FileInfoInterface, error) {
+	return nil, fmt.Errorf("testBucket.getFileInfoByName: not implemented")
+}
+
 func (t *testBucket) listFileVersions(ctx context.Context, count int, a, b, c, d string) ([]b2FileInterface, string, string, error) {
 	x, y, z := t.listFileNames(ctx, count, a, c, d)
 	return x, y, "", z

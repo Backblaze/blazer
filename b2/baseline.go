@@ -54,6 +54,7 @@ type b2BucketInterface interface {
 	getUploadURL(context.Context) (b2URLInterface, error)
 	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold) (b2LargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]b2FileInterface, string, error)
+	getFileInfoByName(context.Context, string) (b2FileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]b2FileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (b2FileReaderInterface, error)
@@ -532,6 +533,14 @@ func (b *b2Bucket) listFileNames(ctx context.Context, count int, continuation, p
 		files = append(files, &b2File{f})
 	}
 	return files, c, nil
+}
+
+func (b *b2Bucket) getFileInfoByName(ctx context.Context, name string) (b2FileInfoInterface, error) {
+	info, err := b.b.GetFileInfoByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &b2FileInfo{info}, nil
 }
 
 func (b *b2Bucket) listFileVersions(ctx context.Context, count int, nextName, nextID, prefix, delimiter string) ([]b2FileInterface, string, string, error) {
