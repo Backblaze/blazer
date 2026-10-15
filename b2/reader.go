@@ -126,16 +126,16 @@ func (r *Reader) thread() {
 			r.rmux.Lock()
 			chunkID := r.chwid
 			r.chwid++
-			r.rmux.Unlock()
 			offset := int64(chunkID*r.csize) + r.offset
 			size := int64(r.csize)
 			if r.length > 0 {
-				if size > r.length {
+				if size >= r.length {
 					buf.final = true
 					size = r.length
 				}
 				r.length -= size
 			}
+			r.rmux.Unlock()
 			var b backoff
 			var attempts int
 		redo:
