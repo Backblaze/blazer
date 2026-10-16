@@ -62,6 +62,7 @@ type beBucketInterface interface {
 	listFileVersions(context.Context, int, string, string, string, string) ([]beFileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (beFileReaderInterface, error)
+	downloadFileByID(context.Context, string, int64, int64, bool) (beFileReaderInterface, error)
 	hideFile(context.Context, string) (beFileInterface, error)
 	copyFile(context.Context, string, string, string, string, string, string, map[string]string) (beFileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
@@ -530,6 +531,28 @@ func (b *beBucket) downloadFileByName(ctx context.Context, name string, offset, 
 	f := func() error {
 		g := func() error {
 			fr, err := b.b2bucket.downloadFileByName(ctx, name, offset, size, header)
+			if err != nil {
+				return err
+			}
+			reader = &beFileReader{
+				b2fileReader: fr,
+				ri:           b.ri,
+			}
+			return nil
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return reader, nil
+}
+
+func (b *beBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (beFileReaderInterface, error) {
+	var reader beFileReaderInterface
+	f := func() error {
+		g := func() error {
+			fr, err := b.b2bucket.downloadFileByID(ctx, id, offset, size, header)
 			if err != nil {
 				return err
 			}

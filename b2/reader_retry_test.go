@@ -57,6 +57,10 @@ func (b *truncBucket) downloadFileByName(_ context.Context, name string, offset,
 	}, nil
 }
 
+func (b *truncBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (b2FileReaderInterface, error) {
+	return b.downloadFileByName(ctx, id, offset, size, header)
+}
+
 // readTruncated reads a 1000-byte object whose chunk is truncated for the first
 // truncate downloads, and returns what was read, the error, and how many
 // downloads were attempted.
