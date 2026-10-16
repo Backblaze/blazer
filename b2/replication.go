@@ -122,10 +122,17 @@ func SetupReplication(ctx context.Context, src, dst *Bucket, opts ...Replication
 	}
 
 	stamp := time.Now().UnixNano()
-	srcKey, err := src.CreateKey(ctx, fmt.Sprintf("%.60s-replsrc-%x", src.Name(), stamp),
-		Capabilities("readFiles", "readFileLegalHolds", "readFileRetentions"))
-	if err != nil {
-		return err
+	sourceKeyID := ""
+	if srcAttrs.ReplicationConfig != nil {
+		sourceKeyID = srcAttrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID
+	}
+	if sourceKeyID == "" {
+		srcKey, err := src.CreateKey(ctx, fmt.Sprintf("%.60s-replsrc-%x", src.Name(), stamp),
+			Capabilities("readFiles", "readFileLegalHolds", "readFileRetentions"))
+		if err != nil {
+			return err
+		}
+		sourceKeyID = srcKey.ID()
 	}
 	dstKey, err := dst.CreateKey(ctx, fmt.Sprintf("%.60s-repldst-%x", dst.Name(), stamp),
 		Capabilities("writeFiles", "writeFileLegalHolds", "writeFileRetentions", "deleteFiles"))
@@ -144,10 +151,10 @@ func SetupReplication(ctx context.Context, src, dst *Bucket, opts ...Replication
 		Priority:             priority,
 		ReplicationRuleName:  settings.name,
 	}
-	if err := dst.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationDestination(dstAttrs.ReplicationConfig, srcKey.ID(), dstKey.ID())}); err != nil {
+	if err := dst.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationDestination(dstAttrs.ReplicationConfig, sourceKeyID, dstKey.ID())}); err != nil {
 		return err
 	}
-	return src.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationSource(srcAttrs.ReplicationConfig, srcKey.ID(), rule)})
+	return src.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationSource(srcAttrs.ReplicationConfig, sourceKeyID, rule)})
 }
 
 func defaultReplicationRuleName(destinationID, prefix string) string {
@@ -182,7 +189,9 @@ func mergeReplicationDestination(cfg *ReplicationConfiguration, sourceKeyID, des
 
 func mergeReplicationSource(cfg *ReplicationConfiguration, sourceKeyID string, rule ReplicationRules) *ReplicationConfiguration {
 	merged := copyReplicationConfiguration(cfg)
-	merged.AsReplicationSource.SourceApplicationKeyID = sourceKeyID
+	if merged.AsReplicationSource.SourceApplicationKeyID == "" {
+		merged.AsReplicationSource.SourceApplicationKeyID = sourceKeyID
+	}
 	merged.AsReplicationSource.ReplicationRules = append(merged.AsReplicationSource.ReplicationRules, rule)
 	return merged
 }
