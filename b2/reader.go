@@ -23,6 +23,7 @@ import (
 	"hash"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Backblaze/blazer/internal/blog"
@@ -48,6 +49,12 @@ type Reader struct {
 	// 10MB.
 	ChunkSize int
 
+	// Progress receives completed and total download bytes after each completed
+	// chunk. The total is known for a finite NewRangeReader length, and is -1
+	// otherwise. Calls are serialized, but may be made by a download worker.
+	// Set Progress before the first call to Read.
+	Progress func(bytesComplete, bytesTotal int64)
+
 	ctx        context.Context
 	cancel     context.CancelFunc // cancels ctx
 	o          *Object
@@ -64,6 +71,10 @@ type Reader struct {
 	vrfy       hash.Hash
 	readOffEnd bool
 	sha1       string
+
+	progressCompleted int64
+	progressTotal     int64
+	progressMu        sync.Mutex
 
 	rmux  sync.Mutex // guards rcond
 	rcond *sync.Cond
@@ -192,12 +203,28 @@ func (r *Reader) thread() {
 				r.rcond.Broadcast()
 				return
 			}
+			r.reportProgress(i)
 			r.rmux.Lock()
 			r.chunks[chunkID] = buf
 			r.rmux.Unlock()
 			r.rcond.Broadcast()
 		}
 	}()
+}
+
+// reportProgress records completed bytes and reports them in completion order.
+// It serializes callback delivery, although callbacks may run on a download
+// worker goroutine.
+func (r *Reader) reportProgress(bytesComplete int64) {
+	if bytesComplete <= 0 {
+		return
+	}
+	r.progressMu.Lock()
+	defer r.progressMu.Unlock()
+	completed := atomic.AddInt64(&r.progressCompleted, bytesComplete)
+	if r.Progress != nil {
+		r.Progress(completed, atomic.LoadInt64(&r.progressTotal))
+	}
 }
 
 func (r *Reader) curChunk() (*rchunk, error) {
