@@ -738,6 +738,13 @@ func (o *Object) NewReader(ctx context.Context) *Reader {
 	return o.NewRangeReader(ctx, 0, -1)
 }
 
+// DownloadFileByID returns a reader for a file identified by its B2 file ID.
+// It makes one download request; use Object.NewReader for chunked downloads by
+// file name.
+func (b *Bucket) DownloadFileByID(ctx context.Context, id string) (io.ReadCloser, error) {
+	return b.b.downloadFileByID(ctx, id, 0, 0, false)
+}
+
 func (o *Object) ensure(ctx context.Context) error {
 	if o.f == nil {
 		f, err := o.b.getObject(ctx, o.name)
