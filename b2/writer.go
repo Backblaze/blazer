@@ -67,6 +67,11 @@ type Writer struct {
 	info        map[string]string
 	retention   *FileRetention
 	legalHold   LegalHold
+	progress    func(bytesComplete, bytesTotal int64)
+
+	progressCompleted int64
+	progressTotal     int64
+	progressMu        sync.Mutex
 
 	csize       int
 	ctx         context.Context
@@ -139,10 +144,26 @@ func (w *Writer) registerChunk(id int, r *meteredReader) {
 	w.smux.Unlock()
 }
 
-func (w *Writer) completeChunk(id int) {
+func (w *Writer) completeChunk(id int, bytesComplete int64) {
 	w.smux.Lock()
 	w.smap[id] = nil
 	w.smux.Unlock()
+	w.reportProgress(bytesComplete)
+}
+
+// reportProgress records completed bytes and reports them in completion order.
+// It serializes callback delivery, although callbacks may run on an upload
+// worker goroutine.
+func (w *Writer) reportProgress(bytesComplete int64) {
+	if bytesComplete <= 0 {
+		return
+	}
+	w.progressMu.Lock()
+	defer w.progressMu.Unlock()
+	completed := atomic.AddInt64(&w.progressCompleted, bytesComplete)
+	if w.progress != nil {
+		w.progress(completed, atomic.LoadInt64(&w.progressTotal))
+	}
 }
 
 var gid int32
@@ -172,7 +193,7 @@ func (w *Writer) thread() {
 					return
 				}
 				cnk.buf.Close()
-				w.completeChunk(cnk.id)
+				w.completeChunk(cnk.id, completedBytes(cnk.buf))
 				blog.V(2).Infof("skipping chunk %d", cnk.id)
 				continue
 			}
@@ -221,11 +242,11 @@ func (w *Writer) thread() {
 			)
 			if err != nil {
 				w.setErr(err)
-				w.completeChunk(cnk.id)
+				w.completeChunk(cnk.id, 0)
 				cnk.buf.Close()
 				return
 			}
-			w.completeChunk(cnk.id)
+			w.completeChunk(cnk.id, completedBytes(cnk.buf))
 			cnk.buf.Close()
 			blog.V(2).Infof("chunk %d handled", cnk.id)
 		}
@@ -347,7 +368,8 @@ func (w *Writer) simpleWriteFile() error {
 	}
 	mr := &meteredReader{r: r, size: w.w.Len()}
 	w.registerChunk(1, mr)
-	defer w.completeChunk(1)
+	completed := int64(0)
+	defer func() { w.completeChunk(1, completed) }()
 
 	err = retry.Do(
 		w.ctx,
@@ -386,6 +408,7 @@ func (w *Writer) simpleWriteFile() error {
 		return err
 	}
 
+	completed = completedBytes(w.w)
 	success = true
 	return nil
 }
@@ -543,6 +566,7 @@ func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	atomic.StoreInt64(&w.progressTotal, size)
 	var ra io.ReaderAt
 	if rat, ok := r.(io.ReaderAt); ok {
 		ra = rat
@@ -656,6 +680,13 @@ func (w *Writer) withAttrs(attrs *Attrs) *Writer {
 	return w
 }
 
+func completedBytes(buf writeBuffer) int64 {
+	if nb, ok := buf.(*nonBuffer); ok {
+		return int64(nb.size)
+	}
+	return int64(buf.Len())
+}
+
 // A WriterOption sets Writer-specific behavior.
 type WriterOption func(*Writer)
 
@@ -678,6 +709,15 @@ func WithFileRetention(retention *FileRetention) WriterOption {
 func WithLegalHold(legalHold LegalHold) WriterOption {
 	return func(w *Writer) {
 		w.legalHold = legalHold
+	}
+}
+
+// WithProgress sets a callback that receives completed and total upload bytes.
+// The total is known for ReadFrom readers that implement io.Seeker, and is -1
+// otherwise. Calls are serialized, but may be made by an upload worker.
+func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
+	return func(w *Writer) {
+		w.progress = cb
 	}
 }
 
