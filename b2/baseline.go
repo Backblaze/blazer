@@ -451,10 +451,11 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 		})
 	}
 	attrs := &BucketAttrs{
-		LifecycleRules:  rules,
-		Info:            b.b.Info,
-		Type:            BucketType(b.b.Type),
-		FileLockEnabled: b.b.FileLockEnabled,
+		LifecycleRules:              rules,
+		Info:                        b.b.Info,
+		Type:                        BucketType(b.b.Type),
+		FileLockEnabled:             b.b.FileLockEnabled,
+		replicationConfigUnreadable: b.b.ReplicationConfigurationUnreadable,
 	}
 	for _, rule := range b.b.CORSRules {
 		attrs.CORSRules = append(attrs.CORSRules, CORSRule{

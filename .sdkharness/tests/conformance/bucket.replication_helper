@@ -102,7 +102,7 @@ const capability = "bucket.replication_helper"
 
 // blazer x bucket.replication_helper.
 //
-// Setup   create the source and destination buckets in this scenario
+// Setup   create the source and destination buckets and their application keys
 // Action  SetupReplication, then call it again with the same options
 // Assert  the source rule, destination key mapping and status read back;
 //         the second call leaves rule and mapping counts unchanged.
@@ -124,9 +124,21 @@ func runCheck(ctx context.Context, target *string) error {
 		return err
 	}
 	defer cleanupDestination()
+	sourceKey, err := source.CreateKey(ctx, "sdkharness-repl-src-"+source.ID(),
+		b2.Capabilities("readFiles", "readFileLegalHolds", "readFileRetentions"))
+	if err != nil {
+		return classify("create source key", err)
+	}
+	sourceKeyID = sourceKey.ID()
+	destinationKey, err := destination.CreateKey(ctx, "sdkharness-repl-dst-"+destination.ID(),
+		b2.Capabilities("writeFiles", "writeFileLegalHolds", "writeFileRetentions", "deleteFiles"))
+	if err != nil {
+		return classify("create destination key", err)
+	}
+	destinationKeyID = destinationKey.ID()
 
 	options := []b2.ReplicationOption{b2.WithRuleName("sdkharness-replication"), b2.WithFileNamePrefix("st/")}
-	if err := b2.SetupReplication(ctx, source, destination, options...); err != nil {
+	if err := b2.SetupReplication(ctx, source, destination, sourceKeyID, destinationKeyID, options...); err != nil {
 		return classify("setup replication", err)
 	}
 	sourceAttrs, err := source.Attrs(ctx)
@@ -140,9 +152,8 @@ func runCheck(ctx context.Context, target *string) error {
 	if sourceAttrs.ReplicationConfig == nil || destinationAttrs.ReplicationConfig == nil {
 		return failf("read back", "a bucket reports no replication configuration")
 	}
-	sourceKeyID = sourceAttrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID
-	if sourceKeyID == "" {
-		return failf("read back", "source application key id is empty")
+	if sourceAttrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID != sourceKeyID {
+		return failf("read back", "source application key id differs from the supplied id")
 	}
 	rules := sourceAttrs.ReplicationConfig.AsReplicationSource.ReplicationRules
 	if len(rules) != 1 {
@@ -152,15 +163,14 @@ func runCheck(ctx context.Context, target *string) error {
 		return failf("read back", "source rule does not target the destination with the requested prefix")
 	}
 	mapping := destinationAttrs.ReplicationConfig.AsReplicationDestination
-	if mapping == nil || mapping.SourceToDestinationKeyMapping[sourceKeyID] == "" {
-		return failf("read back", "destination has no key mapping for source")
+	if mapping == nil || mapping.SourceToDestinationKeyMapping[sourceKeyID] != destinationKeyID {
+		return failf("read back", "destination has no mapping to the supplied key id")
 	}
-	destinationKeyID = mapping.SourceToDestinationKeyMapping[sourceKeyID]
 	status, err := b2.ReplicationStatus(ctx, source)
 	if err != nil || len(status) != 1 || !status[0].IsEnabled {
 		return failf("status", "configured rule status was not returned: count=%d err=%v", len(status), err)
 	}
-	if err := b2.SetupReplication(ctx, source, destination, options...); err != nil {
+	if err := b2.SetupReplication(ctx, source, destination, sourceKeyID, destinationKeyID, options...); err != nil {
 		return classify("repeat setup", err)
 	}
 	sourceAttrs, err = source.Attrs(ctx)

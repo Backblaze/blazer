@@ -16,8 +16,10 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,15 +64,26 @@ func TestMergeReplicationConfiguration(t *testing.T) {
 
 type replicationTestBucket struct {
 	*testBucket
-	config  *ReplicationConfiguration
-	updates []*BucketAttrs
+	config      *ReplicationConfiguration
+	unreadable  bool
+	updateErr   error
+	updateOrder *[]string
+	updates     []*BucketAttrs
 }
 
 func (b *replicationTestBucket) attrs() *BucketAttrs {
-	return &BucketAttrs{Type: Private, ReplicationConfig: copyReplicationConfiguration(b.config)}
+	return &BucketAttrs{Type: Private, ReplicationConfig: copyReplicationConfiguration(b.config), replicationConfigUnreadable: b.unreadable}
 }
 
 func (b *replicationTestBucket) updateBucket(_ context.Context, attrs *BucketAttrs) error {
+	if b.updateOrder != nil {
+		*b.updateOrder = append(*b.updateOrder, b.n)
+	}
+	if b.updateErr != nil {
+		err := b.updateErr
+		b.updateErr = nil
+		return err
+	}
 	b.config = copyReplicationConfiguration(attrs.ReplicationConfig)
 	b.updates = append(b.updates, &BucketAttrs{ReplicationConfig: copyReplicationConfiguration(attrs.ReplicationConfig)})
 	return nil
@@ -78,8 +91,8 @@ func (b *replicationTestBucket) updateBucket(_ context.Context, attrs *BucketAtt
 
 type replicationTestRoot struct {
 	*testRoot
-	buckets map[string]*replicationTestBucket
-	keys    []replicationTestKey
+	buckets  map[string]*replicationTestBucket
+	keyCalls int
 }
 
 func (r *replicationTestRoot) listBuckets(_ context.Context, name string, _ ...string) ([]b2BucketInterface, error) {
@@ -97,33 +110,21 @@ func (r *replicationTestRoot) listBuckets(_ context.Context, name string, _ ...s
 }
 
 func (r *replicationTestRoot) createKey(_ context.Context, name string, caps []string, _ time.Duration, bucketID, prefix string) (b2KeyInterface, error) {
-	key := replicationTestKey{nameValue: name, idValue: fmt.Sprintf("key-%d", len(r.keys)+1), capsValue: append([]string(nil), caps...), bucketID: bucketID, prefix: prefix}
-	r.keys = append(r.keys, key)
-	return &key, nil
+	r.keyCalls++
+	return nil, fmt.Errorf("unexpected key creation")
 }
-
-type replicationTestKey struct {
-	nameValue, idValue, bucketID, prefix string
-	capsValue                            []string
-}
-
-func (*replicationTestKey) del(context.Context) error { return nil }
-func (k *replicationTestKey) caps() []string          { return k.capsValue }
-func (k *replicationTestKey) name() string            { return k.nameValue }
-func (*replicationTestKey) expires() time.Time        { return time.Time{} }
-func (*replicationTestKey) secret() string            { return "secret" }
-func (k *replicationTestKey) id() string              { return k.idValue }
 
 func TestSetupReplicationUpdatesBothBuckets(t *testing.T) {
 	ctx := context.Background()
 	root := &replicationTestRoot{testRoot: &testRoot{errs: &errCont{}}}
+	var updateOrder []string
 	srcBackend := &replicationTestBucket{testBucket: &testBucket{n: "source", idv: "src-id", errs: &errCont{}}, config: &ReplicationConfiguration{
 		AsReplicationSource:      AsReplicationSource{SourceApplicationKeyID: "previous-key", ReplicationRules: []ReplicationRules{{ReplicationRuleName: "previous", DestinationBucketID: "other-id", Priority: 40}}},
 		AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{"old": "mapped"}},
-	}}
+	}, updateOrder: &updateOrder}
 	dstBackend := &replicationTestBucket{testBucket: &testBucket{n: "destination", idv: "dst-id", errs: &errCont{}}, config: &ReplicationConfiguration{
 		AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{"another": "key"}},
-	}}
+	}, updateOrder: &updateOrder}
 	root.buckets = map[string]*replicationTestBucket{"source": srcBackend, "destination": dstBackend}
 	client := &Client{backend: &beRoot{b2i: root}}
 	src, err := client.Bucket(ctx, "source")
@@ -134,19 +135,20 @@ func TestSetupReplicationUpdatesBothBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SetupReplication(ctx, src, dst, WithRuleName("new-rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true)); err != nil {
+	options := []ReplicationOption{WithRuleName("new-rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true)}
+	if err := SetupReplication(ctx, src, dst, "previous-key", "destination-key", options...); err != nil {
 		t.Fatal(err)
 	}
-	if len(root.keys) != 1 || root.keys[0].bucketID != "dst-id" || root.keys[0].prefix != "" {
-		t.Fatalf("created keys = %+v", root.keys)
-	}
-	if !reflect.DeepEqual(root.keys[0].capsValue, []string{"writeFiles", "writeFileLegalHolds", "writeFileRetentions", "deleteFiles"}) {
-		t.Fatalf("key capabilities = %+v", root.keys)
+	if root.keyCalls != 0 {
+		t.Fatalf("SetupReplication created %d keys, want none", root.keyCalls)
 	}
 	if len(dstBackend.updates) != 1 || len(srcBackend.updates) != 1 {
 		t.Fatalf("update counts: src=%d dst=%d", len(srcBackend.updates), len(dstBackend.updates))
 	}
-	if got := dstBackend.updates[0].ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping; !reflect.DeepEqual(got, map[string]string{"another": "key", "previous-key": "key-1"}) {
+	if !reflect.DeepEqual(updateOrder, []string{"destination", "source"}) {
+		t.Fatalf("update order = %v, want destination before source", updateOrder)
+	}
+	if got := dstBackend.updates[0].ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping; !reflect.DeepEqual(got, map[string]string{"another": "key", "previous-key": "destination-key"}) {
 		t.Fatalf("destination update mapping = %#v", got)
 	}
 	srcCfg := srcBackend.updates[0].ReplicationConfig
@@ -161,11 +163,11 @@ func TestSetupReplicationUpdatesBothBuckets(t *testing.T) {
 	if err != nil || len(status) != 2 || !status[1].IsEnabled {
 		t.Fatalf("ReplicationStatus = %+v, %v", status, err)
 	}
-	if err := SetupReplication(ctx, src, dst, WithRuleName("new-rule"), WithFileNamePrefix("logs/")); err != nil {
+	if err := SetupReplication(ctx, src, dst, "previous-key", "destination-key", options...); err != nil {
 		t.Fatal(err)
 	}
-	if len(root.keys) != 1 || len(srcBackend.updates) != 1 || len(dstBackend.updates) != 1 {
-		t.Fatalf("rerun duplicated setup: keys=%d src updates=%d dst updates=%d", len(root.keys), len(srcBackend.updates), len(dstBackend.updates))
+	if root.keyCalls != 0 || len(srcBackend.updates) != 1 || len(dstBackend.updates) != 1 {
+		t.Fatalf("rerun duplicated setup: key calls=%d src updates=%d dst updates=%d", root.keyCalls, len(srcBackend.updates), len(dstBackend.updates))
 	}
 }
 
@@ -186,7 +188,7 @@ func TestSetupReplicationReusesExistingSourceKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SetupReplication(ctx, src, dst, WithRuleName("to-D2")); err != nil {
+	if err := SetupReplication(ctx, src, dst, "K1", "D2-key", WithRuleName("to-D2")); err != nil {
 		t.Fatal(err)
 	}
 	if got := srcBackend.config.AsReplicationSource.SourceApplicationKeyID; got != "K1" {
@@ -195,10 +197,164 @@ func TestSetupReplicationReusesExistingSourceKey(t *testing.T) {
 	if rules := srcBackend.config.AsReplicationSource.ReplicationRules; len(rules) != 2 || rules[0].DestinationBucketID != "D1" || rules[1].DestinationBucketID != "D2" {
 		t.Fatalf("source rules = %+v", rules)
 	}
-	if len(root.keys) != 1 || root.keys[0].bucketID != "D2" {
-		t.Fatalf("created keys = %+v, want only a destination key", root.keys)
+	if root.keyCalls != 0 {
+		t.Fatalf("created %d keys, want none", root.keyCalls)
 	}
-	if got := dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["K1"]; got != root.keys[0].idValue {
-		t.Fatalf("D2 mapping for K1 = %q, want %q", got, root.keys[0].idValue)
+	if got := dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["K1"]; got != "D2-key" {
+		t.Fatalf("D2 mapping for K1 = %q, want D2-key", got)
+	}
+}
+
+func replicationTestPair(t *testing.T, sourceConfig, destinationConfig *ReplicationConfiguration) (*replicationTestRoot, *replicationTestBucket, *replicationTestBucket, *Bucket, *Bucket) {
+	t.Helper()
+	root := &replicationTestRoot{testRoot: &testRoot{errs: &errCont{}}}
+	sourceBackend := &replicationTestBucket{testBucket: &testBucket{n: "source", idv: "src-id", errs: &errCont{}}, config: sourceConfig}
+	destinationBackend := &replicationTestBucket{testBucket: &testBucket{n: "destination", idv: "dst-id", errs: &errCont{}}, config: destinationConfig}
+	root.buckets = map[string]*replicationTestBucket{"source": sourceBackend, "destination": destinationBackend}
+	client := &Client{backend: &beRoot{b2i: root}}
+	source, err := client.Bucket(context.Background(), "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := client.Bucket(context.Background(), "destination")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, sourceBackend, destinationBackend, source, destination
+}
+
+func TestSetupReplicationSourceKeyConflict(t *testing.T) {
+	cfg := &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{SourceApplicationKeyID: "existing-source-key"}}
+	root, srcBackend, dstBackend, src, dst := replicationTestPair(t, cfg, nil)
+	err := SetupReplication(context.Background(), src, dst, "different-source-key", "destination-key")
+	if err == nil || !strings.Contains(err.Error(), "different application key ID") {
+		t.Fatalf("SetupReplication() = %v, want source-key conflict", err)
+	}
+	if root.keyCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+		t.Fatalf("conflicting key caused changes: key calls=%d source updates=%d destination updates=%d", root.keyCalls, len(srcBackend.updates), len(dstBackend.updates))
+	}
+}
+
+func TestSetupReplicationIdempotency(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		options          []ReplicationOption
+		configuredDstID  string
+		destinationKeyID string
+		wantErr          bool
+	}{
+		{name: "exact match", options: []ReplicationOption{WithRuleName("rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true), WithRulePriority(17)}, destinationKeyID: "destination-key"},
+		{name: "exact match without explicit priority", options: []ReplicationOption{WithRuleName("rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true)}, destinationKeyID: "destination-key"},
+		{name: "different prefix", options: []ReplicationOption{WithRuleName("rule"), WithFileNamePrefix("other/"), WithIncludeExistingFiles(true)}, destinationKeyID: "destination-key", wantErr: true},
+		{name: "different include-existing option", options: []ReplicationOption{WithRuleName("rule"), WithFileNamePrefix("logs/")}, destinationKeyID: "destination-key", wantErr: true},
+		{name: "different priority option", options: []ReplicationOption{WithRuleName("rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true), WithRulePriority(18)}, destinationKeyID: "destination-key", wantErr: true},
+		{name: "different destination", options: []ReplicationOption{WithRuleName("rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true)}, configuredDstID: "other-dst", destinationKeyID: "destination-key", wantErr: true},
+		{name: "different destination key mapping", options: []ReplicationOption{WithRuleName("rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true)}, destinationKeyID: "other-key", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dstID := tc.configuredDstID
+			if dstID == "" {
+				dstID = "dst-id"
+			}
+			sourceConfig := &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{SourceApplicationKeyID: "source-key", ReplicationRules: []ReplicationRules{{ReplicationRuleName: "rule", DestinationBucketID: dstID, FileNamePrefix: "logs/", IncludeExistingFiles: true, IsEnabled: true, Priority: 17}}}}
+			destinationConfig := &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"}}}
+			root, srcBackend, dstBackend, src, dst := replicationTestPair(t, sourceConfig, destinationConfig)
+			err := SetupReplication(context.Background(), src, dst, "source-key", tc.destinationKeyID, tc.options...)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("SetupReplication() = %v, wantErr=%t", err, tc.wantErr)
+			}
+			if root.keyCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+				t.Fatalf("repeat changed state: key calls=%d source updates=%d destination updates=%d", root.keyCalls, len(srcBackend.updates), len(dstBackend.updates))
+			}
+		})
+	}
+}
+
+func TestSetupReplicationFailsClosedOnUnreadableConfig(t *testing.T) {
+	for _, hidden := range []string{"source", "destination"} {
+		t.Run(hidden, func(t *testing.T) {
+			root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+			if hidden == "source" {
+				srcBackend.unreadable = true
+			} else {
+				dstBackend.unreadable = true
+			}
+			err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key")
+			if err == nil || !strings.Contains(err.Error(), "cannot read existing replication config to merge safely") {
+				t.Fatalf("SetupReplication() = %v, want unreadable-config error", err)
+			}
+			if root.keyCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+				t.Fatalf("hidden config caused changes: key calls=%d source updates=%d destination updates=%d", root.keyCalls, len(srcBackend.updates), len(dstBackend.updates))
+			}
+		})
+	}
+}
+
+func TestReplicationConfigReadabilitySignal(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		bucketJSON string
+		wantHidden bool
+	}{
+		{name: "hidden existing config", bucketJSON: filteredReplBucketJSON, wantHidden: true},
+		{name: "readable absent config", bucketJSON: noReplicationBucketJSON},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, _ := newListReplFixture(t, tc.bucketJSON, false)
+			buckets, err := client.ListBuckets(context.Background())
+			if err != nil || len(buckets) != 1 {
+				t.Fatalf("ListBuckets() = %v, %v, want one bucket", buckets, err)
+			}
+			attrs, err := buckets[0].Attrs(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attrs.replicationConfigUnreadable != tc.wantHidden {
+				t.Fatalf("unreadable=%t, want %t", attrs.replicationConfigUnreadable, tc.wantHidden)
+			}
+		})
+	}
+}
+
+func TestSetupReplicationCompletesAfterSourceUpdateError(t *testing.T) {
+	root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+	srcBackend.updateErr = errors.New("source update failed")
+	options := []ReplicationOption{WithRuleName("rule")}
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", options...); err == nil {
+		t.Fatal("SetupReplication() = nil, want source update error")
+	}
+	if len(dstBackend.updates) != 1 || dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["source-key"] != "destination-key" || len(srcBackend.updates) != 0 {
+		t.Fatalf("partial setup = destination %+v, source %+v", dstBackend.config, srcBackend.config)
+	}
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", options...); err != nil {
+		t.Fatal(err)
+	}
+	if root.keyCalls != 0 || len(srcBackend.config.AsReplicationSource.ReplicationRules) != 1 || dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["source-key"] != "destination-key" {
+		t.Fatalf("retry did not finish setup: keys=%d source=%+v destination=%+v", root.keyCalls, srcBackend.config, dstBackend.config)
+	}
+}
+
+func TestSetupReplicationRepairsMissingDestinationMapping(t *testing.T) {
+	sourceConfig := &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{
+		SourceApplicationKeyID: "source-key",
+		ReplicationRules:       []ReplicationRules{{ReplicationRuleName: "rule", DestinationBucketID: "dst-id", IsEnabled: true, Priority: 17}},
+	}}
+	root, srcBackend, dstBackend, src, dst := replicationTestPair(t, sourceConfig, nil)
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRuleName("rule")); err != nil {
+		t.Fatal(err)
+	}
+	if root.keyCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 1 || dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["source-key"] != "destination-key" {
+		t.Fatalf("missing mapping repair: key calls=%d source updates=%d destination=%+v", root.keyCalls, len(srcBackend.updates), dstBackend.config)
+	}
+}
+
+func TestSetupReplicationExplicitPriority(t *testing.T) {
+	root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRuleName("rule"), WithRulePriority(77)); err != nil {
+		t.Fatal(err)
+	}
+	rules := srcBackend.config.AsReplicationSource.ReplicationRules
+	if root.keyCalls != 0 || len(rules) != 1 || rules[0].Priority != 77 || srcBackend.config.AsReplicationSource.SourceApplicationKeyID != "source-key" || dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["source-key"] != "destination-key" {
+		t.Fatalf("explicit priority setup: key calls=%d source=%+v destination=%+v", root.keyCalls, srcBackend.config, dstBackend.config)
 	}
 }

@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha1"
 	"fmt"
-	"time"
 )
 
 const (
@@ -81,9 +80,10 @@ func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatu
 	return status, nil
 }
 
-// SetupReplication configures one-way replication from src to dst. A repeated
-// call for the same rule name, destination and prefix leaves it unchanged.
-func SetupReplication(ctx context.Context, src, dst *Bucket, opts ...ReplicationOption) error {
+// SetupReplication configures one-way replication using caller-owned application
+// keys. It updates the destination mapping before the source rule. If the source
+// update fails, repeating the call can finish setup using the same key IDs.
+func SetupReplication(ctx context.Context, src, dst *Bucket, sourceKeyID, destinationKeyID string, opts ...ReplicationOption) error {
 	if src == nil || dst == nil {
 		return fmt.Errorf("setup replication: source and destination buckets are required")
 	}
@@ -109,35 +109,36 @@ func SetupReplication(ctx context.Context, src, dst *Bucket, opts ...Replication
 	if err != nil {
 		return err
 	}
+	if srcAttrs.replicationConfigUnreadable || dstAttrs.replicationConfigUnreadable {
+		return fmt.Errorf("setup replication: cannot read existing replication config to merge safely")
+	}
+	if cfg := srcAttrs.ReplicationConfig; cfg != nil {
+		if existing := cfg.AsReplicationSource.SourceApplicationKeyID; existing != "" && existing != sourceKeyID {
+			return fmt.Errorf("setup replication: source already uses a different application key ID")
+		}
+	}
+	var destinationMapping map[string]string
+	if cfg := dstAttrs.ReplicationConfig; cfg != nil && cfg.AsReplicationDestination != nil {
+		destinationMapping = cfg.AsReplicationDestination.SourceToDestinationKeyMapping
+	}
+	if existing, ok := destinationMapping[sourceKeyID]; ok && existing != destinationKeyID {
+		return fmt.Errorf("setup replication: destination already maps the source key to a different application key ID")
+	}
 	if cfg := srcAttrs.ReplicationConfig; cfg != nil {
 		for _, rule := range cfg.AsReplicationSource.ReplicationRules {
 			if rule.ReplicationRuleName != settings.name {
 				continue
 			}
-			if rule.DestinationBucketID == dst.ID() && rule.FileNamePrefix == settings.prefix {
+			if rule.DestinationBucketID != dst.ID() || rule.FileNamePrefix != settings.prefix ||
+				rule.IncludeExistingFiles != settings.includeExisting || !rule.IsEnabled ||
+				(settings.prioritySet && rule.Priority != settings.priority) {
+				return fmt.Errorf("setup replication: rule name %q is already in use with different options", settings.name)
+			}
+			if destinationMapping[sourceKeyID] == destinationKeyID {
 				return nil
 			}
-			return fmt.Errorf("setup replication: rule name %q is already in use", settings.name)
+			return dst.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationDestination(dstAttrs.ReplicationConfig, sourceKeyID, destinationKeyID)})
 		}
-	}
-
-	stamp := time.Now().UnixNano()
-	sourceKeyID := ""
-	if srcAttrs.ReplicationConfig != nil {
-		sourceKeyID = srcAttrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID
-	}
-	if sourceKeyID == "" {
-		srcKey, err := src.CreateKey(ctx, fmt.Sprintf("%.60s-replsrc-%x", src.Name(), stamp),
-			Capabilities("readFiles", "readFileLegalHolds", "readFileRetentions"))
-		if err != nil {
-			return err
-		}
-		sourceKeyID = srcKey.ID()
-	}
-	dstKey, err := dst.CreateKey(ctx, fmt.Sprintf("%.60s-repldst-%x", dst.Name(), stamp),
-		Capabilities("writeFiles", "writeFileLegalHolds", "writeFileRetentions", "deleteFiles"))
-	if err != nil {
-		return err
 	}
 	priority := nextReplicationPriority(srcAttrs.ReplicationConfig)
 	if settings.prioritySet {
@@ -151,7 +152,7 @@ func SetupReplication(ctx context.Context, src, dst *Bucket, opts ...Replication
 		Priority:             priority,
 		ReplicationRuleName:  settings.name,
 	}
-	if err := dst.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationDestination(dstAttrs.ReplicationConfig, sourceKeyID, dstKey.ID())}); err != nil {
+	if err := dst.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationDestination(dstAttrs.ReplicationConfig, sourceKeyID, destinationKeyID)}); err != nil {
 		return err
 	}
 	return src.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationSource(srcAttrs.ReplicationConfig, sourceKeyID, rule)})
