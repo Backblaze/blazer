@@ -610,6 +610,7 @@ func attrsFromFileInfo(fi beFileInfoInterface) (*Attrs, error) {
 			lastModified = time.Unix(millis/1e3, (millis%1e3)*1e6)
 		case "large_file_sha1":
 			sha = value
+			publicInfo[key] = value
 		default:
 			publicInfo[key] = value
 		}
