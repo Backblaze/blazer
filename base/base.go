@@ -14,10 +14,6 @@
 
 // Package base provides a very low-level interface on top of the B2 API.
 // It is not intended to be used directly.
-//
-// It currently lacks support for the following APIs:
-//
-// b2_download_file_by_id
 package base
 
 import (
@@ -1444,6 +1440,38 @@ func (b *Bucket) DownloadFileByName(ctx context.Context, name string, offset, si
 		return nil, err
 	}
 	logResponse(resp, nil)
+	return newFileReader(resp)
+}
+
+// DownloadFileByID wraps b2_download_file_by_id.
+func (b *Bucket) DownloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (*FileReader, error) {
+	uri := b.b2.downloadURI + b2types.V4api + "b2_download_file_by_id?fileId=" + id
+	method := "GET"
+	if header {
+		method = "HEAD"
+	}
+	req, err := http.NewRequest(method, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", b.b2.authToken)
+	req.Header.Set("X-Blazer-Request-ID", fmt.Sprintf("%d", atomic.AddInt64(&reqID, 1)))
+	req.Header.Set("X-Blazer-Method", "b2_download_file_by_id")
+	b.b2.opts.addHeaders(req)
+	rng := mkRange(offset, size)
+	if rng != "" {
+		req.Header.Set("Range", rng)
+	}
+	logRequest(req, nil)
+	resp, err := makeNetRequest(ctx, req, b.b2.opts.getTransport())
+	if err != nil {
+		return nil, err
+	}
+	logResponse(resp, nil)
+	return newFileReader(resp)
+}
+
+func newFileReader(resp *http.Response) (*FileReader, error) {
 	if resp.StatusCode != 200 && resp.StatusCode != 206 {
 		defer resp.Body.Close()
 		return nil, mkErr(resp)

@@ -58,6 +58,7 @@ type b2BucketInterface interface {
 	listFileVersions(context.Context, int, string, string, string, string) ([]b2FileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (b2FileReaderInterface, error)
+	downloadFileByID(context.Context, string, int64, int64, bool) (b2FileReaderInterface, error)
 	hideFile(context.Context, string) (b2FileInterface, error)
 	copyFile(context.Context, string, string, string, string, string, string, map[string]string) (b2FileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
@@ -569,6 +570,21 @@ func (b *b2Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, cont
 
 func (b *b2Bucket) downloadFileByName(ctx context.Context, name string, offset, size int64, header bool) (b2FileReaderInterface, error) {
 	fr, err := b.b.DownloadFileByName(ctx, name, offset, size, header)
+	if err != nil {
+		code, _ := base.Code(err)
+		switch code {
+		case http.StatusRequestedRangeNotSatisfiable:
+			return nil, errNoMoreContent
+		case http.StatusNotFound:
+			return nil, b2err{err: err, notFoundErr: true}
+		}
+		return nil, err
+	}
+	return &b2FileReader{fr}, nil
+}
+
+func (b *b2Bucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (b2FileReaderInterface, error) {
+	fr, err := b.b.DownloadFileByID(ctx, id, offset, size, header)
 	if err != nil {
 		code, _ := base.Code(err)
 		switch code {
