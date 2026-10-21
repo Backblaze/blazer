@@ -736,7 +736,7 @@ func (o *Object) NewRangeReader(ctx context.Context, offset, length int64) *Read
 }
 
 func readerProgressTotal(length int64) int64 {
-	if length > 0 {
+	if length >= 0 {
 		return length
 	}
 	return -1

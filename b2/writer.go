@@ -63,15 +63,13 @@ type Writer struct {
 	// blank, os.TempDir() is used.
 	FileBufferDir string
 
-	contentType string
-	info        map[string]string
-	retention   *FileRetention
-	legalHold   LegalHold
-	progress    func(bytesComplete, bytesTotal int64)
-
-	progressCompleted int64
-	progressTotal     int64
-	progressMu        sync.Mutex
+	contentType   string
+	info          map[string]string
+	retention     *FileRetention
+	legalHold     LegalHold
+	progress      func(bytesComplete, bytesTotal int64)
+	progressTotal int64
+	reporter      *progressReporter
 
 	csize       int
 	ctx         context.Context
@@ -144,26 +142,10 @@ func (w *Writer) registerChunk(id int, r *meteredReader) {
 	w.smux.Unlock()
 }
 
-func (w *Writer) completeChunk(id int, bytesComplete int64) {
+func (w *Writer) completeChunk(id int) {
 	w.smux.Lock()
 	w.smap[id] = nil
 	w.smux.Unlock()
-	w.reportProgress(bytesComplete)
-}
-
-// reportProgress records completed bytes and reports them in completion order.
-// It serializes callback delivery, although callbacks may run on an upload
-// worker goroutine.
-func (w *Writer) reportProgress(bytesComplete int64) {
-	if bytesComplete <= 0 {
-		return
-	}
-	w.progressMu.Lock()
-	defer w.progressMu.Unlock()
-	completed := atomic.AddInt64(&w.progressCompleted, bytesComplete)
-	if w.progress != nil {
-		w.progress(completed, atomic.LoadInt64(&w.progressTotal))
-	}
 }
 
 var gid int32
@@ -192,8 +174,10 @@ func (w *Writer) thread() {
 					w.setErr(errors.New("resumable upload was requested, but chunks don't match"))
 					return
 				}
+				skippedBytes := completedBytes(cnk.buf)
 				cnk.buf.Close()
-				w.completeChunk(cnk.id, completedBytes(cnk.buf))
+				w.reporter.add(skippedBytes)
+				w.completeChunk(cnk.id)
 				blog.V(2).Infof("skipping chunk %d", cnk.id)
 				continue
 			}
@@ -203,7 +187,7 @@ func (w *Writer) thread() {
 				w.setErr(err)
 				return
 			}
-			mr := &meteredReader{r: r, size: cnk.buf.Len()}
+			mr := newMeteredReader(r, cnk.buf, w.reporter)
 			w.registerChunk(cnk.id, mr)
 			err = retry.Do(
 				w.ctx,
@@ -242,11 +226,11 @@ func (w *Writer) thread() {
 			)
 			if err != nil {
 				w.setErr(err)
-				w.completeChunk(cnk.id, 0)
+				w.completeChunk(cnk.id)
 				cnk.buf.Close()
 				return
 			}
-			w.completeChunk(cnk.id, completedBytes(cnk.buf))
+			w.completeChunk(cnk.id)
 			cnk.buf.Close()
 			blog.V(2).Infof("chunk %d handled", cnk.id)
 		}
@@ -256,6 +240,7 @@ func (w *Writer) thread() {
 func (w *Writer) init() {
 	w.start.Do(func() {
 		w.everStarted = true
+		w.reporter = newProgressReporter(w.progress, w.progressTotal)
 		w.smux.Lock()
 		w.smap = make(map[int]*meteredReader)
 		w.smux.Unlock()
@@ -366,10 +351,9 @@ func (w *Writer) simpleWriteFile() error {
 	if err != nil {
 		return err
 	}
-	mr := &meteredReader{r: r, size: w.w.Len()}
+	mr := newMeteredReader(r, w.w, w.reporter)
 	w.registerChunk(1, mr)
-	completed := int64(0)
-	defer func() { w.completeChunk(1, completed) }()
+	defer w.completeChunk(1)
 
 	err = retry.Do(
 		w.ctx,
@@ -408,7 +392,6 @@ func (w *Writer) simpleWriteFile() error {
 		return err
 	}
 
-	completed = completedBytes(w.w)
 	success = true
 	return nil
 }
@@ -558,15 +541,30 @@ func (w *Writer) sendChunk() error {
 // will act as if r is not an io.Seeker.
 func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 	rs, ok := r.(io.ReadSeeker)
-	if !ok || w.Resume {
+	if !ok {
 		return copyContext(w.ctx, w, r)
+	}
+	if w.Resume {
+		position, err := rs.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		end, err := rs.Seek(0, io.SeekEnd)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := rs.Seek(position, io.SeekStart); err != nil {
+			return 0, err
+		}
+		w.progressTotal = end - position
+		return copyContext(w.ctx, w, rs)
 	}
 	blog.V(2).Info("streaming without buffer")
 	size, err := rs.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
-	atomic.StoreInt64(&w.progressTotal, size)
+	w.progressTotal = size
 	var ra io.ReaderAt
 	if rat, ok := r.(io.ReaderAt); ok {
 		ra = rat
@@ -662,6 +660,7 @@ func (w *Writer) Close() error {
 		w.o.f = f
 		w.closed = true
 	})
+	w.reporter.finish()
 	return w.getErr()
 }
 
@@ -712,9 +711,11 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 	}
 }
 
-// WithProgress sets a callback that receives completed and total upload bytes.
-// The total is known for ReadFrom readers that implement io.Seeker, and is -1
-// otherwise. Calls are serialized, but may be made by an upload worker.
+// WithProgress sets a callback that receives cumulative uploaded bytes. It runs
+// on one owner goroutine, never under a transfer lock; values are monotonic
+// non-decreasing and end with a final call at the bytes uploaded. The total is known
+// for ReadFrom readers that implement io.Seeker (including resume), and is -1
+// otherwise.
 func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
 	return func(w *Writer) {
 		w.progress = cb
@@ -758,17 +759,38 @@ func (w *Writer) status() *WriterStatus {
 }
 
 type meteredReader struct {
-	read int64
-	size int
-	r    readResetter
-	mux  sync.Mutex
+	read         int64
+	reported     int64 // high-water mark survives Reset and upload retries
+	size         int
+	progressSize int64 // excludes the 40-byte SHA1 trailer of nonBuffer
+	r            readResetter
+	progress     *progressReporter
+	mux          sync.Mutex
+}
+
+func newMeteredReader(r readResetter, buf writeBuffer, progress *progressReporter) *meteredReader {
+	mr := &meteredReader{r: r, size: buf.Len(), progressSize: int64(buf.Len()), progress: progress}
+	if nb, ok := buf.(*nonBuffer); ok {
+		mr.progressSize = int64(nb.size)
+	}
+	return mr
 }
 
 func (mr *meteredReader) Read(p []byte) (int, error) {
 	mr.mux.Lock()
-	defer mr.mux.Unlock()
 	n, err := mr.r.Read(p)
 	mr.read += int64(n)
+	var delta int64
+	counted := mr.read
+	if counted > mr.progressSize {
+		counted = mr.progressSize
+	}
+	if counted > mr.reported {
+		delta = counted - mr.reported
+		mr.reported = counted
+	}
+	mr.mux.Unlock()
+	mr.progress.add(delta)
 	return n, err
 }
 
@@ -783,6 +805,8 @@ func (mr *meteredReader) done() float64 {
 	if mr == nil {
 		return 1
 	}
-	read := float64(atomic.LoadInt64(&mr.read))
+	mr.mux.Lock()
+	read := float64(mr.read)
+	mr.mux.Unlock()
 	return read / float64(mr.size)
 }

@@ -23,7 +23,6 @@ import (
 	"hash"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Backblaze/blazer/internal/blog"
@@ -49,10 +48,11 @@ type Reader struct {
 	// 10MB.
 	ChunkSize int
 
-	// Progress receives completed and total download bytes after each completed
-	// chunk. The total is known for a finite NewRangeReader length, and is -1
-	// otherwise. Calls are serialized, but may be made by a download worker.
-	// Set Progress before the first call to Read.
+	// Progress receives cumulative downloaded bytes. It runs on one owner
+	// goroutine, never under a transfer lock; values are monotonic non-decreasing
+	// and end with a final call at the bytes downloaded. The total is known for
+	// a finite NewRangeReader length, and is -1 otherwise. Set it before the
+	// first Read.
 	Progress func(bytesComplete, bytesTotal int64)
 
 	ctx        context.Context
@@ -72,9 +72,9 @@ type Reader struct {
 	readOffEnd bool
 	sha1       string
 
-	progressCompleted int64
-	progressTotal     int64
-	progressMu        sync.Mutex
+	progressTotal int64
+	reporter      *progressReporter
+	wg            sync.WaitGroup
 
 	rmux  sync.Mutex // guards rcond
 	rcond *sync.Cond
@@ -94,6 +94,8 @@ type rchunk struct {
 // Close frees resources associated with the download.
 func (r *Reader) Close() error {
 	r.cancel()
+	r.wg.Wait()
+	r.reporter.finish()
 	r.o.b.c.removeReader(r)
 	return nil
 }
@@ -122,7 +124,9 @@ func (r *Reader) getErr() error {
 }
 
 func (r *Reader) thread() {
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		for {
 			var buf *rchunk
 			select {
@@ -135,20 +139,25 @@ func (r *Reader) thread() {
 				return
 			}
 			r.rmux.Lock()
+			if r.progressTotal >= 0 && r.length == 0 {
+				r.rmux.Unlock()
+				return
+			}
 			chunkID := r.chwid
 			r.chwid++
-			r.rmux.Unlock()
 			offset := int64(chunkID*r.csize) + r.offset
 			size := int64(r.csize)
 			if r.length > 0 {
-				if size > r.length {
+				if size >= r.length {
 					buf.final = true
 					size = r.length
 				}
 				r.length -= size
 			}
+			r.rmux.Unlock()
 			var b backoff
 			var attempts int
+			var reported int64
 		redo:
 			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false)
 			if err == errNoMoreContent {
@@ -172,11 +181,14 @@ func (r *Reader) thread() {
 				r.sha1 = sha1
 			}
 			r.rmux.Unlock()
-			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize)}
+			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize), progressSize: int64(rsize), reported: reported, progress: r.reporter}
 			r.smux.Lock()
 			r.smap[chunkID] = mr
 			r.smux.Unlock()
 			i, err := copyContext(r.ctx, buf, mr)
+			mr.mux.Lock()
+			reported = mr.reported
+			mr.mux.Unlock()
 			fr.Close()
 			r.smux.Lock()
 			r.smap[chunkID] = nil
@@ -203,28 +215,12 @@ func (r *Reader) thread() {
 				r.rcond.Broadcast()
 				return
 			}
-			r.reportProgress(i)
 			r.rmux.Lock()
 			r.chunks[chunkID] = buf
 			r.rmux.Unlock()
 			r.rcond.Broadcast()
 		}
 	}()
-}
-
-// reportProgress records completed bytes and reports them in completion order.
-// It serializes callback delivery, although callbacks may run on a download
-// worker goroutine.
-func (r *Reader) reportProgress(bytesComplete int64) {
-	if bytesComplete <= 0 {
-		return
-	}
-	r.progressMu.Lock()
-	defer r.progressMu.Unlock()
-	completed := atomic.AddInt64(&r.progressCompleted, bytesComplete)
-	if r.Progress != nil {
-		r.Progress(completed, atomic.LoadInt64(&r.progressTotal))
-	}
 }
 
 func (r *Reader) curChunk() (*rchunk, error) {
@@ -253,6 +249,7 @@ func (r *Reader) curChunk() (*rchunk, error) {
 }
 
 func (r *Reader) initFunc() {
+	r.reporter = newProgressReporter(r.Progress, r.progressTotal)
 	r.smux.Lock()
 	r.smap = make(map[int]*meteredReader)
 	r.smux.Unlock()
@@ -278,6 +275,13 @@ func (r *Reader) Read(p []byte) (int, error) {
 	if err := r.getErr(); err != nil {
 		return 0, err
 	}
+	if r.progressTotal == 0 {
+		// A zero-length range is finite, and needs no download worker.
+		r.reporter = newProgressReporter(r.Progress, 0)
+		r.setErrNoCancel(io.EOF)
+		r.reporter.finish()
+		return 0, io.EOF
+	}
 	r.init.Do(r.initFunc)
 	chunk, err := r.curChunk()
 	if err != nil {
@@ -291,6 +295,9 @@ func (r *Reader) Read(p []byte) (int, error) {
 		if chunk.final {
 			close(r.chbuf)
 			r.setErrNoCancel(err)
+			r.cancel()
+			r.wg.Wait()
+			r.reporter.finish()
 			return n, err
 		}
 		r.chrid++

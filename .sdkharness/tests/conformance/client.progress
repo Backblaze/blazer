@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CONFORMANCE blazer x client.progress -- the contract is bin/conformance/README.md.
 #
-# Scenario: upload progress callback
+# Scenario: byte-level upload and download progress callbacks
 #
 # NO DOCUMENTED CONTRACT FOUND -- this is SDK-side/ecosystem tooling, not a B2 API contract.
 # Progress reporting is client-side ergonomics; the B2 API has no progress
@@ -86,11 +86,11 @@ package main
 
 // blazer x client.progress -- a callback progress check.
 //
-// Setup   a large object
-// Action  upload it with a progress listener attached
-// Assert  callbacks fire, are monotonically non-decreasing, and the final
-//         value equals the total bytes
-// Go       b2.WithProgress receives completed upload parts.
+// Setup   a sub-chunk object
+// Action  upload and download it with progress listeners attached
+// Assert  callbacks include intermediate byte counts, never regress, and
+//         end at the payload size with known or unknown totals as appropriate
+// Go       b2.WithProgress and Reader.Progress report metered bytes.
 //
 // The API came from docs/sdks/blazer/card.md and godoc for
 // github.com/Backblaze/blazer/b2. Never from b2sdks/.
@@ -115,7 +115,7 @@ import (
 const capability = "client.progress"
 
 const (
-	progressChunkSize = 5000000
+	progressChunkSize = 20000000 // larger than the fixture: intermediate updates must be within one chunk
 	progressSize      = 15000000
 )
 
@@ -157,25 +157,67 @@ func runCheck(ctx context.Context, target *string) error {
 	samples = append([]progressSample(nil), samples...)
 	mu.Unlock()
 
-	// --- it fires ----------------------------------------------------------
-	if len(samples) == 0 {
-		return failf("progress", "callback reported no completed parts during a %d-byte upload", len(payload))
+	if err := checkProgress(samples, int64(len(payload)), int64(len(payload)), "known upload"); err != nil {
+		return err
 	}
+	knownCallbacks := len(samples)
 
-	// --- it never goes backwards and ends at the full payload -------------
-	var previous int64
-	for i, sample := range samples {
-		if sample.completed < previous {
-			return failf("progress", "callback went backwards at sample %d: %d after %d", i, sample.completed, previous)
-		}
-		if sample.total != int64(len(payload)) {
-			return failf("progress", "callback sample %d total = %d, expected %d", i, sample.total, len(payload))
-		}
-		previous = sample.completed
+	// The same one-chunk payload written without a seeker has an unknown total.
+	var unknownSamples []progressSample
+	unknownObject := bucket.Object(objectName("progress-unknown.bin"))
+	unknownWriter := unknownObject.NewWriter(ctx, b2.WithProgress(func(completed, total int64) {
+		mu.Lock()
+		unknownSamples = append(unknownSamples, progressSample{completed: completed, total: total})
+		mu.Unlock()
+	}))
+	unknownWriter.ChunkSize = progressChunkSize
+	if _, err := io.Copy(unknownWriter, bytes.NewBuffer(payload)); err != nil {
+		_ = unknownWriter.Close()
+		return classify("unknown upload", err)
 	}
-	if previous != int64(len(payload)) {
-		return failf("progress", "final callback completed %d bytes, expected %d", previous, len(payload))
+	if err := unknownWriter.Close(); err != nil { return classify("unknown upload", err) }
+	mu.Lock()
+	unknownSamples = append([]progressSample(nil), unknownSamples...)
+	mu.Unlock()
+	if err := checkProgress(unknownSamples, int64(len(payload)), -1, "unknown upload"); err != nil { return err }
+
+	var fullSamples []progressSample
+	fullReader := object.NewReader(ctx)
+	fullReader.ChunkSize = progressChunkSize
+	fullReader.Progress = func(completed, total int64) {
+		mu.Lock()
+		fullSamples = append(fullSamples, progressSample{completed: completed, total: total})
+		mu.Unlock()
 	}
+	fullBytes, readErr := io.ReadAll(fullReader)
+	closeErr := fullReader.Close()
+	if readErr != nil { return classify("full download", readErr) }
+	if closeErr != nil { return classify("full download", closeErr) }
+	if !bytes.Equal(fullBytes, payload) { return failf("full download", "bytes differ") }
+	mu.Lock()
+	fullSamples = append([]progressSample(nil), fullSamples...)
+	mu.Unlock()
+	if err := checkProgress(fullSamples, int64(len(payload)), -1, "full download"); err != nil { return err }
+
+	const offset = 1
+	length := int64(len(payload) / 2)
+	var rangeSamples []progressSample
+	rangeReader := object.NewRangeReader(ctx, offset, length)
+	rangeReader.ChunkSize = progressChunkSize
+	rangeReader.Progress = func(completed, total int64) {
+		mu.Lock()
+		rangeSamples = append(rangeSamples, progressSample{completed: completed, total: total})
+		mu.Unlock()
+	}
+	rangeBytes, readErr := io.ReadAll(rangeReader)
+	closeErr = rangeReader.Close()
+	if readErr != nil { return classify("ranged download", readErr) }
+	if closeErr != nil { return classify("ranged download", closeErr) }
+	if !bytes.Equal(rangeBytes, payload[offset:offset+int(length)]) { return failf("ranged download", "bytes differ") }
+	mu.Lock()
+	rangeSamples = append([]progressSample(nil), rangeSamples...)
+	mu.Unlock()
+	if err := checkProgress(rangeSamples, length, length, "ranged download"); err != nil { return err }
 
 	attrs, err := object.Attrs(ctx)
 	if err != nil {
@@ -184,13 +226,28 @@ func runCheck(ctx context.Context, target *string) error {
 	if attrs.Size != int64(len(payload)) {
 		return failf("progress", "the finished object is %d bytes, expected %d", attrs.Size, len(payload))
 	}
-	note("%d progress callbacks, final=%d/%d bytes", len(samples), previous, attrs.Size)
+	note("byte-level callbacks: known-upload=%d unknown-upload=%d full-download=%d ranged-download=%d final=%d bytes", knownCallbacks, len(unknownSamples), len(fullSamples), len(rangeSamples), attrs.Size)
 	return nil
 }
 
 type progressSample struct {
 	completed int64
 	total     int64
+}
+
+func checkProgress(samples []progressSample, wantCompleted, wantTotal int64, label string) error {
+	if len(samples) == 0 { return failf("progress", "%s callback did not fire", label) }
+	var previous int64
+	var intermediate bool
+	for i, sample := range samples {
+		if sample.completed < previous { return failf("progress", "%s callback %d went backwards: %d after %d", label, i, sample.completed, previous) }
+		if sample.total != wantTotal { return failf("progress", "%s callback %d total=%d, want %d", label, i, sample.total, wantTotal) }
+		if sample.completed > 0 && sample.completed < wantCompleted { intermediate = true }
+		previous = sample.completed
+	}
+	if !intermediate { return failf("progress", "%s has no intermediate byte-level callback", label) }
+	if previous != wantCompleted { return failf("progress", "%s final=%d, want %d", label, previous, wantCompleted) }
+	return nil
 }
 
 // ---------------------------------------------------------------------------
