@@ -59,12 +59,19 @@ func WithConcurrency(n int) Option { return func(o *options) { o.concurrency = n
 // WithDryRun reports planned uploads without writing to B2.
 func WithDryRun() Option { return func(o *options) { o.dryRun = true } }
 
-// Result lists relative paths uploaded or skipped. In a dry run, Uploaded is
-// the planned upload list and BytesUploaded is zero.
+// Result lists relative paths uploaded, skipped, or failed. In a dry run,
+// Uploaded is the planned upload list and BytesUploaded is zero.
 type Result struct {
 	Uploaded      []string
 	Skipped       []string
+	Failed        []FileError
 	BytesUploaded int64
+}
+
+// FileError identifies a local path that could not be inspected or uploaded.
+type FileError struct {
+	Rel string
+	Err error
 }
 
 type localFile struct {
@@ -95,9 +102,13 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 	}
 }
 
-// Sync uploads files below localRoot into bucket under prefix. Existing files
-// that match the selected comparison policy are skipped. Sync never deletes
-// destination objects.
+// Sync pushes files below localRoot into bucket under prefix. The local tree is
+// the source of truth: a differing local file overwrites the cloud copy even
+// when its modification time is older. Matching files are skipped, and cloud
+// objects are never deleted. Symlinks below the root are not followed; a
+// symlinked root is followed. Changed large files are re-uploaded in full,
+// without resuming a previous upload. Per-file failures are returned in
+// Result.Failed along with an aggregate error; other files continue.
 func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts ...Option) (*Result, error) {
 	settings := options{concurrency: 4}
 	for _, opt := range opts {
@@ -112,7 +123,11 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
-	rootInfo, err := os.Stat(localRoot)
+	resolvedRoot, err := filepath.EvalSymlinks(localRoot)
+	if err != nil {
+		return nil, err
+	}
+	rootInfo, err := os.Stat(resolvedRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -136,21 +151,33 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 
 	result := &Result{}
 	var transfers []localFile
-	err = filepath.WalkDir(localRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	recordFailure := func(path string, failure error) {
+		rel, err := filepath.Rel(resolvedRoot, path)
+		if err != nil {
+			rel = path
 		}
+		result.Failed = append(result.Failed, FileError{Rel: filepath.ToSlash(rel), Err: failure})
+	}
+	err = filepath.WalkDir(resolvedRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if walkErr != nil {
+			recordFailure(path, walkErr)
+			if entry != nil && entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if !entry.Type().IsRegular() {
 			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return err
+			recordFailure(path, err)
+			return nil
 		}
-		rel, err := filepath.Rel(localRoot, path)
+		rel, err := filepath.Rel(resolvedRoot, path)
 		if err != nil {
 			return err
 		}
@@ -158,7 +185,8 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 		if settings.compare == CompareSHA1 {
 			local.sha1, err = fileSHA1(path)
 			if err != nil {
-				return err
+				recordFailure(path, err)
+				return nil
 			}
 		}
 		if shouldTransfer(local, dest[local.rel], settings.compare) {
@@ -169,34 +197,33 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	if settings.dryRun {
 		for _, local := range transfers {
 			result.Uploaded = append(result.Uploaded, local.rel)
 		}
-		return result, nil
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		return result, resultError(result)
 	}
 
-	workCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	jobs := make(chan localFile)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var firstErr error
 	for i := 0; i < settings.concurrency; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for local := range jobs {
-				if err := workCtx.Err(); err != nil {
+				if err := ctx.Err(); err != nil {
 					return
 				}
-				n, err := uploadFile(workCtx, bucket, prefix+local.rel, local)
+				n, err := uploadFile(ctx, bucket, prefix+local.rel, local)
 				mu.Lock()
-				if err != nil && firstErr == nil {
-					firstErr = fmt.Errorf("sync %s: %w", local.rel, err)
-					cancel()
+				if err != nil && ctx.Err() == nil {
+					result.Failed = append(result.Failed, FileError{Rel: local.rel, Err: err})
 				}
 				if err == nil {
 					result.Uploaded = append(result.Uploaded, local.rel)
@@ -210,20 +237,25 @@ sendLoop:
 	for _, local := range transfers {
 		select {
 		case jobs <- local:
-		case <-workCtx.Done():
+		case <-ctx.Done():
 			break sendLoop
 		}
 	}
 	close(jobs)
 	wg.Wait()
 	sort.Strings(result.Uploaded)
-	if firstErr != nil {
-		return result, firstErr
-	}
+	sort.Slice(result.Failed, func(i, j int) bool { return result.Failed[i].Rel < result.Failed[j].Rel })
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	return result, nil
+	return result, resultError(result)
+}
+
+func resultError(result *Result) error {
+	if len(result.Failed) > 0 {
+		return fmt.Errorf("sync: %d files failed", len(result.Failed))
+	}
+	return nil
 }
 
 func fileSHA1(path string) (string, error) {
@@ -248,7 +280,11 @@ func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local local
 	if err != nil {
 		return 0, err
 	}
-	writer := bucket.Object(name).NewWriter(ctx, b2.WithAttrsOption(&b2.Attrs{LastModified: local.modTime}))
+	attrs := &b2.Attrs{LastModified: local.modTime}
+	if local.sha1 != "" {
+		attrs.SHA1 = local.sha1
+	}
+	writer := bucket.Object(name).NewWriter(ctx, b2.WithAttrsOption(attrs))
 	n, readErr := writer.ReadFrom(file)
 	writeCloseErr := writer.Close()
 	fileCloseErr := file.Close()

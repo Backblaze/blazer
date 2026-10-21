@@ -86,6 +86,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -255,7 +256,37 @@ func run(ctx context.Context) error {
 	if err := checkRemote(ctx, bucket, firstName, first, modified); err != nil {
 		return fmt.Errorf("dry run changed destination: %w", err)
 	}
-	fmt.Println("NOTE blazer client.sync: upload=2 skip=2 selective=1 dry-run-writes=0")
+	failureRoot, err := os.MkdirTemp("", "blazer-client-sync-failure-")
+	if err != nil { return err }
+	defer os.RemoveAll(failureRoot)
+	good := []byte("good file survives bad neighbor")
+	if err := writeLocal(filepath.Join(failureRoot, "good.txt"), good, modified); err != nil { return err }
+	badPath := filepath.Join(failureRoot, "bad\n.txt")
+	if err := writeLocal(badPath, []byte("invalid long B2 name"), modified); err != nil { return err }
+	badRel, err := filepath.Rel(failureRoot, badPath)
+	if err != nil { return err }
+	failurePrefix := "failure-" + randomHex()
+	result, err = b2sync.Sync(ctx, bucket, failurePrefix, failureRoot)
+	if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != filepath.ToSlash(badRel) {
+		return fmt.Errorf("continue-and-report result=%+v error=%v", result, err)
+	}
+	if err := checkPaths(result.Uploaded, []string{"good.txt"}); err != nil { return err }
+	if err := checkRemote(ctx, bucket, failurePrefix+"/good.txt", good, modified); err != nil { return err }
+	largeRoot, err := os.MkdirTemp("", "blazer-client-sync-large-")
+	if err != nil { return err }
+	defer os.RemoveAll(largeRoot)
+	large := bytes.Repeat([]byte("large-sha1-payload"), 6_000_001)
+	if err := writeLocal(filepath.Join(largeRoot, "large.bin"), large, modified); err != nil { return err }
+	largePrefix := "large-" + randomHex()
+	result, err = b2sync.Sync(ctx, bucket, largePrefix, largeRoot, b2sync.WithCompare(b2sync.CompareSHA1))
+	if err != nil || !reflect.DeepEqual(result.Uploaded, []string{"large.bin"}) { return fmt.Errorf("large first sync: result=%+v error=%v", result, err) }
+	attrs, err := bucket.Object(largePrefix+"/large.bin").Attrs(ctx)
+	if err != nil { return err }
+	wantSHA1 := fmt.Sprintf("%x", sha1.Sum(large))
+	if attrs.SHA1 != wantSHA1 { return fmt.Errorf("large SHA1=%s, want %s", attrs.SHA1, wantSHA1) }
+	result, err = b2sync.Sync(ctx, bucket, largePrefix, largeRoot, b2sync.WithCompare(b2sync.CompareSHA1))
+	if err != nil || !reflect.DeepEqual(result.Skipped, []string{"large.bin"}) || len(result.Uploaded) != 0 { return fmt.Errorf("large second sync: result=%+v error=%v", result, err) }
+	fmt.Println("NOTE blazer client.sync: upload=2 skip=2 selective=1 dry-run-writes=0 failed=1 good-uploaded=1 large-sha1-skipped=1")
 	return nil
 }
 
