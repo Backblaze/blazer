@@ -1063,6 +1063,24 @@ type LargeFile struct {
 	hashes map[int]string
 }
 
+// copyPartSSE reserves the optional encryption argument for a later SSE-C API.
+type copyPartSSE struct{}
+
+// CopyPart copies a source file or byte range into a part of this large file.
+func (l *LargeFile) CopyPart(ctx context.Context, sourceFileID string, partNumber int, byteRange string, _ *copyPartSSE) (*FilePart, error) {
+	req := &b2types.CopyPartRequest{SourceFileID: sourceFileID, LargeFileID: l.ID, PartNumber: partNumber, Range: byteRange}
+	resp := &b2types.CopyPartResponse{}
+	headers := map[string]string{"Authorization": l.b2.authToken}
+	if err := l.b2.opts.makeRequest(ctx, "b2_copy_part", "POST", l.b2.apiURI+b2types.V4api+"b2_copy_part", req, resp, headers, nil); err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	l.hashes[partNumber] = resp.SHA1
+	l.size += resp.Size
+	l.mu.Unlock()
+	return &FilePart{Number: resp.PartNumber, SHA1: resp.SHA1, Size: resp.Size}, nil
+}
+
 // StartLargeFile wraps b2_start_large_file. At most one FileLock may be given;
 // it sets Object Lock retention and legal hold on the new file.
 func (b *Bucket) StartLargeFile(ctx context.Context, name, contentType string, info map[string]string, lock ...FileLock) (*LargeFile, error) {

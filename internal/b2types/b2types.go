@@ -582,3 +582,17 @@ type CopyFileRequest struct {
 }
 
 type CopyFileResponse UploadFileResponse
+
+type CopyPartRequest struct {
+	SourceFileID string `json:"sourceFileId"`
+	LargeFileID  string `json:"largeFileId"`
+	PartNumber   int    `json:"partNumber"`
+	Range        string `json:"range,omitempty"`
+}
+
+type CopyPartResponse struct {
+	FileID     string `json:"fileId"`
+	PartNumber int    `json:"partNumber"`
+	Size       int64  `json:"contentLength"`
+	SHA1       string `json:"contentSha1"`
+}
