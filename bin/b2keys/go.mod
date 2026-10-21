@@ -1,6 +1,6 @@
 module github.com/Backblaze/blazer/bin/b2keys
 
-go 1.18
+go 1.26.10
 
 replace github.com/Backblaze/blazer => ../..
 
