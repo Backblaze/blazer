@@ -543,6 +543,51 @@ func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
 func (t *testFile) updateFileRetention(context.Context, *FileRetention, bool) error { return nil }
 func (t *testFile) updateFileLegalHold(context.Context, LegalHold) error            { return nil }
 
+type attrsTestFile struct {
+	*testFile
+	info map[string]string
+}
+
+func (t *attrsTestFile) getFileInfo(context.Context) (b2FileInfoInterface, error) {
+	return attrsTestFileInfo{file: t}, nil
+}
+
+type attrsTestFileInfo struct{ file *attrsTestFile }
+
+func (t attrsTestFileInfo) stats() (string, string, int64, string, map[string]string, string, time.Time) {
+	return t.file.n, "", t.file.s, "application/octet-stream", t.file.info, t.file.a, t.file.t
+}
+
+func (attrsTestFileInfo) fileLock() (*FileRetention, LegalHold) { return nil, "" }
+
+func TestObjectAttrsDoesNotMutateCachedFileInfo(t *testing.T) {
+	mtime := time.UnixMilli(1700000000000)
+	file := &attrsTestFile{
+		testFile: &testFile{n: "metadata.txt", s: 1, a: "upload", files: make(map[string]string)},
+		info:     map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "public": "value"},
+	}
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	object := &Object{f: &beFile{b2file: file, ri: root}}
+
+	first, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.LastModified.IsZero() {
+		t.Fatal("first Attrs().LastModified is zero")
+	}
+	if !first.LastModified.Equal(second.LastModified) {
+		t.Fatalf("Attrs().LastModified changed between calls: first=%s second=%s", first.LastModified, second.LastModified)
+	}
+	if !reflect.DeepEqual(second.Info, map[string]string{"public": "value"}) {
+		t.Fatalf("second Attrs().Info = %#v, want public metadata only", second.Info)
+	}
+}
+
 type testFileReader struct {
 	b io.ReadCloser
 	s int
