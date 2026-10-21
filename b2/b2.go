@@ -720,7 +720,9 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 }
 
 // NewRangeReader returns a reader for the given object, reading up to length
-// bytes.  If length is negative, the rest of the object is read.
+// bytes. If length is negative, the rest of the object is read. With a Progress
+// callback, a finite range reports the available byte count when a HEAD
+// request can determine it; otherwise the progress total is -1.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Reader{

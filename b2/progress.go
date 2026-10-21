@@ -23,7 +23,7 @@ type progressReporter struct {
 	total    int64
 	mu       sync.Mutex
 	pending  int64
-	active   bool
+	stopped  bool
 	wake     chan struct{}
 	stop     chan struct{}
 	done     chan struct{}
@@ -50,6 +50,10 @@ func (p *progressReporter) add(n int64) {
 		return
 	}
 	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return
+	}
 	p.pending += n
 	p.mu.Unlock()
 	select {
@@ -87,27 +91,18 @@ func (p *progressReporter) run() {
 }
 
 func (p *progressReporter) deliver(completed int64) {
-	p.mu.Lock()
-	p.active = true
-	p.mu.Unlock()
 	p.callback(completed, p.total)
-	p.mu.Lock()
-	p.active = false
-	p.mu.Unlock()
 }
 
 func (p *progressReporter) finish() {
 	if p == nil {
 		return
 	}
-	p.once.Do(func() { close(p.stop) })
-	p.mu.Lock()
-	active := p.active
-	p.mu.Unlock()
-	// A callback may re-enter Close on its own owner goroutine. In that case
-	// it cannot wait for itself; the owner will still drain and deliver final.
-	if active {
-		return
-	}
+	p.once.Do(func() {
+		p.mu.Lock()
+		p.stopped = true
+		p.mu.Unlock()
+		close(p.stop)
+	})
 	<-p.done
 }

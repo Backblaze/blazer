@@ -50,9 +50,11 @@ type Reader struct {
 
 	// Progress receives cumulative downloaded bytes. It runs on one owner
 	// goroutine, never under a transfer lock; values are monotonic non-decreasing
-	// and end with a final call at the bytes downloaded. The total is known for
-	// a finite NewRangeReader length, and is -1 otherwise. Set it before the
-	// first Read.
+	// and end with a final call at the bytes downloaded before Close returns.
+	// For a finite range, total is the actual available byte count (not the
+	// requested upper bound) when a HEAD request can determine it; otherwise
+	// total is -1. Set Progress before the first Read. Calling Close from this
+	// callback is unsupported because Close waits for the callback to finish.
 	Progress func(bytesComplete, bytesTotal int64)
 
 	ctx        context.Context
@@ -139,7 +141,7 @@ func (r *Reader) thread() {
 				return
 			}
 			r.rmux.Lock()
-			if r.progressTotal >= 0 && r.length == 0 {
+			if r.length == 0 {
 				r.rmux.Unlock()
 				return
 			}
@@ -249,6 +251,25 @@ func (r *Reader) curChunk() (*rchunk, error) {
 }
 
 func (r *Reader) initFunc() {
+	if r.Progress != nil && r.length > 0 {
+		// A range length is only an upper bound: it may extend past EOF.
+		// HEAD uses the same download authorization as GET, and its content
+		// length lets progress report an exact total without listing files.
+		r.progressTotal = -1
+		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true); err == nil {
+			size, _, _, _ := fr.stats()
+			if err := fr.Close(); err == nil {
+				available := int64(size) - r.offset
+				if available < 0 {
+					available = 0
+				}
+				if available > r.length {
+					available = r.length
+				}
+				r.progressTotal = available
+			}
+		}
+	}
 	r.reporter = newProgressReporter(r.Progress, r.progressTotal)
 	r.smux.Lock()
 	r.smap = make(map[int]*meteredReader)

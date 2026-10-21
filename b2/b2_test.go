@@ -354,10 +354,13 @@ func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, co
 	return nil, "", fmt.Errorf("testBucket.listUnfinishedLargeFiles(ctx, %d, %q): not implemented", count, cont)
 }
 
-func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool) (b2FileReaderInterface, error) {
+func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, head bool) (b2FileReaderInterface, error) {
 	gmux.Lock()
 	defer gmux.Unlock()
 	f := t.files[name]
+	if head {
+		return &testFileReader{s: len(f), n: name}, nil
+	}
 	end := int(offset + size)
 	if end >= len(f) {
 		end = len(f)
