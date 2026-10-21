@@ -17,12 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The minimum required Go version is now 1.26.10.
 - `b2_authorize_account` and the other general API calls now target the B2 Native API v4. `(*base.B2).CreateKey` and `(*b2.Bucket).CreateKey` continue to target the v3 `b2_create_key` endpoint and produce legacy single-bucket keys.
 - `base.CreateBucket` takes the bucket's CORS rules and whether Object Lock is enabled as additional arguments.
 - A connection error on an upload now names the request, so its message reads `b2_upload_file: 0: connection reset` instead of `b2 error: connection reset`. Connection errors on every other request are unchanged.
 
 ### Fixed
 
+- Certificate verification failures, including rejection of compromised CAs, now stop retries and preserve the original error instead of being treated as retryable connection errors or prompting a new upload URL.
 - `Client.NewBucket` sends `BucketAttrs.CORSRules` and `BucketAttrs.FileLockEnabled` in `b2_create_bucket`; they were dropped.
 - `Bucket.Attrs` and the buckets returned by `Client.Bucket` and `Client.ListBuckets` report `CORSRules` and `FileLockEnabled`.
 - `Bucket.Update` sends `CORSRule.Name` as `corsRuleName`; it was dropped.
