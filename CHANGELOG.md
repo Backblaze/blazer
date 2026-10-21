@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-22
+
 ### Added
 
+- `(*b2.Bucket).NotificationRules` and `SetNotificationRules` read and replace bucket event notification rules, including webhook targets.
+- `(*b2.Bucket).GetFileInfoByName` looks up metadata for the current visible file with an exact name without downloading its contents. `(*base.Bucket).GetFileInfoByName` is the low-level call.
+- `ReplicationConfiguration.AsReplicationDestination` exposes the replication destination's source-to-destination key mapping.
 - `(*base.B2).CreateKeyMultiBucket` and the `b2.BucketIDs` `KeyOption` for creating Multi-Bucket Application Keys via `(*b2.Client).CreateKey`.
 - `(*b2.Bucket).ID` returns the bucket's B2 ID, which is needed to fill in `ReplicationRules.DestinationBucketID`.
 - `(*b2.Bucket).Copy` copies a file server-side with `b2_copy_file`, within a bucket or to another bucket of the account (`CopyToBucket`), optionally a byte range (`CopyRange`) and with replaced metadata (`CopyWithMetadata`). `(*base.Bucket).CopyFile` is the low-level call. A single copy must be under 5 GB; the per-copy Object Lock and encryption parameters are not exposed.
@@ -24,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bucket creation, listing and updates preserve the replication destination configuration as well as the source configuration.
+- Failed uploads no longer return their upload URL to the pool for reuse by another writer. Server-supplied `Retry-After` delays are capped at 30 seconds.
 - Certificate verification failures, including rejection of compromised CAs, now stop retries and preserve the original error instead of being treated as retryable connection errors or prompting a new upload URL.
 - `Client.NewBucket` sends `BucketAttrs.CORSRules` and `BucketAttrs.FileLockEnabled` in `b2_create_bucket`; they were dropped.
 - `Bucket.Attrs` and the buckets returned by `Client.Bucket` and `Client.ListBuckets` report `CORSRules` and `FileLockEnabled`.
@@ -108,6 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Tagged initial version at https://github.com/Backblaze/blazer
 
-[unreleased]: https://github.com/Backblaze/blazer/compare/v0.6.1...HEAD
+[unreleased]: https://github.com/Backblaze/blazer/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Backblaze/blazer/compare/v0.8.0...v0.9.0
 [0.6.1]: https://github.com/Backblaze/blazer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Backblaze/blazer/compare/v0.5.3...v0.6.0
