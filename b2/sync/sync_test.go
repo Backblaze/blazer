@@ -120,17 +120,30 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 				write(map[string]interface{}{"status": 400, "code": "bad_request", "message": "file name too long"})
 				return
 			}
-			n, err := io.Copy(io.Discard, req.Body)
+			payload, err := io.ReadAll(req.Body)
 			if err != nil {
 				t.Errorf("upload body: %v", err)
 			}
+			sha := req.Header.Get("X-Bz-Content-Sha1")
+			if sha == "hex_digits_at_end" {
+				if len(payload) < 40 {
+					t.Error("missing SHA1 trailer")
+					return
+				}
+				sha = string(payload[len(payload)-40:])
+				payload = payload[:len(payload)-40]
+				if sha != fmt.Sprintf("%x", sha1.Sum(payload)) {
+					t.Error("invalid SHA1 trailer")
+				}
+			}
+			n := int64(len(payload))
 			info := map[string]string{}
 			for key, values := range req.Header {
 				if strings.HasPrefix(strings.ToLower(key), "x-bz-info-") {
 					info[strings.TrimPrefix(strings.ToLower(key), "x-bz-info-")] = values[0]
 				}
 			}
-			file := map[string]interface{}{"fileId": "id-" + name, "fileName": name, "contentLength": n, "contentSha1": req.Header.Get("X-Bz-Content-Sha1"), "contentType": "application/octet-stream", "fileInfo": info, "action": "upload", "uploadTimestamp": 1700000000000}
+			file := map[string]interface{}{"fileId": "id-" + name, "fileName": name, "contentLength": n, "contentSha1": sha, "contentType": "application/octet-stream", "fileInfo": info, "action": "upload", "uploadTimestamp": 1700000000000}
 			w.mu.Lock()
 			w.files[name] = file
 			callback := w.onUpload
