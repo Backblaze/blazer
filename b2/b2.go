@@ -70,6 +70,10 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 	for _, f := range opts {
 		f(&c.opts)
 	}
+	if c.opts.accountInfo == nil {
+		c.opts.accountInfo = &InMemoryAccountInfo{}
+	}
+	c.backend.(*beRoot).accountInfo = c.opts.accountInfo
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
 		return nil, err
 	}
@@ -85,6 +89,13 @@ type clientOptions struct {
 	apiBase         string
 	userAgents      []string
 	writerOpts      []WriterOption
+	accountInfo     AccountInfo
+}
+
+// WithAccountInfo uses the given session store. By default NewClient uses an
+// InMemoryAccountInfo; NewAccountInfoFile opts in to persistence.
+func WithAccountInfo(ai AccountInfo) ClientOption {
+	return func(o *clientOptions) { o.accountInfo = ai }
 }
 
 // A ClientOption allows callers to adjust various per-client settings.

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x client.auth_persistence -- repository-owned contract.
+# An authorized session survives a client restart without another auth request;
+# a rejected session is cleared before reauthorization. Offline simulator only.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+SLUG=blazer
+CAP=client.auth_persistence
+TARGET=simulator
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+  say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.9.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+import (
+  "context"
+  "fmt"
+  "io"
+  "net/http"
+  "os"
+  "path/filepath"
+  "strings"
+  "sync"
+
+  "github.com/Backblaze/blazer/b2"
+)
+
+type provingTransport struct {
+  next http.RoundTripper
+  path string
+  mu sync.Mutex
+  auths int
+  force401 bool
+  clearedBeforeReauth bool
+}
+
+func (p *provingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+  p.mu.Lock()
+  if strings.HasSuffix(req.URL.Path, "/b2_authorize_account") {
+    p.auths++
+    if p.auths == 2 {
+      _, err := os.Stat(p.path)
+      p.clearedBeforeReauth = os.IsNotExist(err)
+    }
+  }
+  if strings.HasSuffix(req.URL.Path, "/b2_list_buckets") && p.force401 {
+    p.force401 = false
+    p.mu.Unlock()
+    return &http.Response{StatusCode: 401, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":401,"code":"expired_auth_token","message":"expired"}`)), Request: req}, nil
+  }
+  p.mu.Unlock()
+  return p.next.RoundTrip(req)
+}
+
+func run() error {
+  ctx := context.Background()
+  endpoint := os.Getenv("CONFORMANCE_SIMULATOR_URL")
+  dir, err := os.MkdirTemp("", "blazer-auth-conformance-")
+  if err != nil { return err }
+  defer os.RemoveAll(dir)
+  path := filepath.Join(dir, "private", "account.json")
+  wire := &provingTransport{next: http.DefaultTransport, path: path}
+  store := b2.NewAccountInfoFile(path)
+  first, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.APIBase(endpoint), b2.Transport(wire), b2.WithAccountInfo(store))
+  if err != nil { return fmt.Errorf("first auth: %w", err) }
+  if _, err := first.ListBuckets(ctx); err != nil { return err }
+  session, ok := store.AuthData()
+  if !ok || session.AuthToken == "" || session.APIURL != endpoint || session.RecommendedPartSize == 0 { return fmt.Errorf("session was not persisted completely") }
+  content, err := os.ReadFile(path)
+  if err != nil { return err }
+  fileInfo, err := os.Stat(path)
+  if err != nil { return err }
+  if fileInfo.Mode().Perm() != 0o600 { return fmt.Errorf("session mode = %04o, want 0600", fileInfo.Mode().Perm()) }
+  parentInfo, err := os.Stat(filepath.Dir(path))
+  if err != nil { return err }
+  if parentInfo.Mode().Perm() != 0o700 { return fmt.Errorf("parent mode = %04o, want 0700", parentInfo.Mode().Perm()) }
+  if strings.Contains(string(content), `"test-key"`) { return fmt.Errorf("application key secret persisted") }
+  second, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.APIBase(endpoint), b2.Transport(wire), b2.WithAccountInfo(b2.NewAccountInfoFile(path)))
+  if err != nil { return fmt.Errorf("resume: %w", err) }
+  if _, err := second.ListBuckets(ctx); err != nil { return err }
+  wire.mu.Lock()
+  auths := wire.auths
+  wire.force401 = true
+  wire.mu.Unlock()
+  if auths != 1 { return fmt.Errorf("fresh client made %d authorize requests, want 1 total", auths) }
+  if _, err := second.ListBuckets(ctx); err != nil { return fmt.Errorf("401 retry: %w", err) }
+  wire.mu.Lock()
+  auths, cleared := wire.auths, wire.clearedBeforeReauth
+  wire.mu.Unlock()
+  if auths != 2 || !cleared { return fmt.Errorf("reauth count=%d cleared-before-reauth=%t", auths, cleared) }
+  if _, ok := b2.NewAccountInfoFile(path).AuthData(); !ok { return fmt.Errorf("new session was not persisted") }
+  return nil
+}
+
+func main() {
+  if err := run(); err != nil {
+    fmt.Printf("CONFORMANCE blazer client.auth_persistence @simulator: FAIL (session -- %v)\n", err)
+    os.Exit(1)
+  }
+  fmt.Println("CONFORMANCE blazer client.auth_persistence @simulator: PASS")
+}
+__EOF_GO__

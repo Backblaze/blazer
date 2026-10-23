@@ -316,15 +316,60 @@ func (o *b2Options) getTransport() http.RoundTripper {
 
 // B2 holds account information for Backblaze.
 type B2 struct {
-	accountID   string
-	authToken   string
-	apiURI      string
-	s3URI       string
-	downloadURI string
-	minPartSize int
-	opts        *b2Options
-	buckets     []string // restricted to these buckets if non-empty
-	pfx         string   // restricted to objects with this prefix if present
+	accountID           string
+	authToken           string
+	apiURI              string
+	s3URI               string
+	downloadURI         string
+	minPartSize         int
+	recommendedPartSize int
+	opts                *b2Options
+	buckets             []string // restricted to these buckets if non-empty
+	pfx                 string   // restricted to objects with this prefix if present
+	capabilities        []string
+}
+
+// AuthData is the authorization state needed to resume a B2 session. It does
+// not contain the application key used to obtain or refresh the session.
+type AuthData struct {
+	ApplicationKeyID    string
+	AccountID           string
+	AuthToken           string
+	APIURL              string
+	DownloadURL         string
+	S3URL               string
+	AbsMinPartSize      int
+	RecommendedPartSize int
+	AllowedBuckets      []string
+	AllowedPrefix       string
+	AllowedCapabilities []string
+}
+
+// AuthData returns a detached snapshot of the current authorization state.
+func (b *B2) AuthData() AuthData {
+	return AuthData{
+		AccountID: b.accountID, AuthToken: b.authToken, APIURL: b.apiURI,
+		DownloadURL: b.downloadURI, S3URL: b.s3URI,
+		AbsMinPartSize: b.minPartSize, RecommendedPartSize: b.recommendedPartSize,
+		AllowedBuckets: append([]string(nil), b.buckets...), AllowedPrefix: b.pfx,
+		AllowedCapabilities: append([]string(nil), b.capabilities...),
+	}
+}
+
+// NewAuthorizedAccount restores a session while applying this client's own
+// transport, user agent, and other request options.
+func NewAuthorizedAccount(data AuthData, opts ...AuthOption) *B2 {
+	b2opts := &b2Options{}
+	for _, option := range opts {
+		option(b2opts)
+	}
+	return &B2{
+		accountID: data.AccountID, authToken: data.AuthToken, apiURI: data.APIURL,
+		downloadURI: data.DownloadURL, s3URI: data.S3URL,
+		minPartSize: data.AbsMinPartSize, recommendedPartSize: data.RecommendedPartSize,
+		buckets: append([]string(nil), data.AllowedBuckets...), pfx: data.AllowedPrefix,
+		capabilities: append([]string(nil), data.AllowedCapabilities...), opts: b2opts,
+	}
 }
 
 // Update replaces the B2 object with a new one, in-place.
@@ -332,11 +377,14 @@ func (b *B2) Update(n *B2) {
 	b.accountID = n.accountID
 	b.authToken = n.authToken
 	b.apiURI = n.apiURI
+	b.s3URI = n.s3URI
 	b.downloadURI = n.downloadURI
 	b.minPartSize = n.minPartSize
+	b.recommendedPartSize = n.recommendedPartSize
 	b.opts = n.opts
 	b.buckets = n.buckets
 	b.pfx = n.pfx
+	b.capabilities = n.capabilities
 }
 
 type httpReply struct {
@@ -522,15 +570,17 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		pfx = allowed.Prefix
 	}
 	return &B2{
-		accountID:   b2resp.AccountID,
-		authToken:   b2resp.AuthToken,
-		apiURI:      storageAPI.URI,
-		s3URI:       storageAPI.S3URI,
-		downloadURI: storageAPI.DownloadURI,
-		minPartSize: storageAPI.AbsMinPartSize,
-		buckets:     buckets,
-		pfx:         pfx,
-		opts:        b2opts,
+		accountID:           b2resp.AccountID,
+		authToken:           b2resp.AuthToken,
+		apiURI:              storageAPI.URI,
+		s3URI:               storageAPI.S3URI,
+		downloadURI:         storageAPI.DownloadURI,
+		minPartSize:         storageAPI.AbsMinPartSize,
+		recommendedPartSize: storageAPI.PartSize,
+		buckets:             buckets,
+		pfx:                 pfx,
+		capabilities:        append([]string(nil), storageAPI.Capabilities...),
+		opts:                b2opts,
 	}, nil
 }
 
