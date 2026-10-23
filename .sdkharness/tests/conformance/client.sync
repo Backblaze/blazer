@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x client.sync -- the contract is bin/conformance/README.md.
+#
+# Scenario: local-to-B2 folder sync, skip, selective upload, and dry run.
+#
+# The expected behavior is the client-side sync policy: changed local files
+# upload; unchanged files and a dry run make no upload requests.
+#
+# Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+SLUG=blazer
+CAP=client.sync
+TARGET=simulator
+
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+
+# A detail never carries a response body, a multi-line diagnostic or a
+# credential: one line, printable, capped.
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+  say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# The Go program is carried at the end of this file as an INERT heredoc, so
+# `bash -n` parses this check as the shell script it is rather than choking on
+# Go syntax.
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
+	b2sync "github.com/Backblaze/blazer/b2/sync"
+)
+
+func randomHex() string {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(value[:])
+}
+
+func writeLocal(path string, data []byte, modified time.Time) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	return os.Chtimes(path, modified, modified)
+}
+
+func readRemote(ctx context.Context, object *b2.Object) ([]byte, error) {
+	reader := object.NewReader(ctx)
+	data, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return data, nil
+}
+
+func checkRemote(ctx context.Context, bucket *b2.Bucket, name string, want []byte, modified time.Time) error {
+	object := bucket.Object(name)
+	got, err := readRemote(ctx, object)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("%s: remote bytes differ", name)
+	}
+	attrs, err := object.Attrs(ctx)
+	if err != nil {
+		return err
+	}
+	if attrs.Size != int64(len(want)) || attrs.LastModified.UnixMilli() != modified.UnixMilli() {
+		return fmt.Errorf("%s: size/mtime = %d/%d, want %d/%d", name, attrs.Size, attrs.LastModified.UnixMilli(), len(want), modified.UnixMilli())
+	}
+	return nil
+}
+
+func checkPaths(got, want []string) error {
+	if !reflect.DeepEqual(got, want) {
+		return fmt.Errorf("paths = %v, want %v", got, want)
+	}
+	return nil
+}
+
+func run(ctx context.Context) error {
+	base := os.Getenv("CONFORMANCE_SIMULATOR_URL")
+	if base == "" {
+		return fmt.Errorf("simulator URL is unset")
+	}
+	client, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.APIBase(base))
+	if err != nil {
+		return fmt.Errorf("authenticate: %w", err)
+	}
+	bucket, err := client.NewBucket(ctx, "sdkharness-conf-"+randomHex(), &b2.BucketAttrs{Type: b2.Private})
+	if err != nil {
+		return fmt.Errorf("create bucket: %w", err)
+	}
+	defer func() {
+		versions := bucket.List(ctx, b2.ListHidden())
+		for versions.Next() {
+			_ = versions.Object().Delete(ctx)
+		}
+		_ = bucket.Delete(ctx)
+	}()
+	root, err := os.MkdirTemp("", "blazer-client-sync-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(root)
+	modified := time.Unix(1_700_000_000, 123_000_000)
+	first := []byte("first file payload")
+	second := []byte("second file payload")
+	if err := writeLocal(filepath.Join(root, "first.txt"), first, modified); err != nil {
+		return err
+	}
+	if err := writeLocal(filepath.Join(root, "nested", "second.txt"), second, modified); err != nil {
+		return err
+	}
+	prefix := "sync-" + randomHex()
+	firstName := prefix + "/first.txt"
+	secondName := prefix + "/nested/second.txt"
+	result, err := b2sync.Sync(ctx, bucket, prefix, root)
+	if err != nil {
+		return fmt.Errorf("first sync: %w", err)
+	}
+	if err := checkPaths(result.Uploaded, []string{"first.txt", "nested/second.txt"}); err != nil {
+		return fmt.Errorf("first sync: %w", err)
+	}
+	if result.BytesUploaded != int64(len(first)+len(second)) || len(result.Skipped) != 0 {
+		return fmt.Errorf("first sync counts: %+v", result)
+	}
+	if err := checkRemote(ctx, bucket, firstName, first, modified); err != nil {
+		return fmt.Errorf("first readback: %w", err)
+	}
+	if err := checkRemote(ctx, bucket, secondName, second, modified); err != nil {
+		return fmt.Errorf("second readback: %w", err)
+	}
+	result, err = b2sync.Sync(ctx, bucket, prefix, root)
+	if err != nil {
+		return fmt.Errorf("second sync: %w", err)
+	}
+	if len(result.Uploaded) != 0 || result.BytesUploaded != 0 {
+		return fmt.Errorf("unchanged files were re-uploaded: %+v", result)
+	}
+	if err := checkPaths(result.Skipped, []string{"first.txt", "nested/second.txt"}); err != nil {
+		return fmt.Errorf("second sync: %w", err)
+	}
+	changed := []byte("second file changed")
+	changedTime := modified.Add(time.Second)
+	if err := writeLocal(filepath.Join(root, "nested", "second.txt"), changed, changedTime); err != nil {
+		return err
+	}
+	result, err = b2sync.Sync(ctx, bucket, prefix, root)
+	if err != nil {
+		return fmt.Errorf("selective sync: %w", err)
+	}
+	if err := checkPaths(result.Uploaded, []string{"nested/second.txt"}); err != nil {
+		return fmt.Errorf("selective sync: %w", err)
+	}
+	if err := checkPaths(result.Skipped, []string{"first.txt"}); err != nil {
+		return fmt.Errorf("selective sync: %w", err)
+	}
+	if result.BytesUploaded != int64(len(changed)) {
+		return fmt.Errorf("selective uploaded bytes = %d, want %d", result.BytesUploaded, len(changed))
+	}
+	if err := checkRemote(ctx, bucket, secondName, changed, changedTime); err != nil {
+		return fmt.Errorf("selective readback: %w", err)
+	}
+	if err := writeLocal(filepath.Join(root, "first.txt"), []byte("dry run change"), changedTime); err != nil {
+		return err
+	}
+	result, err = b2sync.Sync(ctx, bucket, prefix, root, b2sync.WithDryRun())
+	if err != nil {
+		return fmt.Errorf("dry run: %w", err)
+	}
+	if err := checkPaths(result.Uploaded, []string{"first.txt"}); err != nil {
+		return fmt.Errorf("dry run plan: %w", err)
+	}
+	if result.BytesUploaded != 0 {
+		return fmt.Errorf("dry run uploaded %d bytes", result.BytesUploaded)
+	}
+	if err := checkRemote(ctx, bucket, firstName, first, modified); err != nil {
+		return fmt.Errorf("dry run changed destination: %w", err)
+	}
+	failureRoot, err := os.MkdirTemp("", "blazer-client-sync-failure-")
+	if err != nil { return err }
+	defer os.RemoveAll(failureRoot)
+	good := []byte("good file survives bad neighbor")
+	if err := writeLocal(filepath.Join(failureRoot, "good.txt"), good, modified); err != nil { return err }
+	badPath := filepath.Join(failureRoot, "bad\n.txt")
+	if err := writeLocal(badPath, []byte("invalid long B2 name"), modified); err != nil { return err }
+	badRel, err := filepath.Rel(failureRoot, badPath)
+	if err != nil { return err }
+	failurePrefix := "failure-" + randomHex()
+	result, err = b2sync.Sync(ctx, bucket, failurePrefix, failureRoot)
+	if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != filepath.ToSlash(badRel) {
+		return fmt.Errorf("continue-and-report result=%+v error=%v", result, err)
+	}
+	if err := checkPaths(result.Uploaded, []string{"good.txt"}); err != nil { return err }
+	if err := checkRemote(ctx, bucket, failurePrefix+"/good.txt", good, modified); err != nil { return err }
+	largeRoot, err := os.MkdirTemp("", "blazer-client-sync-large-")
+	if err != nil { return err }
+	defer os.RemoveAll(largeRoot)
+	large := bytes.Repeat([]byte("large-sha1-payload"), 6_000_001)
+	if err := writeLocal(filepath.Join(largeRoot, "large.bin"), large, modified); err != nil { return err }
+	largePrefix := "large-" + randomHex()
+	result, err = b2sync.Sync(ctx, bucket, largePrefix, largeRoot, b2sync.WithCompare(b2sync.CompareSHA1))
+	if err != nil || !reflect.DeepEqual(result.Uploaded, []string{"large.bin"}) { return fmt.Errorf("large first sync: result=%+v error=%v", result, err) }
+	attrs, err := bucket.Object(largePrefix+"/large.bin").Attrs(ctx)
+	if err != nil { return err }
+	wantSHA1 := fmt.Sprintf("%x", sha1.Sum(large))
+	if attrs.SHA1 != wantSHA1 { return fmt.Errorf("large SHA1=%s, want %s", attrs.SHA1, wantSHA1) }
+	result, err = b2sync.Sync(ctx, bucket, largePrefix, largeRoot, b2sync.WithCompare(b2sync.CompareSHA1))
+	if err != nil || !reflect.DeepEqual(result.Skipped, []string{"large.bin"}) || len(result.Uploaded) != 0 { return fmt.Errorf("large second sync: result=%+v error=%v", result, err) }
+	fmt.Println("NOTE blazer client.sync: upload=2 skip=2 selective=1 dry-run-writes=0 failed=1 good-uploaded=1 large-sha1-skipped=1")
+	return nil
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
+		fmt.Printf("CONFORMANCE blazer client.sync @simulator: FAIL (sync -- %v)\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("CONFORMANCE blazer client.sync @simulator: PASS")
+}
+__EOF_GO__
