@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // AccountInfo stores an authorized session. It never stores the application
@@ -143,21 +144,27 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 	return renameReplace(file.Name(), a.path)
 }
 
-// renameReplace moves tmp onto dest, replacing any existing file. On Unix
-// os.Rename replaces atomically. On Windows MoveFile refuses an existing
-// destination (and a read-only one), so fall back to clearing the attribute,
-// removing dest, and renaming -- a small non-atomic window that at worst forces
-// a re-authorization, which is acceptable for a session cache.
+// renameReplace atomically moves tmp onto dest. os.Rename replaces an existing
+// file atomically on both Unix and Windows (MoveFileEx with REPLACE_EXISTING),
+// so a concurrent reader always observes either the old or the new complete
+// file -- never a partial one. On Windows the move can still fail transiently
+// with a sharing violation while another process briefly holds the destination;
+// those clear on their own, so retry. A directory is never replaced.
 func renameReplace(tmp, dest string) error {
 	err := os.Rename(tmp, dest)
 	if err == nil || runtime.GOOS != "windows" {
 		return err
 	}
-	_ = os.Chmod(dest, 0o600)
-	if rmErr := os.Remove(dest); rmErr != nil && !os.IsNotExist(rmErr) {
+	if info, statErr := os.Lstat(dest); statErr == nil && info.IsDir() {
 		return err
 	}
-	return os.Rename(tmp, dest)
+	for i := 0; i < 100; i++ {
+		time.Sleep(time.Millisecond)
+		if err = os.Rename(tmp, dest); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // AuthData reads the latest persisted session.
