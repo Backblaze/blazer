@@ -1442,7 +1442,7 @@ func (b *Bucket) DownloadFileByName(ctx context.Context, name string, offset, si
 
 // DownloadFileByID wraps b2_download_file_by_id.
 func (b *Bucket) DownloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (*FileReader, error) {
-	uri := b.b2.downloadURI + b2types.V4api + "b2_download_file_by_id?fileId=" + id
+	uri := b.b2.downloadURI + b2types.V4api + "b2_download_file_by_id?fileId=" + url.QueryEscape(id)
 	method := "GET"
 	if header {
 		method = "HEAD"
@@ -1474,6 +1474,9 @@ func newFileReader(resp *http.Response) (*FileReader, error) {
 		return nil, mkErr(resp)
 	}
 	clen, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+	if err == nil && (clen < 0 || int64(int(clen)) != clen) {
+		err = fmt.Errorf("invalid download content length %d", clen)
+	}
 	if err != nil {
 		resp.Body.Close()
 		return nil, err
