@@ -44,14 +44,12 @@ type Event struct {
 }
 
 // VerifySignature verifies a B2 webhook signature for the raw request body.
+// The v1= prefix is exact; hex digits in the signature may be either case.
 func VerifySignature(body []byte, signatureHeader, signingSecret string) error {
 	if !strings.HasPrefix(signatureHeader, "v1=") {
 		return fmt.Errorf("webhook signature must start with v1=")
 	}
 	hexSignature := strings.TrimPrefix(signatureHeader, "v1=")
-	if hexSignature != strings.ToLower(hexSignature) {
-		return fmt.Errorf("webhook signature must use lowercase hex")
-	}
 	signature, err := hex.DecodeString(hexSignature)
 	if err != nil {
 		return fmt.Errorf("decode webhook signature: %w", err)

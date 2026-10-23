@@ -15,10 +15,12 @@
 package b2
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -38,17 +40,37 @@ func TestVerifySignature(t *testing.T) {
 	if err := VerifySignature(body, signature, secret); err != nil {
 		t.Fatalf("VerifySignature() = %v, want nil", err)
 	}
-	if err := VerifySignature(body, signature[:3]+strings.ToUpper(signature[3:]), secret); err == nil {
-		t.Fatal("VerifySignature() accepted uppercase hex")
+	if err := VerifySignature(body, signature[:3]+strings.ToUpper(signature[3:]), secret); err != nil {
+		t.Fatalf("VerifySignature() rejected valid uppercase hex: %v", err)
 	}
-	if err := VerifySignature(body, signature[:8]+strings.ToUpper(signature[8:]), secret); err == nil {
-		t.Fatal("VerifySignature() accepted mixed-case hex")
+	if err := VerifySignature(body, signature[:8]+strings.ToUpper(signature[8:]), secret); err != nil {
+		t.Fatalf("VerifySignature() rejected valid mixed-case hex: %v", err)
 	}
 	if err := VerifySignature(body, signature, "wrong secret"); err == nil {
 		t.Fatal("VerifySignature() with wrong secret = nil, want error")
 	}
 	if err := VerifySignature([]byte("{\"events\":[]}"), signature, secret); err == nil {
 		t.Fatal("VerifySignature() with tampered body = nil, want error")
+	}
+}
+
+func TestVerifySignatureLargeBodyAndConstantTimeComparison(t *testing.T) {
+	body := bytes.Repeat([]byte("raw webhook bytes\n"), 4096)
+	header := webhookTestSignature(body, "large-body-secret")
+	if err := VerifySignature(body, header, "large-body-secret"); err != nil {
+		t.Fatalf("VerifySignature() with large body = %v", err)
+	}
+	body[len(body)-1] ^= 1
+	if err := VerifySignature(body, header, "large-body-secret"); err == nil {
+		t.Fatal("VerifySignature() accepted a changed final byte")
+	}
+	// Guard the security property that cannot be measured reliably by timing a test.
+	source, err := os.ReadFile("webhook.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(source, []byte("hmac.Equal(signature, mac.Sum(nil))")) || bytes.Contains(source, []byte("signature ==")) {
+		t.Fatal("VerifySignature must compare decoded HMAC bytes with hmac.Equal, not string equality")
 	}
 }
 
@@ -168,6 +190,40 @@ func TestParseEventMultipleEventsAndOptionalFields(t *testing.T) {
 	}
 	if got.Events[1].ObjectSize != nil || got.Events[2].ObjectSize != nil {
 		t.Fatalf("null and absent objectSize = %v, %v, want nil", got.Events[1].ObjectSize, got.Events[2].ObjectSize)
+	}
+}
+
+func TestParseEventKnownAndFutureEventTypes(t *testing.T) {
+	// The documented B2 notification types, plus the test-rule delivery and a
+	// future type, are opaque values: parsing must never discard an event.
+	types := []string{
+		"b2:ObjectCreated:Upload",
+		"b2:ObjectCreated:MultipartUpload",
+		"b2:ObjectCreated:Copy",
+		"b2:ObjectCreated:Replica",
+		"b2:ObjectCreated:MultipartReplica",
+		"b2:ObjectDeleted:Delete",
+		"b2:ObjectDeleted:LifecycleRule",
+		"b2:HideMarkerCreated:Hide",
+		"b2:HideMarkerCreated:LifecycleRule",
+		"b2:MultipartUploadCreated:LiveRead",
+		"b2:TestEvent",
+		"b2:FutureCategory:FutureEvent",
+	}
+	want := EventNotification{Events: make([]Event, len(types))}
+	for i, eventType := range types {
+		want.Events[i] = Event{EventID: eventType, EventType: eventType}
+	}
+	body, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseEvent(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, &want) {
+		t.Fatalf("ParseEvent() = %#v, want %#v", got, &want)
 	}
 }
 

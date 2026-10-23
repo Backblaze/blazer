@@ -78,6 +78,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 
 	"github.com/Backblaze/blazer/b2"
 )
@@ -106,6 +108,10 @@ func main() {
 	if err := b2.VerifySignature(body, signature(body), secret); err != nil {
 		fail("verify valid signature: %v", err)
 	}
+	upper := "v1=" + strings.ToUpper(strings.TrimPrefix(signature(body), "v1="))
+	if err := b2.VerifySignature(body, upper, secret); err != nil {
+		fail("verify uppercase signature: %v", err)
+	}
 	tampered := append([]byte(nil), body...)
 	tampered[0] ^= 1
 	if err := b2.VerifySignature(tampered, signature(body), secret); err == nil {
@@ -114,12 +120,30 @@ func main() {
 	if err := b2.VerifySignature(body, signature(body), wrongSecret); err == nil {
 		fail("wrong secret was accepted")
 	}
+	for _, header := range []string{"", "v2=" + strings.TrimPrefix(signature(body), "v1="), "v1=not-hex"} {
+		if err := b2.VerifySignature(body, header, secret); err == nil {
+			fail("malformed header %q was accepted", header)
+		}
+	}
 	got, err := b2.ParseEvent(body)
 	if err != nil {
 		fail("parse event: %v", err)
 	}
 	if len(got.Events) != 1 || got.Events[0].AccountID != want.AccountID || got.Events[0].BucketID != want.BucketID || got.Events[0].EventID != want.EventID || got.Events[0].ObjectName != want.ObjectName || got.Events[0].ObjectSize == nil || *got.Events[0].ObjectSize != 11 || got.Events[0].ObjectVersionID != want.ObjectVersionID {
 		fail("parsed event did not match payload")
+	}
+	batch := []byte(`{"events":[{"eventId":"created","eventType":"b2:ObjectCreated:Upload","objectSize":11},{"eventId":"deleted","eventType":"b2:ObjectDeleted:Delete","objectName":"st/webhook.txt"}]}`)
+	if err := b2.VerifySignature(batch, signature(batch), secret); err != nil {
+		fail("verify batch signature: %v", err)
+	}
+	parsedBatch, err := b2.ParseEvent(batch)
+	if err != nil {
+		fail("parse batch: %v", err)
+	}
+	size := int64(11)
+	wantBatch := []b2.Event{{EventID: "created", EventType: "b2:ObjectCreated:Upload", ObjectSize: &size}, {EventID: "deleted", EventType: "b2:ObjectDeleted:Delete", ObjectName: "st/webhook.txt"}}
+	if !reflect.DeepEqual(parsedBatch.Events, wantBatch) {
+		fail("parsed batch lost event order or delete-without-size: %+v", parsedBatch.Events)
 	}
 	fmt.Println("CONFORMANCE blazer bucket.inbound_webhook @simulator: PASS")
 }
