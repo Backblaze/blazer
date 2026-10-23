@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func sampleAuthData() AuthData {
@@ -161,6 +162,14 @@ func TestAccountInfoFileAtomicReplacement(t *testing.T) {
 	}
 	for i := 0; i < 200; i++ {
 		content, err := os.ReadFile(path)
+		// On Windows a reader momentarily collides with a concurrent writer's
+		// atomic rename (ERROR_SHARING_VIOLATION); that is expected OS behavior,
+		// so retry the read rather than treating it as a failure. The atomicity
+		// guarantee being tested -- never a partial snapshot -- still holds.
+		for deadline := time.Now().Add(2 * time.Second); err != nil && runtime.GOOS == "windows" && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+			content, err = os.ReadFile(path)
+		}
 		if err != nil {
 			errors <- err
 			break

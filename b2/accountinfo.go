@@ -158,11 +158,14 @@ func renameReplace(tmp, dest string) error {
 	if info, statErr := os.Lstat(dest); statErr == nil && info.IsDir() {
 		return err
 	}
-	for i := 0; i < 100; i++ {
-		time.Sleep(time.Millisecond)
+	// Windows: a concurrent reader or writer can briefly hold dest, so the
+	// atomic move fails with a transient sharing violation. Retry until it
+	// clears, bounded by a deadline.
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
 		if err = os.Rename(tmp, dest); err == nil {
 			return nil
 		}
+		time.Sleep(time.Millisecond)
 	}
 	return err
 }
