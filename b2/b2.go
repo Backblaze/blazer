@@ -704,10 +704,11 @@ func (o *Object) URL() string {
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	ctx, cancel := context.WithCancel(ctx)
 	w := &Writer{
-		o:      o,
-		name:   o.name,
-		ctx:    ctx,
-		cancel: cancel,
+		o:             o,
+		name:          o.name,
+		ctx:           ctx,
+		cancel:        cancel,
+		progressTotal: -1,
 	}
 	for _, f := range o.b.c.opts.writerOpts {
 		f(w)
@@ -719,18 +720,28 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 }
 
 // NewRangeReader returns a reader for the given object, reading up to length
-// bytes.  If length is negative, the rest of the object is read.
+// bytes. If length is negative, the rest of the object is read. With a Progress
+// callback, a finite range reports the available byte count when a HEAD
+// request can determine it; otherwise the progress total is -1.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Reader{
-		ctx:    ctx,
-		cancel: cancel,
-		o:      o,
-		name:   o.name,
-		chunks: make(map[int]*rchunk),
-		length: length,
-		offset: offset,
+		ctx:           ctx,
+		cancel:        cancel,
+		o:             o,
+		name:          o.name,
+		chunks:        make(map[int]*rchunk),
+		length:        length,
+		offset:        offset,
+		progressTotal: readerProgressTotal(length),
 	}
+}
+
+func readerProgressTotal(length int64) int64 {
+	if length >= 0 {
+		return length
+	}
+	return -1
 }
 
 // NewReader returns a reader for the given object.
