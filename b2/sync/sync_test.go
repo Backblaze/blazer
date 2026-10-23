@@ -143,7 +143,7 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 					info[strings.TrimPrefix(strings.ToLower(key), "x-bz-info-")] = values[0]
 				}
 			}
-			file := map[string]interface{}{"fileId": "id-" + name, "fileName": name, "contentLength": n, "contentSha1": sha, "contentType": "application/octet-stream", "fileInfo": info, "action": "upload", "uploadTimestamp": 1700000000000}
+			file := map[string]interface{}{"fileId": "id-" + name, "fileName": name, "contentLength": n, "contentSha1": sha, "contentType": "application/octet-stream", "fileInfo": info, "action": "upload", "uploadTimestamp": int64(1700000000000)}
 			w.mu.Lock()
 			w.files[name] = file
 			callback := w.onUpload
@@ -172,7 +172,7 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 		case strings.HasSuffix(req.URL.Path, "/b2_finish_large_file"):
 			w.mu.Lock()
 			name, _ := w.pending["fileName"].(string)
-			file := map[string]interface{}{"fileId": "large-id", "fileName": name, "contentLength": w.parts, "contentSha1": "none", "contentType": "application/octet-stream", "fileInfo": w.pending["fileInfo"], "action": "upload", "uploadTimestamp": 1700000000000}
+			file := map[string]interface{}{"fileId": "large-id", "fileName": name, "contentLength": w.parts, "contentSha1": "none", "contentType": "application/octet-stream", "fileInfo": w.pending["fileInfo"], "action": "upload", "uploadTimestamp": int64(1700000000000)}
 			w.files[name] = file
 			w.mu.Unlock()
 			write(file)
