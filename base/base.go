@@ -254,9 +254,6 @@ func redactSSECHeader(name, value string) string {
 }
 
 func redactSSECJSON(args []byte) []byte {
-	if !bytes.Contains(args, []byte("customerKey")) {
-		return args
-	}
 	var value any
 	if err := json.Unmarshal(args, &value); err != nil {
 		return []byte("[REDACTED]")
