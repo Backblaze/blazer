@@ -38,11 +38,11 @@ func TestVerifySignature(t *testing.T) {
 	if err := VerifySignature(body, signature, secret); err != nil {
 		t.Fatalf("VerifySignature() = %v, want nil", err)
 	}
-	if err := VerifySignature(body, signature[:3]+strings.ToUpper(signature[3:]), secret); err != nil {
-		t.Fatalf("VerifySignature() with uppercase hex = %v, want nil", err)
+	if err := VerifySignature(body, signature[:3]+strings.ToUpper(signature[3:]), secret); err == nil {
+		t.Fatal("VerifySignature() accepted uppercase hex")
 	}
-	if err := VerifySignature(body, signature[:8]+strings.ToUpper(signature[8:]), secret); err != nil {
-		t.Fatalf("VerifySignature() with mixed-case hex = %v, want nil", err)
+	if err := VerifySignature(body, signature[:8]+strings.ToUpper(signature[8:]), secret); err == nil {
+		t.Fatal("VerifySignature() accepted mixed-case hex")
 	}
 	if err := VerifySignature(body, signature, "wrong secret"); err == nil {
 		t.Fatal("VerifySignature() with wrong secret = nil, want error")

@@ -76,7 +76,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -85,7 +84,8 @@ import (
 
 const (
 	capability = "bucket.inbound_webhook"
-	secret     = "conformance webhook signing secret"
+	secret     = "0123456789abcdef0123456789abcdef"
+	wrongSecret = "fedcba9876543210fedcba9876543210"
 )
 
 func fail(format string, args ...interface{}) {
@@ -100,12 +100,9 @@ func signature(body []byte) string {
 }
 
 func main() {
-	size := int64(12)
-	want := b2.Event{AccountID: "account", BucketID: "bucket-id", BucketName: "bucket", EventID: "event-id", EventTimestamp: 1720000000123, EventType: "b2:ObjectCreated:Upload", EventVersion: 1, MatchedRuleName: "uploads", ObjectName: "logs/file.txt", ObjectSize: &size, ObjectVersionID: "version-id"}
-	body, err := json.Marshal(b2.EventNotification{Events: []b2.Event{want}})
-	if err != nil {
-		fail("marshal payload: %v", err)
-	}
+	// Same fixture and signing key as the TypeScript inbound-webhook check.
+	body := []byte(`{"events":[{"accountId":"sim_account_0001","bucketId":"b2_bucket_sdkharness_conformance","bucketName":"sdkharness-conf-webhook","eventId":"sdkharness-conformance-event","eventTimestamp":1700000000000,"eventType":"b2:ObjectCreated:Upload","eventVersion":1,"matchedRuleName":"sdkharness-conf-rule","objectName":"st/webhook.txt","objectSize":11,"objectVersionId":"4_z_sdkharness_conformance"}]}`)
+	want := b2.Event{AccountID: "sim_account_0001", BucketID: "b2_bucket_sdkharness_conformance", BucketName: "sdkharness-conf-webhook", EventID: "sdkharness-conformance-event", EventTimestamp: 1700000000000, EventType: "b2:ObjectCreated:Upload", EventVersion: 1, MatchedRuleName: "sdkharness-conf-rule", ObjectName: "st/webhook.txt", ObjectVersionID: "4_z_sdkharness_conformance"}
 	if err := b2.VerifySignature(body, signature(body), secret); err != nil {
 		fail("verify valid signature: %v", err)
 	}
@@ -114,14 +111,14 @@ func main() {
 	if err := b2.VerifySignature(tampered, signature(body), secret); err == nil {
 		fail("tampered body was accepted")
 	}
-	if err := b2.VerifySignature(body, signature(body), "wrong secret"); err == nil {
+	if err := b2.VerifySignature(body, signature(body), wrongSecret); err == nil {
 		fail("wrong secret was accepted")
 	}
 	got, err := b2.ParseEvent(body)
 	if err != nil {
 		fail("parse event: %v", err)
 	}
-	if len(got.Events) != 1 || got.Events[0].AccountID != want.AccountID || got.Events[0].BucketID != want.BucketID || got.Events[0].EventID != want.EventID || got.Events[0].ObjectName != want.ObjectName || got.Events[0].ObjectSize == nil || *got.Events[0].ObjectSize != *want.ObjectSize || got.Events[0].ObjectVersionID != want.ObjectVersionID {
+	if len(got.Events) != 1 || got.Events[0].AccountID != want.AccountID || got.Events[0].BucketID != want.BucketID || got.Events[0].EventID != want.EventID || got.Events[0].ObjectName != want.ObjectName || got.Events[0].ObjectSize == nil || *got.Events[0].ObjectSize != 11 || got.Events[0].ObjectVersionID != want.ObjectVersionID {
 		fail("parsed event did not match payload")
 	}
 	fmt.Println("CONFORMANCE blazer bucket.inbound_webhook @simulator: PASS")
