@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -104,7 +105,13 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+	if !info.IsDir() {
+		return fmt.Errorf("account info: parent %q is not a directory", parent)
+	}
+	// Unix mode bits do not reflect access on Windows (directory privacy is
+	// governed by filesystem ACLs there, and Stat reports a synthetic 0777), so
+	// only enforce the private-parent requirement where the bits are meaningful.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("account info: parent directory %q must have mode 0700", parent)
 	}
 	file, err := os.CreateTemp(parent, ".account-info-*")

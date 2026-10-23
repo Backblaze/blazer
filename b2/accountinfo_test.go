@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -71,7 +72,7 @@ func TestAccountInfoFileRoundTripAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fileInfo.Mode().Perm() != 0o600 || parentInfo.Mode().Perm() != 0o700 {
+	if runtime.GOOS != "windows" && (fileInfo.Mode().Perm() != 0o600 || parentInfo.Mode().Perm() != 0o700) {
 		t.Fatalf("modes file=%#o parent=%#o", fileInfo.Mode().Perm(), parentInfo.Mode().Perm())
 	}
 	reloaded := NewAccountInfoFile(path)
@@ -89,6 +90,9 @@ func TestAccountInfoFileRoundTripAndPermissions(t *testing.T) {
 }
 
 func TestAccountInfoFileRejectsPublicParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix directory mode bits are not enforced on Windows")
+	}
 	parent := filepath.Join(t.TempDir(), "public")
 	if err := os.Mkdir(parent, 0o700); err != nil {
 		t.Fatal(err)
