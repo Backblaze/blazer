@@ -151,7 +151,9 @@ func (a *AccountInfoFile) AuthData() (AuthData, bool) {
 	}
 	var data AuthData
 	if err := json.Unmarshal(content, &data); err != nil {
-		a.err = err
+		// A corrupt or incomplete cache is not an authorization failure.
+		// Treat it as a miss so NewClient can authorize and replace it.
+		a.err = nil
 		return AuthData{}, false
 	}
 	a.err = nil

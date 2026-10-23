@@ -114,6 +114,12 @@ func run() error {
   if !ok || session.AuthToken == "" || session.APIURL != endpoint || session.RecommendedPartSize == 0 { return fmt.Errorf("session was not persisted completely") }
   content, err := os.ReadFile(path)
   if err != nil { return err }
+  fileInfo, err := os.Stat(path)
+  if err != nil { return err }
+  if fileInfo.Mode().Perm() != 0o600 { return fmt.Errorf("session mode = %04o, want 0600", fileInfo.Mode().Perm()) }
+  parentInfo, err := os.Stat(filepath.Dir(path))
+  if err != nil { return err }
+  if parentInfo.Mode().Perm() != 0o700 { return fmt.Errorf("parent mode = %04o, want 0700", parentInfo.Mode().Perm()) }
   if strings.Contains(string(content), `"test-key"`) { return fmt.Errorf("application key secret persisted") }
   second, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.APIBase(endpoint), b2.Transport(wire), b2.WithAccountInfo(b2.NewAccountInfoFile(path)))
   if err != nil { return fmt.Errorf("resume: %w", err) }

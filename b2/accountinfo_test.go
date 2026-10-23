@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -87,6 +88,25 @@ func TestAccountInfoFileRoundTripAndPermissions(t *testing.T) {
 	}
 }
 
+func TestAccountInfoFileRejectsPublicParent(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "public")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(parent, "account.json")
+	store := NewAccountInfoFile(path)
+	store.Set(sampleAuthData())
+	if store.Err() == nil {
+		t.Fatal("Set accepted a parent directory readable by other users")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("session file was created despite unsafe parent: %v", err)
+	}
+}
+
 func TestAccountInfoConcurrency(t *testing.T) {
 	stores := []AccountInfo{&InMemoryAccountInfo{}, NewAccountInfoFile(filepath.Join(t.TempDir(), "private", "account.json"))}
 	for _, store := range stores {
@@ -105,6 +125,104 @@ func TestAccountInfoConcurrency(t *testing.T) {
 			wg.Wait()
 			if f, ok := store.(*AccountInfoFile); ok && f.Err() != nil {
 				t.Fatal(f.Err())
+			}
+		})
+	}
+}
+
+func TestAccountInfoFileAtomicReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "account.json")
+	first, second := NewAccountInfoFile(path), NewAccountInfoFile(path)
+	first.Set(AuthData{AccountID: "first", AuthToken: "first"})
+	if err := first.Err(); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errors := make(chan error, 3)
+	for _, item := range []struct {
+		store *AccountInfoFile
+		value string
+	}{{first, "first"}, {second, "second"}} {
+		wg.Add(1)
+		go func(store *AccountInfoFile, value string) {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				store.Set(AuthData{AccountID: value, AuthToken: value})
+				if err := store.Err(); err != nil {
+					errors <- err
+					return
+				}
+			}
+		}(item.store, item.value)
+	}
+	for i := 0; i < 200; i++ {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			errors <- err
+			break
+		}
+		var data AuthData
+		if err := json.Unmarshal(content, &data); err != nil {
+			errors <- fmt.Errorf("observed partial JSON: %w", err)
+			break
+		}
+		if data.AccountID != data.AuthToken || (data.AccountID != "first" && data.AccountID != "second") {
+			errors <- fmt.Errorf("observed mixed snapshot: %+v", data)
+			break
+		}
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		t.Error(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".account-info-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files left behind: %v", matches)
+	}
+}
+
+func TestNewClientFallsBackFromUnavailableSession(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content []byte
+		create  bool
+	}{
+		{name: "missing"},
+		{name: "empty", content: []byte{}, create: true},
+		{name: "malformed", content: []byte("{not-json"), create: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wire := newAccountInfoWire(t)
+			path := filepath.Join(t.TempDir(), "private", "account.json")
+			if test.create {
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, test.content, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store := NewAccountInfoFile(path)
+			client, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store))
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			if _, err := client.ListBuckets(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			wire.mu.Lock()
+			authCalls := wire.authCalls
+			wire.mu.Unlock()
+			if authCalls != 1 {
+				t.Fatalf("authorize calls=%d, want 1", authCalls)
+			}
+			data, ok := NewAccountInfoFile(path).AuthData()
+			if !ok || data.AuthToken != "token-1" {
+				t.Fatalf("replacement session=%+v ok=%t", data, ok)
 			}
 		})
 	}
@@ -138,8 +256,9 @@ func newAccountInfoWire(t *testing.T) *accountInfoWire {
 			w.listCalls++
 			force := w.force401
 			w.force401 = false
+			expected := fmt.Sprintf("token-%d", w.authCalls)
 			w.mu.Unlock()
-			if force {
+			if force || req.Header.Get("Authorization") != expected {
 				out.WriteHeader(http.StatusUnauthorized)
 				_, _ = out.Write([]byte(`{"status":401,"code":"expired_auth_token","message":"expired"}`))
 				return
@@ -185,6 +304,13 @@ func TestAccountInfoFileResumeAndClearOn401(t *testing.T) {
 	if !ok || data.RecommendedPartSize != 100_000_000 || data.AuthToken != "token-1" {
 		t.Fatalf("first auth = %+v, ok=%t", data, ok)
 	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "application-key-secret") {
+		t.Fatal("application key secret was written to the session file")
+	}
 	wire.onAuth = func(call int) {
 		if call == 2 {
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -203,9 +329,18 @@ func TestAccountInfoFileResumeAndClearOn401(t *testing.T) {
 	if wire.authCalls != 1 {
 		t.Fatalf("fresh client reauthorized: %d calls", wire.authCalls)
 	}
-	wire.force401 = true
 	wire.mu.Unlock()
-	if _, err := client.ListBuckets(ctx); err != nil {
+	data.AuthToken = "invalid-token"
+	corrupt := NewAccountInfoFile(path)
+	corrupt.Set(data)
+	if err := corrupt.Err(); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stale.ListBuckets(ctx); err != nil {
 		t.Fatal(err)
 	}
 	wire.mu.Lock()
@@ -217,6 +352,99 @@ func TestAccountInfoFileResumeAndClearOn401(t *testing.T) {
 	data, ok = NewAccountInfoFile(path).AuthData()
 	if !ok || data.AuthToken != "token-2" {
 		t.Fatalf("replacement session = %+v, ok=%t", data, ok)
+	}
+}
+
+type recordedRequest struct {
+	Method string
+	Path   string
+	Header http.Header
+	Body   string
+}
+
+type recordingTransport struct {
+	next     http.RoundTripper
+	mu       sync.Mutex
+	requests []recordedRequest
+}
+
+func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	body := ""
+	if req.Body != nil {
+		content, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		body = string(content)
+		req.Body = io.NopCloser(strings.NewReader(body))
+	}
+	header := req.Header.Clone()
+	header.Del("X-Blazer-Request-Id") // Process-global counter, not wire behavior controlled by AccountInfo.
+	r.mu.Lock()
+	r.requests = append(r.requests, recordedRequest{Method: req.Method, Path: req.URL.RequestURI(), Header: header, Body: body})
+	r.mu.Unlock()
+	return r.next.RoundTrip(req)
+}
+
+func TestDefaultAccountInfoWireMatchesExplicitInMemory(t *testing.T) {
+	var snapshots [][]recordedRequest
+	for _, explicit := range []bool{false, true} {
+		wire := newAccountInfoWire(t)
+		recorder := &recordingTransport{next: http.DefaultTransport}
+		opts := []ClientOption{APIBase(wire.server.URL), Transport(recorder)}
+		if explicit {
+			opts = append(opts, WithAccountInfo(&InMemoryAccountInfo{}))
+		}
+		client, err := NewClient(context.Background(), "key-id", "application-key-secret", opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.ListBuckets(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		snapshots = append(snapshots, recorder.requests)
+	}
+	for _, requests := range snapshots {
+		if len(requests) != 2 || !strings.HasSuffix(requests[0].Path, "/b2_authorize_account") || !strings.HasSuffix(requests[1].Path, "/b2_list_buckets") {
+			t.Fatalf("unexpected wire sequence: %+v", requests)
+		}
+	}
+	if !reflect.DeepEqual(snapshots[0], snapshots[1]) {
+		t.Fatalf("default and explicit in-memory wire requests differ:\ndefault=%+v\nexplicit=%+v", snapshots[0], snapshots[1])
+	}
+}
+
+func TestAccountInfoSharedClientConcurrency(t *testing.T) {
+	wire := newAccountInfoWire(t)
+	store := NewAccountInfoFile(filepath.Join(t.TempDir(), "private", "account.json"))
+	client, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errors := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 8; j++ {
+				if _, err := client.ListBuckets(context.Background()); err != nil {
+					errors <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		t.Error(err)
+	}
+	wire.mu.Lock()
+	authCalls, listCalls := wire.authCalls, wire.listCalls
+	wire.mu.Unlock()
+	if authCalls != 1 || listCalls != 128 {
+		t.Fatalf("auth=%d list=%d", authCalls, listCalls)
 	}
 }
 
