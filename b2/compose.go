@@ -48,6 +48,9 @@ func (p ComposePart) validate(nonFinal bool) error {
 		if p.sourceFileID != "" || p.size <= 0 {
 			return fmt.Errorf("b2: Compose uploaded part needs a positive size and no copy source")
 		}
+		if uint64(p.size) > uint64(^uint(0)>>1) {
+			return fmt.Errorf("b2: Compose uploaded part exceeds this platform's maximum buffer size")
+		}
 		if nonFinal && p.size < minPartSize {
 			return fmt.Errorf("b2: Compose nonfinal part must be at least %d bytes", minPartSize)
 		}
@@ -69,12 +72,12 @@ func (p ComposePart) validate(nonFinal bool) error {
 	if len(bounds) != 2 {
 		return fmt.Errorf("b2: Compose invalid copy range %q", p.byteRange)
 	}
-	start, startErr := strconv.ParseInt(bounds[0], 10, 64)
-	end, endErr := strconv.ParseInt(bounds[1], 10, 64)
-	if startErr != nil || endErr != nil || start < 0 || end < start {
+	start, startErr := strconv.ParseUint(bounds[0], 10, 63)
+	end, endErr := strconv.ParseUint(bounds[1], 10, 63)
+	if startErr != nil || endErr != nil || end < start {
 		return fmt.Errorf("b2: Compose invalid copy range %q", p.byteRange)
 	}
-	if nonFinal && end-start < minPartSize-1 {
+	if nonFinal && end-start < uint64(minPartSize-1) {
 		return fmt.Errorf("b2: Compose nonfinal part must be at least %d bytes", minPartSize)
 	}
 	return nil
