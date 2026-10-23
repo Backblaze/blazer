@@ -140,7 +140,24 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(file.Name(), a.path)
+	return renameReplace(file.Name(), a.path)
+}
+
+// renameReplace moves tmp onto dest, replacing any existing file. On Unix
+// os.Rename replaces atomically. On Windows MoveFile refuses an existing
+// destination (and a read-only one), so fall back to clearing the attribute,
+// removing dest, and renaming -- a small non-atomic window that at worst forces
+// a re-authorization, which is acceptable for a session cache.
+func renameReplace(tmp, dest string) error {
+	err := os.Rename(tmp, dest)
+	if err == nil || runtime.GOOS != "windows" {
+		return err
+	}
+	_ = os.Chmod(dest, 0o600)
+	if rmErr := os.Remove(dest); rmErr != nil && !os.IsNotExist(rmErr) {
+		return err
+	}
+	return os.Rename(tmp, dest)
 }
 
 // AuthData reads the latest persisted session.
