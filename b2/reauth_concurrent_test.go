@@ -17,6 +17,7 @@ type concurrentReauthTransport struct {
 	mu        sync.Mutex
 	lists     int
 	authCalls int
+	badTokens int
 	ready     chan struct{}
 }
 
@@ -25,12 +26,23 @@ func (q *concurrentReauthTransport) RoundTrip(req *http.Request) (*http.Response
 	if strings.HasSuffix(req.URL.Path, "b2_authorize_account") {
 		q.mu.Lock()
 		q.authCalls++
+		authCall := q.authCalls
 		q.mu.Unlock()
 		body = fmt.Sprintf(updateAuthJSON, "https://example.invalid")
+		if authCall > 1 {
+			body = strings.Replace(body, `"authorizationToken":"t"`, `"authorizationToken":"fresh"`, 1)
+		}
 	} else {
 		q.mu.Lock()
 		q.lists++
 		n := q.lists
+		wantToken := "t"
+		if n > 8 {
+			wantToken = "fresh"
+		}
+		if req.Header.Get("Authorization") != wantToken {
+			q.badTokens++
+		}
 		if n == 8 {
 			close(q.ready)
 		}
@@ -72,11 +84,15 @@ func TestConcurrent401Reauthorization(t *testing.T) {
 	rt.mu.Lock()
 	authCalls := rt.authCalls
 	lists := rt.lists
+	badTokens := rt.badTokens
 	rt.mu.Unlock()
 	if authCalls != 2 {
 		t.Errorf("authorization calls = %d, want initial + one refresh", authCalls)
 	}
 	if lists != 16 {
 		t.Errorf("list requests = %d, want eight initial + eight retries", lists)
+	}
+	if badTokens != 0 {
+		t.Errorf("%d list requests used the wrong authorization token", badTokens)
 	}
 }
