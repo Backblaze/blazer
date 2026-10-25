@@ -17,6 +17,7 @@ package b2
 import (
 	"context"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/Backblaze/blazer/internal/retry"
@@ -41,9 +42,30 @@ type beRootInterface interface {
 }
 
 type beRoot struct {
-	account, key string
-	b2i          b2RootInterface
-	options      clientOptions
+	account, key      string
+	b2i               b2RootInterface
+	options           clientOptions
+	refreshMu         sync.Mutex // serializes refreshes, never base.B2's request lock
+	refreshGeneration uint64
+}
+
+func (r *beRoot) authGeneration() uint64 {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	return r.refreshGeneration
+}
+
+func (r *beRoot) reauthorizeIfUnchanged(ctx context.Context, generation uint64) error {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	if r.refreshGeneration != generation {
+		return nil
+	}
+	if err := r.reauthorizeAccount(ctx); err != nil {
+		return err
+	}
+	r.refreshGeneration++
+	return nil
 }
 
 type beBucketInterface interface {
@@ -208,7 +230,12 @@ func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c cl
 }
 
 func (r *beRoot) reauthorizeAccount(ctx context.Context) error {
-	return r.authorizeAccount(ctx, r.account, r.key, r.options)
+	// The stored credentials/options are set once during NewClient. Refreshing
+	// only the underlying authorization avoids rewriting those fields while
+	// other operations are reading them.
+	return withBackoff(ctx, r, func() error {
+		return r.b2i.authorizeAccount(ctx, r.account, r.key, r.options)
+	})
 }
 
 func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (beBucketInterface, error) {
@@ -926,10 +953,25 @@ func retryAfterFor(ri beRootInterface) func(time.Duration) <-chan time.Time {
 }
 
 func withReauth(ctx context.Context, ri beRootInterface, f func() error) error {
+	// Existing fake backends need not implement refresh coordination.
+	coordinated, ok := ri.(interface {
+		authGeneration() uint64
+		reauthorizeIfUnchanged(context.Context, uint64) error
+	})
+	var generation uint64
+	if ok {
+		generation = coordinated.authGeneration()
+	}
 	err := f()
 	if ri.reauth(err) {
-		if err := ri.reauthorizeAccount(ctx); err != nil {
-			return err
+		var refreshErr error
+		if ok {
+			refreshErr = coordinated.reauthorizeIfUnchanged(ctx, generation)
+		} else {
+			refreshErr = ri.reauthorizeAccount(ctx)
+		}
+		if refreshErr != nil {
+			return refreshErr
 		}
 		err = f()
 	}
