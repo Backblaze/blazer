@@ -19,6 +19,7 @@ package base
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -42,7 +43,7 @@ import (
 
 const (
 	APIBase          = "https://api.backblazeb2.com"
-	DefaultUserAgent = "blazer/0.8.0"
+	DefaultUserAgent = "blazer/0.9.0"
 )
 
 type b2err struct {
@@ -356,15 +357,17 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		if method != "b2_upload_file" && method != "b2_upload_part" {
 			method = ""
 		}
-		// The following code will work regardless of whether err is an x509.UnknownAuthorityError
-		// (Go 1.19 and earlier) or a tls.CertificateVerificationError that wraps an
-		// x509.UnknownAuthorityError (Go 1.20 and later).
-		// See https://go.dev/doc/go1.20#cryptotlspkgcryptotls
-		switch err.(type) {
-		case x509.UnknownAuthorityError:
-			return nil, err
-		}
-		if errors.As(err, &x509.UnknownAuthorityError{}) {
+		// Certificate verification failures are permanent, including distrust of
+		// compromised CAs. Preserve the original error instead of retrying or
+		// requesting a new upload URL.
+		var verificationErr *tls.CertificateVerificationError
+		var unknownAuthorityErr x509.UnknownAuthorityError
+		var invalidCertErr x509.CertificateInvalidError
+		var hostnameErr x509.HostnameError
+		if errors.As(err, &verificationErr) ||
+			errors.As(err, &unknownAuthorityErr) ||
+			errors.As(err, &invalidCertErr) ||
+			errors.As(err, &hostnameErr) {
 			return nil, err
 		}
 
