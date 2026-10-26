@@ -2,6 +2,7 @@
 # PreToolUse approval gate template. Reads the tool call as JSON on stdin and prints a decision.
 # Per environment: dev allow, staging ask, production allow only with an approved change ticket.
 # Edit the case arms. The gate must read approvals the agent has no way to write to.
+set -o pipefail  # a failed approval lookup must take the deny path even if jq matched its output
 input=$(cat)
 tool=$(jq -r '.tool_name // empty' <<<"$input")
 version=$(jq -r '.tool_input.version // empty' <<<"$input")

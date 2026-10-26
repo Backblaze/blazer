@@ -37,12 +37,14 @@ pass an explicit version to `changie batch` to override it.
 4. Check the diff touches exactly the three files above plus `.changes/`. Edit `.changes/vX.Y.Z.md` for
    readability if needed and run `merge` again. Run `make ci`.
 5. Commit as `Version X.Y.Z` and open a PR with the changelog section as its body. A code owner approves.
-6. After it merges (`main` requires linear history, so squash or rebase), tag that commit on `main`
-   with an annotated tag and push it:
+6. After it merges (`main` requires linear history, so squash or rebase), tag the release PR's merge
+   commit, not the tip of `main`, which may already include later PRs:
 
    ```bash
    git switch main && git pull --ff-only
-   git tag -a vX.Y.Z -m "vX.Y.Z"
+   sha=$(gh pr view <release-pr-number> --json mergeCommit --jq .mergeCommit.oid)
+   git log -1 --oneline "$sha"   # must be the "Version X.Y.Z" commit
+   git tag -a vX.Y.Z "$sha" -m "vX.Y.Z"
    git push origin vX.Y.Z
    ```
 

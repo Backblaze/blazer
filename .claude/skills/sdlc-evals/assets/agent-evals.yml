@@ -1,7 +1,7 @@
 name: Agent evals
 on:
   pull_request:
-    paths: ['CLAUDE.md', '.claude/**', 'evals/**']
+    paths: ['CLAUDE.md', 'AGENTS.md', 'REVIEW.md', '.claude/**', 'evals/**']
   schedule:
     - cron: '0 2 * * *'
 jobs:
@@ -23,7 +23,7 @@ jobs:
           for eval in /tmp/evals/*.json; do
             git worktree add -q --detach /tmp/run "$(jq -r '.from' "$eval")"
             rm -rf /tmp/run/evals /tmp/run/.claude      # keep the checks out of the run's checkout
-            cp -r CLAUDE.md .claude /tmp/run/           # the configuration under test
+            cp -r CLAUDE.md AGENTS.md REVIEW.md .claude /tmp/run/   # the configuration under test, incl. CLAUDE.md imports
             git -C /tmp/run add -A && git -C /tmp/run commit -q --allow-empty -m "configuration under test"
             ( cd /tmp/run
               claude -p "$(jq -r '.prompt' "$eval")" \
