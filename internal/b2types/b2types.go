@@ -15,6 +15,8 @@
 // Package b2types implements internal types common to the B2 API.
 package b2types
 
+import "encoding/json"
+
 // You know what would be amazing?  If I could autogen this from like a JSON
 // file.  Wouldn't that be amazing?  That would be amazing.
 
@@ -91,9 +93,10 @@ type CreateBucketRequest struct {
 	Info           map[string]string `json:"bucketInfo"`
 	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
 
-	CORSRules                   []CORSRule            `json:"corsRules,omitempty"`
-	FileLockEnabled             bool                  `json:"fileLockEnabled,omitempty"`
-	DefaultServerSideEncryption *ServerSideEncryption `json:"defaultServerSideEncryption,omitempty"`
+	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
+	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
+	ReplicationConfiguration    *ReplicationConfiguration `json:"replicationConfiguration,omitempty"`
 }
 
 type CreateBucketResponse struct {
@@ -160,6 +163,107 @@ type UpdateBucketRequest struct {
 }
 
 type UpdateBucketResponse CreateBucketResponse
+
+// GetBucketNotificationRulesRequest is the request for
+// b2_get_bucket_notification_rules.
+type GetBucketNotificationRulesRequest struct {
+	BucketID string `json:"bucketId"`
+}
+
+// GetBucketNotificationRulesResponse is the response from
+// b2_get_bucket_notification_rules.
+type GetBucketNotificationRulesResponse struct {
+	BucketID               string                  `json:"bucketId"`
+	EventNotificationRules []EventNotificationRule `json:"eventNotificationRules"`
+}
+
+// SetBucketNotificationRulesRequest replaces a bucket's complete notification
+// rule set.
+type SetBucketNotificationRulesRequest struct {
+	BucketID               string                  `json:"bucketId"`
+	EventNotificationRules []EventNotificationRule `json:"eventNotificationRules"`
+}
+
+// SetBucketNotificationRulesResponse is the response from
+// b2_set_bucket_notification_rules.
+type SetBucketNotificationRulesResponse GetBucketNotificationRulesResponse
+
+// EventNotificationRule is one bucket event-notification rule.
+type EventNotificationRule struct {
+	EventTypes          []string                             `json:"eventTypes"`
+	IsEnabled           bool                                 `json:"isEnabled"`
+	IsSuspended         bool                                 `json:"isSuspended,omitempty"`
+	Name                string                               `json:"name"`
+	ObjectNamePrefix    string                               `json:"objectNamePrefix"`
+	SuspensionReason    string                               `json:"suspensionReason,omitempty"`
+	TargetConfiguration EventNotificationTargetConfiguration `json:"targetConfiguration"`
+}
+
+// NotificationCustomHeader is an HTTP header B2 includes in a webhook call.
+type NotificationCustomHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// WebhookNotificationTarget is the configuration for a webhook notification
+// target.
+type WebhookNotificationTarget struct {
+	URL                     string                     `json:"url"`
+	CustomHeaders           []NotificationCustomHeader `json:"customHeaders,omitempty"`
+	HMACSHA256SigningSecret string                     `json:"hmacSha256SigningSecret,omitempty"`
+	MaxEventsPerBatch       int                        `json:"maxEventsPerBatch,omitempty"`
+}
+
+// EventNotificationTargetConfiguration is a tagged union. B2 currently
+// supports the webhook target type, whose fields are flattened into the
+// targetConfiguration object on the wire.
+type EventNotificationTargetConfiguration struct {
+	TargetType string                     `json:"targetType"`
+	Webhook    *WebhookNotificationTarget `json:"-"`
+}
+
+func (c EventNotificationTargetConfiguration) MarshalJSON() ([]byte, error) {
+	type targetConfiguration struct {
+		TargetType              string                     `json:"targetType"`
+		URL                     string                     `json:"url,omitempty"`
+		CustomHeaders           []NotificationCustomHeader `json:"customHeaders,omitempty"`
+		HMACSHA256SigningSecret string                     `json:"hmacSha256SigningSecret,omitempty"`
+		MaxEventsPerBatch       int                        `json:"maxEventsPerBatch,omitempty"`
+	}
+	encoded := targetConfiguration{TargetType: c.TargetType}
+	if c.Webhook != nil {
+		encoded.URL = c.Webhook.URL
+		encoded.CustomHeaders = c.Webhook.CustomHeaders
+		encoded.HMACSHA256SigningSecret = c.Webhook.HMACSHA256SigningSecret
+		encoded.MaxEventsPerBatch = c.Webhook.MaxEventsPerBatch
+	}
+	return json.Marshal(encoded)
+}
+
+func (c *EventNotificationTargetConfiguration) UnmarshalJSON(data []byte) error {
+	type targetConfiguration struct {
+		TargetType              string                     `json:"targetType"`
+		URL                     string                     `json:"url"`
+		CustomHeaders           []NotificationCustomHeader `json:"customHeaders"`
+		HMACSHA256SigningSecret string                     `json:"hmacSha256SigningSecret"`
+		MaxEventsPerBatch       int                        `json:"maxEventsPerBatch"`
+	}
+	var decoded targetConfiguration
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	c.TargetType = decoded.TargetType
+	c.Webhook = nil
+	if decoded.TargetType == "webhook" {
+		c.Webhook = &WebhookNotificationTarget{
+			URL:                     decoded.URL,
+			CustomHeaders:           decoded.CustomHeaders,
+			HMACSHA256SigningSecret: decoded.HMACSHA256SigningSecret,
+			MaxEventsPerBatch:       decoded.MaxEventsPerBatch,
+		}
+	}
+	return nil
+}
 
 type GetUploadURLRequest struct {
 	BucketID string `json:"bucketId"`

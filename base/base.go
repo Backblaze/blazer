@@ -23,14 +23,17 @@ package base
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -44,7 +47,7 @@ import (
 
 const (
 	APIBase          = "https://api.backblazeb2.com"
-	DefaultUserAgent = "blazer/0.8.0"
+	DefaultUserAgent = "blazer/0.9.0"
 )
 
 type b2err struct {
@@ -358,15 +361,17 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		if method != "b2_upload_file" && method != "b2_upload_part" {
 			method = ""
 		}
-		// The following code will work regardless of whether err is an x509.UnknownAuthorityError
-		// (Go 1.19 and earlier) or a tls.CertificateVerificationError that wraps an
-		// x509.UnknownAuthorityError (Go 1.20 and later).
-		// See https://go.dev/doc/go1.20#cryptotlspkgcryptotls
-		switch err.(type) {
-		case x509.UnknownAuthorityError:
-			return nil, err
-		}
-		if errors.As(err, &x509.UnknownAuthorityError{}) {
+		// Certificate verification failures are permanent, including distrust of
+		// compromised CAs. Preserve the original error instead of retrying or
+		// requesting a new upload URL.
+		var verificationErr *tls.CertificateVerificationError
+		var unknownAuthorityErr x509.UnknownAuthorityError
+		var invalidCertErr x509.CertificateInvalidError
+		var hostnameErr x509.HostnameError
+		if errors.As(err, &verificationErr) ||
+			errors.As(err, &unknownAuthorityErr) ||
+			errors.As(err, &invalidCertErr) ||
+			errors.As(err, &hostnameErr) {
 			return nil, err
 		}
 
@@ -624,7 +629,7 @@ func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2
 
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
-func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool) (*Bucket, error) {
+func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool, replicationConfiguration *b2types.ReplicationConfiguration) (*Bucket, error) {
 	if btype != "allPublic" {
 		btype = "allPrivate"
 	}
@@ -646,6 +651,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(sse),
 		CORSRules:                   corsRules,
 		FileLockEnabled:             fileLockEnabled,
+		ReplicationConfiguration:    replicationConfiguration,
 	}
 	b2resp := &b2types.CreateBucketResponse{}
 	headers := map[string]string{
@@ -676,6 +682,10 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	bucket.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
+	if cfg := b2resp.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
+		(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
+		bucket.ReplicationConfiguration = cfg.Value
+	}
 	return bucket, nil
 }
 
@@ -786,6 +796,37 @@ func (b *Bucket) BaseURL() string {
 // S3URL returns the base URL for S3-compatible API calls.
 func (b *Bucket) S3URL() string {
 	return b.b2.s3URI
+}
+
+// NotificationRules wraps b2_get_bucket_notification_rules.
+func (b *Bucket) NotificationRules(ctx context.Context) ([]b2types.EventNotificationRule, error) {
+	query := url.Values{"bucketId": []string{b.ID}}
+	b2resp := &b2types.GetBucketNotificationRulesResponse{}
+	headers := map[string]string{
+		"Authorization": b.b2.authToken,
+	}
+	endpoint := b.b2.apiURI + b2types.V4api + "b2_get_bucket_notification_rules?" + query.Encode()
+	if err := b.b2.opts.makeRequest(ctx, "b2_get_bucket_notification_rules", "GET", endpoint, nil, b2resp, headers, nil); err != nil {
+		return nil, err
+	}
+	return b2resp.EventNotificationRules, nil
+}
+
+// SetNotificationRules replaces a bucket's complete notification rule set.
+func (b *Bucket) SetNotificationRules(ctx context.Context, rules []b2types.EventNotificationRule) error {
+	// A non-nil empty array clears rules. B2 does not treat null as an empty
+	// rule set, so allocate even when the caller supplied an empty slice.
+	b2rules := make([]b2types.EventNotificationRule, len(rules))
+	copy(b2rules, rules)
+	b2req := &b2types.SetBucketNotificationRulesRequest{
+		BucketID:               b.ID,
+		EventNotificationRules: b2rules,
+	}
+	b2resp := &b2types.SetBucketNotificationRulesResponse{}
+	headers := map[string]string{
+		"Authorization": b.b2.authToken,
+	}
+	return b.b2.opts.makeRequest(ctx, "b2_set_bucket_notification_rules", "POST", b.b2.apiURI+b2types.V4api+"b2_set_bucket_notification_rules", b2req, b2resp, headers, nil)
 }
 
 // ListBuckets wraps b2_list_buckets.  If name is non-empty, only that bucket
@@ -1482,6 +1523,43 @@ type FileInfo struct {
 	Timestamp   time.Time
 	Retention   *FileRetention
 	LegalHold   string
+}
+
+// GetFileInfoByName returns metadata for the current visible file with name.
+// A one-result b2_list_file_names request avoids downloading the file and
+// returns no result for a hidden file or a name that only shares a prefix.
+func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*FileInfo, error) {
+	if name == "" {
+		return nil, fmt.Errorf("file %q: %w", name, fs.ErrNotExist)
+	}
+	request := &b2types.ListFileNamesRequest{
+		BucketID:     b.ID,
+		Count:        1,
+		Continuation: name,
+		Prefix:       name,
+	}
+	response := &b2types.ListFileNamesResponse{}
+	headers := map[string]string{"Authorization": b.b2.authToken}
+	if err := b.b2.opts.makeRequest(ctx, "b2_list_file_names", "POST", b.b2.apiURI+b2types.V4api+"b2_list_file_names", request, response, headers, nil); err != nil {
+		return nil, err
+	}
+	if len(response.Files) == 0 || response.Files[0].Name != name {
+		return nil, fmt.Errorf("file %q: %w", name, fs.ErrNotExist)
+	}
+	f := response.Files[0]
+	retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+	return &FileInfo{
+		Name:        f.Name,
+		SHA1:        f.SHA1,
+		MD5:         f.MD5,
+		Size:        f.Size,
+		ContentType: f.ContentType,
+		Info:        f.Info,
+		Status:      f.Action,
+		Timestamp:   millitime(f.Timestamp),
+		Retention:   retention,
+		LegalHold:   legalHold,
+	}, nil
 }
 
 func fileLockFromResponse(retention b2types.FileRetentionResponse, legalHold b2types.LegalHoldResponse) (*FileRetention, string) {

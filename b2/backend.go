@@ -33,7 +33,7 @@ type beRootInterface interface {
 	reupload(error) bool
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	reauthorizeAccount(context.Context) error
-	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (beBucketInterface, error)
+	createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (beBucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]beBucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (beKeyInterface, error)
 	createKeyMultiBucket(context.Context, string, []string, time.Duration, []string, string) (beKeyInterface, error)
@@ -53,9 +53,12 @@ type beBucketInterface interface {
 	id() string
 	updateBucket(context.Context, *BucketAttrs) error
 	deleteBucket(context.Context) error
+	notificationRules(context.Context) ([]NotificationRule, error)
+	setNotificationRules(context.Context, []NotificationRule) error
 	getUploadURL(context.Context) (beURLInterface, error)
 	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold) (beLargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]beFileInterface, string, error)
+	getFileInfoByName(context.Context, string) (beFileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]beFileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool) (beFileReaderInterface, error)
@@ -208,11 +211,11 @@ func (r *beRoot) reauthorizeAccount(ctx context.Context) error {
 	return r.authorizeAccount(ctx, r.account, r.key, r.options)
 }
 
-func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (beBucketInterface, error) {
+func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (beBucketInterface, error) {
 	var bi beBucketInterface
 	f := func() error {
 		g := func() error {
-			bucket, err := r.b2i.createBucket(ctx, name, btype, info, rules, sse, corsRules, fileLockEnabled)
+			bucket, err := r.b2i.createBucket(ctx, name, btype, info, rules, sse, corsRules, fileLockEnabled, replicationConfig)
 			if err != nil {
 				return err
 			}
@@ -349,6 +352,32 @@ func (b *beBucket) deleteBucket(ctx context.Context) error {
 	return withBackoff(ctx, b.ri, f)
 }
 
+func (b *beBucket) notificationRules(ctx context.Context) ([]NotificationRule, error) {
+	var rules []NotificationRule
+	f := func() error {
+		g := func() error {
+			var err error
+			rules, err = b.b2bucket.notificationRules(ctx)
+			return err
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func (b *beBucket) setNotificationRules(ctx context.Context, rules []NotificationRule) error {
+	f := func() error {
+		g := func() error {
+			return b.b2bucket.setNotificationRules(ctx, rules)
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	return withBackoff(ctx, b.ri, f)
+}
+
 func (b *beBucket) getUploadURL(ctx context.Context) (beURLInterface, error) {
 	var url beURLInterface
 	f := func() error {
@@ -417,6 +446,30 @@ func (b *beBucket) listFileNames(ctx context.Context, count int, continuation, p
 		return nil, "", err
 	}
 	return files, cont, nil
+}
+
+func (b *beBucket) getFileInfoByName(ctx context.Context, name string) (beFileInfoInterface, error) {
+	var result beFileInfoInterface
+	err := withBackoff(ctx, b.ri, func() error {
+		return withReauth(ctx, b.ri, func() error {
+			info, err := b.b2bucket.getFileInfoByName(ctx, name)
+			if err != nil {
+				return err
+			}
+			fileName, sha, size, contentType, metadata, status, timestamp := info.stats()
+			retention, legalHold := info.fileLock()
+			result = &beFileInfo{
+				name: fileName, sha: sha, size: size, ct: contentType,
+				info: metadata, status: status, stamp: timestamp,
+				retention: retention, legalHold: legalHold,
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (b *beBucket) listFileVersions(ctx context.Context, count int, nextName, nextID, prefix, delimiter string) ([]beFileInterface, string, string, error) {
