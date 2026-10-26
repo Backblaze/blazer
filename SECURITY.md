@@ -1,7 +1,7 @@
 # Security Policy
 
-Security-response owner: Backblaze Security. Repository security-review owners:
-Gonza (`@goanpeca`) and Sophie / Quality Keeper (QK) (`@sophiecarreras`).
+Security-response owner: Backblaze Security. Repository security-review owners: @goanpeca and
+@sophiecarreras.
 
 ## Supported Versions
 

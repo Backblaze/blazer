@@ -42,7 +42,8 @@ not exercised the wire.
   [Integration Checklist](https://www.backblaze.com/docs/cloud-storage-integration-checklist); match the
   behavior of `b2-sdk-python` and the `b2` CLI unless the PR says why not.
 - Functional options (`WriterOption`, `KeyOption`, ...) for new knobs; never a new positional parameter on
-  a public `b2` function. Conflicting options return an error, never "last one wins".
+  a public `b2` function. Options that conflict within one call (for example SSE-B2 and SSE-C on the same
+  writer) return an error, never "last one wins". A per-call option may still override a client default.
 - Comments are short and explain non-obvious decisions. Godoc on every exported identifier, including what
   is not supported.
 

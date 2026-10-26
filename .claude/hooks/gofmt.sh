@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # PostToolUse: reject an edit that leaves a Go file unformatted; exit 2 hands the message back to Claude.
 set -euo pipefail
+command -v jq > /dev/null || { echo "gofmt hook: jq not found, skipping the format check (make fmt-check still runs it)." >&2; exit 0; }
 file=$(jq -r '.tool_input.file_path // empty')
 case "$file" in
   *.go) ;;
