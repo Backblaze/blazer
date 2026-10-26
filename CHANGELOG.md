@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Repeated `(*b2.Object).Attrs` calls preserve cached file metadata, including `LastModified`, without mutating the cache. Each returned `Attrs.Info` is independent; `large_file_sha1` remains in the public map, while `src_last_modified_millis` remains excluded.
 - Progress status no longer waits on stalled transfer reads; cancellation closes a blocked download body before waiting for its copy. Reader shutdown now waits for initialization, zero-length ranges can be verified, and resumed uploads tolerate non-seekable inputs while clamping known totals to zero.
 - Exact-boundary ranged reads now mark a chunk whose size equals the remaining requested length as final. The shared remaining-length accounting is kept under the reader mutex.
 
