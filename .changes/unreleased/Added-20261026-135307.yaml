@@ -1,0 +1,3 @@
+kind: Added
+body: Per-request SSE-C keys for uploads, downloads, metadata lookup, and server-side copies. Large-file uploads send the key on the start request and every part; keys cannot be configured as client writer defaults. Keyed resume refuses an unfinished upload when its encryption mode or key digest cannot be verified.
+time: 2026-10-26T13:53:07.937354-05:00
