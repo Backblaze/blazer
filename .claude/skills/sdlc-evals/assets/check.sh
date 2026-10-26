@@ -12,7 +12,8 @@ export EVALS=$(cd "$(dirname "$eval_file")" && pwd)   # checks may call helpers 
 
 # Files changed outside the folders/files the eval allows (Git-ignored files don't show up).
 strays() {
-  git status --porcelain --untracked-files=all | cut -c4- | while read -r path; do
+  git status --porcelain=v1 -z --untracked-files=all --no-renames | while IFS= read -r -d '' entry; do
+    path=${entry:3}
     jq -e --arg p "$path" \
       'any(.may_change[]; . as $ok | $p == $ok or ($p | startswith($ok + "/")))' \
       "$eval_file" >/dev/null || echo "       $path"

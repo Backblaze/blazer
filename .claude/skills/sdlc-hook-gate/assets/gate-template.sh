@@ -3,6 +3,7 @@
 # Per environment: dev allow, staging ask, production allow only with an approved change ticket.
 # Edit the case arms. The gate must read approvals the agent has no way to write to.
 set -o pipefail  # a failed approval lookup must take the deny path even if jq matched its output
+command -v jq > /dev/null || { echo "gate: jq not found; denying" >&2; exit 2; }  # exit 2 blocks the call
 input=$(cat)
 tool=$(jq -r '.tool_name // empty' <<<"$input")
 version=$(jq -r '.tool_input.version // empty' <<<"$input")

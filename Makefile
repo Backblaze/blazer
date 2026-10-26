@@ -46,6 +46,7 @@ crosscompile:
 # When the branch changes non-test Go code or go.mod, it must add a .changes/unreleased entry
 # (or a release's .changes/vX.Y.Z.md). Existing entries must parse.
 changelog-check:
+	@git rev-parse --verify --quiet $(BASE_REF) > /dev/null || { echo "BASE_REF $(BASE_REF) not found; run 'git fetch origin' or pass BASE_REF=<ref>."; exit 1; }
 	@if git diff --name-only $(BASE_REF)...HEAD -- '*.go' go.mod '**/go.mod' ':!*_test.go' ':!.sdkharness/**' | grep -q .; then \
 		git diff --name-only --diff-filter=A $(BASE_REF)...HEAD -- '.changes/unreleased/*.yaml' '.changes/v*.md' | grep -q . \
 		|| { echo "No changelog entry: run 'make changelog-new' (or label the PR skip-changelog)."; exit 1; }; \

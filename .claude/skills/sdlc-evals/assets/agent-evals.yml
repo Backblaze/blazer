@@ -4,13 +4,17 @@ on:
     paths: ['CLAUDE.md', 'AGENTS.md', 'REVIEW.md', '.claude/**', 'evals/**']
   schedule:
     - cron: '0 2 * * *'
+permissions:
+  contents: read
 jobs:
   evals:
     if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0   # each eval starts from an older commit
       - run: npm install -g @anthropic-ai/claude-code
       # The agent, its hooks and every check run as an unprivileged user; the grader and eval

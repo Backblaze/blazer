@@ -17,6 +17,9 @@ def count_above(readings, line, last):
 
 
 def tier(readings):
+    if not isinstance(readings, list) or not all(
+            isinstance(r, (int, float)) and not isinstance(r, bool) for r in readings):
+        raise ValueError("expected a JSON list of numbers")
     baseline = readings[:-1]
     if len(baseline) < MIN_BASELINE:
         raise ValueError(f"need at least {MIN_BASELINE} readings before the newest one")
