@@ -341,6 +341,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	previousFileLock := b.b.FileLockEnabled
 	b.b.FileLockEnabled = attrs.FileLockEnabled && !previousFileLock
 
+	previousReplication := b.b.ReplicationConfiguration
 	if attrs.ReplicationConfig != nil {
 		cfg := &b2types.ReplicationConfiguration{}
 		source := attrs.ReplicationConfig.AsReplicationSource
@@ -378,6 +379,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.FileLockEnabled = previousFileLock
 		b.b.Info = previousInfo
 		b.b.LifecycleRules = previousRules
+		b.b.ReplicationConfiguration = previousReplication
 	}
 	code, _ := base.Code(err)
 	if code == 409 {

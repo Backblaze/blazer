@@ -7,6 +7,10 @@ func FuzzReplicationMerge(f *testing.F) {
 	f.Add("", "", int64(2147483647))
 	f.Fuzz(func(t *testing.T, source, destination string, priority int64) {
 		priority &= 0x7fffffff
+		// The conversion below is safe on 32-bit targets as well as 64-bit ones.
+		if priority > int64(int(^uint(0)>>1)) {
+			t.Skip("priority exceeds this architecture's int range")
+		}
 		cfg := &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{"existing": "preserved"}}}
 		cfg.AsReplicationSource.ReplicationRules = []ReplicationRules{{Priority: int(priority), ReplicationRuleName: "existing"}}
 		merged := mergeReplicationDestination(cfg, source, destination)

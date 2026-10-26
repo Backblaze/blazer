@@ -28,10 +28,14 @@ const (
 
 type replicationOptions struct {
 	name            string
+	nameSet         bool
 	priority        int
 	prioritySet     bool
 	prefix          string
+	prefixSet       bool
 	includeExisting bool
+	includeSet      bool
+	err             error
 }
 
 // ReplicationOption configures SetupReplication.
@@ -39,22 +43,42 @@ type ReplicationOption func(*replicationOptions)
 
 // WithRuleName names the new replication rule.
 func WithRuleName(name string) ReplicationOption {
-	return func(o *replicationOptions) { o.name = name }
+	return func(o *replicationOptions) {
+		if o.nameSet && o.name != name {
+			o.err = fmt.Errorf("setup replication: conflicting rule names")
+		}
+		o.name, o.nameSet = name, true
+	}
 }
 
 // WithRulePriority sets the new rule's priority.
 func WithRulePriority(priority int) ReplicationOption {
-	return func(o *replicationOptions) { o.priority, o.prioritySet = priority, true }
+	return func(o *replicationOptions) {
+		if o.prioritySet && o.priority != priority {
+			o.err = fmt.Errorf("setup replication: conflicting priorities")
+		}
+		o.priority, o.prioritySet = priority, true
+	}
 }
 
 // WithFileNamePrefix limits the rule to files whose names begin with prefix.
 func WithFileNamePrefix(prefix string) ReplicationOption {
-	return func(o *replicationOptions) { o.prefix = prefix }
+	return func(o *replicationOptions) {
+		if o.prefixSet && o.prefix != prefix {
+			o.err = fmt.Errorf("setup replication: conflicting file name prefixes")
+		}
+		o.prefix, o.prefixSet = prefix, true
+	}
 }
 
 // WithIncludeExistingFiles includes files already in the source bucket.
 func WithIncludeExistingFiles(include bool) ReplicationOption {
-	return func(o *replicationOptions) { o.includeExisting = include }
+	return func(o *replicationOptions) {
+		if o.includeSet && o.includeExisting != include {
+			o.err = fmt.Errorf("setup replication: conflicting include-existing settings")
+		}
+		o.includeExisting, o.includeSet = include, true
+	}
 }
 
 // ReplicationRuleStatus describes one configured rule and its enabled state.
@@ -69,6 +93,9 @@ func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatu
 	attrs, err := src.Attrs(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if attrs.replicationConfigUnreadable {
+		return nil, fmt.Errorf("replication status: cannot read existing replication config")
 	}
 	if attrs.ReplicationConfig == nil {
 		return nil, nil
@@ -90,9 +117,18 @@ func SetupReplication(ctx context.Context, src, dst *Bucket, sourceKeyID, destin
 	if src.ID() == dst.ID() {
 		return fmt.Errorf("setup replication: source and destination must differ")
 	}
+	if sourceKeyID == "" || destinationKeyID == "" {
+		return fmt.Errorf("setup replication: source and destination application key IDs are required")
+	}
 	settings := replicationOptions{}
 	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("setup replication: nil option")
+		}
 		opt(&settings)
+	}
+	if settings.err != nil {
+		return settings.err
 	}
 	if settings.prioritySet && (settings.priority < 1 || settings.priority > maxReplicationPriority) {
 		return fmt.Errorf("setup replication: priority must be between 1 and %d", maxReplicationPriority)
@@ -155,7 +191,10 @@ func SetupReplication(ctx context.Context, src, dst *Bucket, sourceKeyID, destin
 	if err := dst.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationDestination(dstAttrs.ReplicationConfig, sourceKeyID, destinationKeyID)}); err != nil {
 		return err
 	}
-	return src.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationSource(srcAttrs.ReplicationConfig, sourceKeyID, rule)})
+	if err := src.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationSource(srcAttrs.ReplicationConfig, sourceKeyID, rule)}); err != nil {
+		return fmt.Errorf("setup replication: source update failed after destination mapping was stored; retry with the same key IDs to complete setup: %w", err)
+	}
+	return nil
 }
 
 func defaultReplicationRuleName(destinationID, prefix string) string {

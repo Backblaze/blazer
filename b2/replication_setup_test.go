@@ -320,8 +320,8 @@ func TestSetupReplicationCompletesAfterSourceUpdateError(t *testing.T) {
 	root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
 	srcBackend.updateErr = errors.New("source update failed")
 	options := []ReplicationOption{WithRuleName("rule")}
-	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", options...); err == nil {
-		t.Fatal("SetupReplication() = nil, want source update error")
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", options...); err == nil || !strings.Contains(err.Error(), "destination mapping") {
+		t.Fatalf("SetupReplication() = %v, want a source-update error that explains the saved destination mapping", err)
 	}
 	if len(dstBackend.updates) != 1 || dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["source-key"] != "destination-key" || len(srcBackend.updates) != 0 {
 		t.Fatalf("partial setup = destination %+v, source %+v", dstBackend.config, srcBackend.config)
@@ -356,5 +356,109 @@ func TestSetupReplicationExplicitPriority(t *testing.T) {
 	rules := srcBackend.config.AsReplicationSource.ReplicationRules
 	if root.keyCalls != 0 || len(rules) != 1 || rules[0].Priority != 77 || srcBackend.config.AsReplicationSource.SourceApplicationKeyID != "source-key" || dstBackend.config.AsReplicationDestination.SourceToDestinationKeyMapping["source-key"] != "destination-key" {
 		t.Fatalf("explicit priority setup: key calls=%d source=%+v destination=%+v", root.keyCalls, srcBackend.config, dstBackend.config)
+	}
+}
+
+func TestSetupReplicationDefaultRuleNameIsStable(t *testing.T) {
+	_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rules := srcBackend.config.AsReplicationSource.ReplicationRules
+	if len(rules) != 1 || rules[0].ReplicationRuleName == "" || len(srcBackend.updates) != 1 || len(dstBackend.updates) != 1 {
+		t.Fatalf("generated rule name or repeat changed setup: rules=%+v source updates=%d destination updates=%d", rules, len(srcBackend.updates), len(dstBackend.updates))
+	}
+}
+
+func TestSetupReplicationRejectsInvalidInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*Bucket, *Bucket) error
+	}{
+		{"nil source", func(_, dst *Bucket) error {
+			return SetupReplication(context.Background(), nil, dst, "source-key", "destination-key")
+		}},
+		{"nil destination", func(src, _ *Bucket) error {
+			return SetupReplication(context.Background(), src, nil, "source-key", "destination-key")
+		}},
+		{"same bucket", func(src, _ *Bucket) error {
+			return SetupReplication(context.Background(), src, src, "source-key", "destination-key")
+		}},
+		{"nil option", func(src, dst *Bucket) error {
+			return SetupReplication(context.Background(), src, dst, "source-key", "destination-key", nil)
+		}},
+		{"zero priority", func(src, dst *Bucket) error {
+			return SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRulePriority(0))
+		}},
+		{"negative priority", func(src, dst *Bucket) error {
+			return SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRulePriority(-1))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+			if err := tc.run(src, dst); err == nil {
+				t.Fatal("SetupReplication() succeeded, want an input error")
+			}
+			if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+				t.Fatal("invalid input caused a bucket update")
+			}
+		})
+	}
+}
+
+func TestSetupReplicationDestinationUpdateFailureDoesNotWriteSource(t *testing.T) {
+	_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+	dstBackend.updateErr = errors.New("destination update failed")
+	err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key")
+	if err == nil || !strings.Contains(err.Error(), "destination update failed") {
+		t.Fatalf("SetupReplication() = %v, want destination update failure", err)
+	}
+	if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+		t.Fatal("destination update failure changed either configuration")
+	}
+}
+
+func TestSetupReplicationRejectsConflictingOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []ReplicationOption
+	}{
+		{"rule name", []ReplicationOption{WithRuleName("first"), WithRuleName("second")}},
+		{"priority", []ReplicationOption{WithRulePriority(10), WithRulePriority(11)}},
+		{"prefix", []ReplicationOption{WithFileNamePrefix("one/"), WithFileNamePrefix("two/")}},
+		{"include existing", []ReplicationOption{WithIncludeExistingFiles(true), WithIncludeExistingFiles(false)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+			err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", tc.opts...)
+			if err == nil || !strings.Contains(err.Error(), "conflicting") {
+				t.Fatalf("SetupReplication() = %v, want conflicting-option error", err)
+			}
+			if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+				t.Fatal("conflicting options wrote replication settings")
+			}
+		})
+	}
+}
+
+func TestSetupReplicationRejectsEmptyKeyIDs(t *testing.T) {
+	for _, tc := range []struct{ sourceKeyID, destinationKeyID string }{{"", "dst-key"}, {"src-key", ""}} {
+		_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+		if err := SetupReplication(context.Background(), src, dst, tc.sourceKeyID, tc.destinationKeyID); err == nil {
+			t.Fatalf("SetupReplication(%q, %q) succeeded with empty key ID", tc.sourceKeyID, tc.destinationKeyID)
+		}
+		if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+			t.Fatal("empty key ID caused an update")
+		}
+	}
+}
+
+func TestReplicationStatusRejectsUnreadableConfig(t *testing.T) {
+	_, srcBackend, _, src, _ := replicationTestPair(t, nil, nil)
+	srcBackend.unreadable = true
+	if status, err := ReplicationStatus(context.Background(), src); err == nil {
+		t.Fatalf("ReplicationStatus() = %+v, nil; want unreadable-config error", status)
 	}
 }

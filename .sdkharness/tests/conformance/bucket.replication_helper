@@ -113,7 +113,6 @@ func runCheck(ctx context.Context, target *string) error {
 		return err
 	}
 	var sourceKeyID, destinationKeyID string
-	defer func() { cleanupReplicationKeys(ctx, client, sourceKeyID, destinationKeyID) }()
 	source, cleanupSource, err := newBucket(ctx, client, nil)
 	if err != nil {
 		return err
@@ -124,6 +123,8 @@ func runCheck(ctx context.Context, target *string) error {
 		return err
 	}
 	defer cleanupDestination()
+	// Delete bucket-scoped keys before either bucket cleanup runs.
+	defer func() { cleanupReplicationKeys(ctx, client, sourceKeyID, destinationKeyID) }()
 	sourceKey, err := source.CreateKey(ctx, "sdkharness-repl-src-"+source.ID(),
 		b2.Capabilities("readFiles", "readFileLegalHolds", "readFileRetentions"))
 	if err != nil {
