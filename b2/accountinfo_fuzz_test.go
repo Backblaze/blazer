@@ -20,8 +20,8 @@ func FuzzAccountInfoLoad(f *testing.F) {
 		store := NewAccountInfoFile(path)
 		got, ok := store.AuthData()
 		var want AuthData
-		valid := json.Unmarshal(content, &want) == nil
-		if ok != valid || store.Err() != nil {
+		valid := len(content) <= maxAccountInfoFileBytes && json.Unmarshal(content, &want) == nil
+		if ok != valid || (store.Err() == nil) != valid {
 			t.Fatalf("load valid=%t ok=%t err=%v", valid, ok, store.Err())
 		}
 		if ok && (got.AuthToken != want.AuthToken || got.AccountID != want.AccountID || got.APIURL != want.APIURL || got.RecommendedPartSize != want.RecommendedPartSize) {

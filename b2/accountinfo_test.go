@@ -1,6 +1,7 @@
 package b2
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -205,8 +206,6 @@ func TestNewClientFallsBackFromUnavailableSession(t *testing.T) {
 		create  bool
 	}{
 		{name: "missing"},
-		{name: "empty", content: []byte{}, create: true},
-		{name: "malformed", content: []byte("{not-json"), create: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire := newAccountInfoWire(t)
@@ -241,13 +240,82 @@ func TestNewClientFallsBackFromUnavailableSession(t *testing.T) {
 	}
 }
 
+func TestAccountInfoFileRejectsInvalidOrOversizedSession(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content []byte
+	}{
+		{name: "empty", content: nil},
+		{name: "malformed", content: []byte(`{"authToken":`)},
+		{name: "oversized", content: bytes.Repeat([]byte("x"), (1<<20)+1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newAccountInfoWire(t)
+			path := filepath.Join(t.TempDir(), "private", "account.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, tc.content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := NewAccountInfoFile(path)
+			if _, ok := store.AuthData(); ok || store.Err() == nil {
+				t.Fatalf("invalid session load: ok=%t err=%v, want a clear error", ok, store.Err())
+			}
+			if tc.name == "oversized" && !strings.Contains(store.Err().Error(), "exceeds") {
+				t.Fatalf("oversized session error = %v, want size-limit rejection", store.Err())
+			}
+			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store)); err == nil || !strings.Contains(err.Error(), "account info") {
+				t.Fatalf("NewClient invalid session error = %v, want account info error", err)
+			}
+			wire.mu.Lock()
+			defer wire.mu.Unlock()
+			if wire.authCalls != 0 {
+				t.Fatalf("invalid session made %d authorize calls, want 0", wire.authCalls)
+			}
+		})
+	}
+}
+
+func TestAccountInfoReadIsBounded(t *testing.T) {
+	const sourceSize = 2 << 20
+	source := &io.LimitedReader{R: bytes.NewReader(bytes.Repeat([]byte("x"), sourceSize)), N: sourceSize}
+	if _, err := readAccountInfo(source); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("readAccountInfo error = %v, want size limit", err)
+	}
+	if consumed := sourceSize - source.N; consumed > maxAccountInfoFileBytes+1 {
+		t.Fatalf("readAccountInfo consumed %d bytes, want at most %d", consumed, maxAccountInfoFileBytes+1)
+	}
+}
+
+func TestAccountInfoFileRejectsOversizedWriteWithoutReplacingSession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "account.json")
+	store := NewAccountInfoFile(path)
+	original := sampleAuthData()
+	store.Set(original)
+	if err := store.Err(); err != nil {
+		t.Fatal(err)
+	}
+	oversized := sampleAuthData()
+	oversized.AuthToken = strings.Repeat("x", maxAccountInfoFileBytes)
+	store.Set(oversized)
+	if err := store.Err(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized write error = %v, want size limit", err)
+	}
+	got, ok := NewAccountInfoFile(path).AuthData()
+	if !ok || got.AuthToken != original.AuthToken {
+		t.Fatalf("oversized write replaced the previous valid session: ok=%t", ok)
+	}
+}
+
 type accountInfoWire struct {
-	server    *httptest.Server
-	mu        sync.Mutex
-	authCalls int
-	listCalls int
-	force401  bool
-	onAuth    func(int)
+	server      *httptest.Server
+	mu          sync.Mutex
+	authCalls   int
+	listCalls   int
+	force401    bool
+	onAuth      func(int)
+	allowedJSON string
 }
 
 func newAccountInfoWire(t *testing.T) *accountInfoWire {
@@ -258,12 +326,15 @@ func newAccountInfoWire(t *testing.T) *accountInfoWire {
 		case strings.HasSuffix(req.URL.Path, "/b2_authorize_account"):
 			w.mu.Lock()
 			w.authCalls++
-			call, onAuth := w.authCalls, w.onAuth
+			call, onAuth, allowed := w.authCalls, w.onAuth, w.allowedJSON
 			w.mu.Unlock()
 			if onAuth != nil {
 				onAuth(call)
 			}
-			_, _ = fmt.Fprintf(out, `{"accountId":"account","authorizationToken":"token-%d","apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"recommendedPartSize":100000000,"apiUrl":%q,"downloadUrl":%q,"s3ApiUrl":%q,"allowed":{"buckets":null,"namePrefix":null},"capabilities":["listBuckets"]}}}`, call, w.server.URL, w.server.URL, w.server.URL)
+			if allowed == "" {
+				allowed = `{"buckets":null,"namePrefix":null}`
+			}
+			_, _ = fmt.Fprintf(out, `{"accountId":"account","authorizationToken":"token-%d","apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"recommendedPartSize":100000000,"apiUrl":%q,"downloadUrl":%q,"s3ApiUrl":%q,"allowed":%s,"capabilities":["listBuckets"]}}}`, call, w.server.URL, w.server.URL, w.server.URL, allowed)
 		case strings.HasSuffix(req.URL.Path, "/b2_list_buckets"):
 			w.mu.Lock()
 			w.listCalls++
@@ -427,6 +498,30 @@ func TestDefaultAccountInfoWireMatchesExplicitInMemory(t *testing.T) {
 	}
 }
 
+func TestWithAccountInfoRejectsNilAndConflictingStores(t *testing.T) {
+	wire := newAccountInfoWire(t)
+	for _, tc := range []struct {
+		name string
+		opts []ClientOption
+	}{
+		{name: "nil", opts: []ClientOption{WithAccountInfo(nil)}},
+		{name: "typed nil", opts: []ClientOption{WithAccountInfo((*AccountInfoFile)(nil))}},
+		{name: "conflicting", opts: []ClientOption{WithAccountInfo(&InMemoryAccountInfo{}), WithAccountInfo(&InMemoryAccountInfo{})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := append([]ClientOption{APIBase(wire.server.URL)}, tc.opts...)
+			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", opts...); err == nil || !strings.Contains(err.Error(), "account info") {
+				t.Fatalf("NewClient error = %v, want account info option rejection", err)
+			}
+		})
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if wire.authCalls != 0 {
+		t.Fatalf("invalid options made %d authorize calls, want none", wire.authCalls)
+	}
+}
+
 func TestAccountInfoSharedClientConcurrency(t *testing.T) {
 	wire := newAccountInfoWire(t)
 	store := NewAccountInfoFile(filepath.Join(t.TempDir(), "private", "account.json"))
@@ -475,5 +570,33 @@ func TestAccountInfoDoesNotReuseAnotherKeyID(t *testing.T) {
 	defer wire.mu.Unlock()
 	if wire.authCalls != 2 {
 		t.Fatalf("different key reused cached token: authorize calls=%d", wire.authCalls)
+	}
+}
+
+func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
+	wire := newAccountInfoWire(t)
+	wire.allowedJSON = `{"buckets":[{"id":"restricted-id","name":"restricted"}],"namePrefix":"prefix/"}`
+	path := filepath.Join(t.TempDir(), "private", "account.json")
+	ctx := context.Background()
+	store := NewAccountInfoFile(path)
+	if _, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store)); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := store.AuthData()
+	if !ok || !reflect.DeepEqual(data.AllowedBuckets, []string{"restricted-id"}) || data.AllowedPrefix != "prefix/" {
+		t.Fatalf("stored restricted scope = %+v, ok=%t", data, ok)
+	}
+	fresh, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := fresh.backend.(*beRoot).b2i.(*b2Root).authData()
+	if !reflect.DeepEqual(restored.AllowedBuckets, data.AllowedBuckets) || restored.AllowedPrefix != data.AllowedPrefix {
+		t.Fatalf("restored scope = %+v, want %+v", restored, data)
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if wire.authCalls != 1 {
+		t.Fatalf("restricted session made %d auth calls, want 1", wire.authCalls)
 	}
 }

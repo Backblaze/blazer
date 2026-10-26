@@ -17,12 +17,15 @@ package b2
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
 )
+
+const maxAccountInfoFileBytes = 1 << 20
 
 // AccountInfo stores an authorized session. It never stores the application
 // key secret; callers still supply that key to NewClient for reauthorization.
@@ -98,6 +101,13 @@ func (a *AccountInfoFile) Set(data AuthData) {
 }
 
 func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
+	content, err := json.Marshal(cloneAuthData(data))
+	if err != nil {
+		return err
+	}
+	if len(content)+1 > maxAccountInfoFileBytes {
+		return fmt.Errorf("account info: session file exceeds %d bytes", maxAccountInfoFileBytes)
+	}
 	parent := filepath.Dir(a.path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
@@ -130,7 +140,7 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 		}
 		return err
 	}
-	writeErr := json.NewEncoder(file).Encode(cloneAuthData(data))
+	_, writeErr := file.Write(append(content, '\n'))
 	if writeErr == nil {
 		writeErr = file.Sync()
 	}
@@ -174,7 +184,7 @@ func renameReplace(tmp, dest string) error {
 func (a *AccountInfoFile) AuthData() (AuthData, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	content, err := os.ReadFile(a.path)
+	file, err := os.Open(a.path)
 	if os.IsNotExist(err) {
 		a.err = nil
 		return AuthData{}, false
@@ -183,15 +193,35 @@ func (a *AccountInfoFile) AuthData() (AuthData, bool) {
 		a.err = err
 		return AuthData{}, false
 	}
+	// The session file is untrusted input. Read one byte beyond the maximum
+	// so even a growing or sparse file cannot make loading allocate without bound.
+	content, err := readAccountInfo(file)
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		a.err = fmt.Errorf("account info: read session: %w", err)
+		return AuthData{}, false
+	}
 	var data AuthData
 	if err := json.Unmarshal(content, &data); err != nil {
-		// A corrupt or incomplete cache is not an authorization failure.
-		// Treat it as a miss so NewClient can authorize and replace it.
-		a.err = nil
+		a.err = fmt.Errorf("account info: invalid session JSON: %w", err)
 		return AuthData{}, false
 	}
 	a.err = nil
 	return cloneAuthData(data), true
+}
+
+func readAccountInfo(reader io.Reader) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, maxAccountInfoFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > maxAccountInfoFileBytes {
+		return nil, fmt.Errorf("account info: session file exceeds %d bytes", maxAccountInfoFileBytes)
+	}
+	return content, nil
 }
 
 // Clear removes the persisted session before a 401-triggered reauthorization.

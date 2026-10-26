@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `b2.WithAccountInfo` allows a client to reuse an authorized session through the default in-memory store or an opt-in `AccountInfoFile`. The file backend stores tokens and endpoints atomically with private POSIX permissions, never stores the application key, and rejects corrupt or oversized session files.
+
+### Fixed
+
+- Verbose B2 wire logging redacts credential-bearing headers and JSON fields, including compact and nested authorization tokens.
+
 ## [0.9.0] - 2026-10-22
 
 ### Added

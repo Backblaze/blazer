@@ -34,7 +34,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -232,7 +231,7 @@ func logRequest(req *http.Request, args []byte) {
 	}
 	var headers []string
 	for k, v := range req.Header {
-		if k == "Authorization" || k == "X-Blazer-Method" {
+		if sensitiveLogField(k) || k == "X-Blazer-Method" {
 			continue
 		}
 		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
@@ -240,13 +239,49 @@ func logRequest(req *http.Request, args []byte) {
 	hstr := strings.Join(headers, ";")
 	method := req.Header.Get("X-Blazer-Method")
 	if args != nil {
-		blog.V(2).Infof(">> %s %v: %v headers: {%s} args: (%s)", method, req.Method, req.URL, hstr, string(args))
+		blog.V(2).Infof(">> %s %v: %v headers: {%s} args: (%s)", method, req.Method, req.URL, hstr, redactSensitiveJSON(args))
 		return
 	}
 	blog.V(2).Infof(">> %s %v: %v {%s} (no args)", method, req.Method, req.URL, hstr)
 }
 
-var authRegexp = regexp.MustCompile(`"authorizationToken": ".[^"]*"`)
+// sensitiveLogField recognizes credentials in both JSON field names and HTTP headers.
+func sensitiveLogField(name string) bool {
+	name = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(name, "-", ""), "_", ""))
+	return strings.Contains(name, "authorization") || strings.Contains(name, "token") ||
+		strings.Contains(name, "secret") || strings.Contains(name, "applicationkey") ||
+		strings.Contains(name, "customerkey")
+}
+
+func redactSensitiveValue(value interface{}) {
+	switch value := value.(type) {
+	case map[string]interface{}:
+		for key, item := range value {
+			if sensitiveLogField(key) {
+				value[key] = "[redacted]"
+			} else {
+				redactSensitiveValue(item)
+			}
+		}
+	case []interface{}:
+		for _, item := range value {
+			redactSensitiveValue(item)
+		}
+	}
+}
+
+func redactSensitiveJSON(data []byte) string {
+	var value interface{}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return "[unparseable JSON omitted]"
+	}
+	redactSensitiveValue(value)
+	safe, err := json.Marshal(value)
+	if err != nil {
+		return "[JSON omitted]"
+	}
+	return string(safe)
+}
 
 func logResponse(resp *http.Response, reply []byte) {
 	if !blog.V(2) {
@@ -254,13 +289,16 @@ func logResponse(resp *http.Response, reply []byte) {
 	}
 	var headers []string
 	for k, v := range resp.Header {
+		if sensitiveLogField(k) {
+			continue
+		}
 		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
 	}
 	hstr := strings.Join(headers, "; ")
 	method := resp.Request.Header.Get("X-Blazer-Method")
 	id := resp.Request.Header.Get("X-Blazer-Request-ID")
 	if reply != nil {
-		safe := string(authRegexp.ReplaceAll(reply, []byte(`"authorizationToken": "[redacted]"`)))
+		safe := redactSensitiveJSON(reply)
 		blog.V(2).Infof("<< %s (%s) %s {%s} (%s)", method, id, resp.Status, hstr, safe)
 		return
 	}

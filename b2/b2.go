@@ -35,6 +35,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"sync"
@@ -70,6 +71,9 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 	for _, f := range opts {
 		f(&c.opts)
 	}
+	if c.opts.optionErr != nil {
+		return nil, c.opts.optionErr
+	}
 	if c.opts.accountInfo == nil {
 		c.opts.accountInfo = &InMemoryAccountInfo{}
 	}
@@ -90,12 +94,25 @@ type clientOptions struct {
 	userAgents      []string
 	writerOpts      []WriterOption
 	accountInfo     AccountInfo
+	accountInfoSet  bool
+	optionErr       error
 }
 
 // WithAccountInfo uses the given session store. By default NewClient uses an
 // InMemoryAccountInfo; NewAccountInfoFile opts in to persistence.
 func WithAccountInfo(ai AccountInfo) ClientOption {
-	return func(o *clientOptions) { o.accountInfo = ai }
+	return func(o *clientOptions) {
+		if o.accountInfoSet {
+			o.optionErr = fmt.Errorf("b2: conflicting account info options")
+			return
+		}
+		o.accountInfoSet = true
+		if ai == nil || (reflect.ValueOf(ai).Kind() == reflect.Pointer && reflect.ValueOf(ai).IsNil()) {
+			o.optionErr = fmt.Errorf("b2: account info store must not be nil")
+			return
+		}
+		o.accountInfo = ai
+	}
 }
 
 // A ClientOption allows callers to adjust various per-client settings.
