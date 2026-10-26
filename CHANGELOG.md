@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
+
 ### Fixed
 
 - Repeated `(*b2.Object).Attrs` calls preserve cached file metadata, including `LastModified`, without mutating the cache. Each returned `Attrs.Info` is independent; `large_file_sha1` remains in the public map, while `src_last_modified_millis` remains excluded.
