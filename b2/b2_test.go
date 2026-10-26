@@ -564,7 +564,7 @@ func TestObjectAttrsDoesNotMutateCachedFileInfo(t *testing.T) {
 	mtime := time.UnixMilli(1700000000000)
 	file := &attrsTestFile{
 		testFile: &testFile{n: "metadata.txt", s: 1, a: "upload", files: make(map[string]string)},
-		info:     map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "public": "value"},
+		info:     map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "large_file_sha1": "full-sha1", "public": "value"},
 	}
 	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
 	object := &Object{f: &beFile{b2file: file, ri: root}}
@@ -583,8 +583,28 @@ func TestObjectAttrsDoesNotMutateCachedFileInfo(t *testing.T) {
 	if !first.LastModified.Equal(second.LastModified) {
 		t.Fatalf("Attrs().LastModified changed between calls: first=%s second=%s", first.LastModified, second.LastModified)
 	}
-	if !reflect.DeepEqual(second.Info, map[string]string{"public": "value"}) {
-		t.Fatalf("second Attrs().Info = %#v, want public metadata only", second.Info)
+	wantInfo := map[string]string{"large_file_sha1": "full-sha1", "public": "value"}
+	if !reflect.DeepEqual(first.Info, wantInfo) || !reflect.DeepEqual(second.Info, wantInfo) {
+		t.Fatalf("Attrs().Info changed between calls: first=%#v second=%#v, want %#v", first.Info, second.Info, wantInfo)
+	}
+	first.Info["public"] = "changed"
+	delete(first.Info, "large_file_sha1")
+	third, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(third.Info, wantInfo) || !reflect.DeepEqual(file.info, map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "large_file_sha1": "full-sha1", "public": "value"}) {
+		t.Fatalf("mutating Attrs.Info changed cache: third=%#v cached=%#v", third.Info, file.info)
+	}
+}
+
+func TestAttrsFromFileInfoPreservesNilInfo(t *testing.T) {
+	attrs, err := attrsFromFileInfo(&beFileInfo{info: nil, status: "upload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Info != nil {
+		t.Fatalf("Attrs.Info = %#v, want nil when fileInfo is nil", attrs.Info)
 	}
 }
 

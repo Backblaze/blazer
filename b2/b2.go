@@ -598,7 +598,10 @@ func attrsFromFileInfo(fi beFileInfoInterface) (*Attrs, error) {
 	case "folder":
 		state = Folder
 	}
-	publicInfo := make(map[string]string, len(info))
+	var publicInfo map[string]string
+	if info != nil {
+		publicInfo = make(map[string]string, len(info))
+	}
 	var lastModified time.Time
 	for key, value := range info {
 		switch key {
