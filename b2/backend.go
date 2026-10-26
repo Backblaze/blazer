@@ -45,8 +45,14 @@ type beRoot struct {
 	account, key      string
 	b2i               b2RootInterface
 	options           clientOptions
-	refreshMu         sync.Mutex // serializes refreshes, never base.B2's request lock
+	refreshMu         sync.Mutex // coordinates refreshes; never held during authorize or backoff
 	refreshGeneration uint64
+	refreshFlight     *authorizationRefresh
+}
+
+type authorizationRefresh struct {
+	done chan struct{}
+	err  error // set before done closes
 }
 
 func (r *beRoot) authGeneration() uint64 {
@@ -57,15 +63,35 @@ func (r *beRoot) authGeneration() uint64 {
 
 func (r *beRoot) reauthorizeIfUnchanged(ctx context.Context, generation uint64) error {
 	r.refreshMu.Lock()
-	defer r.refreshMu.Unlock()
 	if r.refreshGeneration != generation {
+		r.refreshMu.Unlock()
 		return nil
 	}
-	if err := r.reauthorizeAccount(ctx); err != nil {
-		return err
+	if flight := r.refreshFlight; flight != nil {
+		r.refreshMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-flight.done:
+			return flight.err
+		}
 	}
-	r.refreshGeneration++
-	return nil
+	flight := &authorizationRefresh{done: make(chan struct{})}
+	r.refreshFlight = flight
+	r.refreshMu.Unlock()
+
+	// Authorization and its retry backoff can block. Never hold refreshMu while
+	// doing either, so waiters can abandon their own request on cancellation.
+	err := r.reauthorizeAccount(ctx)
+	r.refreshMu.Lock()
+	if err == nil {
+		r.refreshGeneration++
+	}
+	flight.err = err
+	close(flight.done)
+	r.refreshFlight = nil
+	r.refreshMu.Unlock()
+	return err
 }
 
 type beBucketInterface interface {

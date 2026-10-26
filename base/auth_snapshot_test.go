@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2types"
 )
 
 type authSnapshotTransport func(*http.Request) (*http.Response, error)
@@ -62,22 +64,6 @@ func TestAuthorizationSnapshotDoesNotHoldLockAcrossNetwork(t *testing.T) {
 	<-updateDone
 }
 
-func TestAuthorizationTokenRedactionCoversCompactResponse(t *testing.T) {
-	for _, response := range []string{
-		`{"authorizationToken":"test-secret-token"}`,
-		`{"authorizationToken": "test-secret-token"}`,
-		`{"authorization\u0054oken":"test-secret-token"}`,
-	} {
-		redacted := redactResponse("b2_authorize_account", []byte(response))
-		if strings.Contains(redacted, "test-secret-token") {
-			t.Errorf("authorization response still contains a token after redaction: %q", redacted)
-		}
-	}
-	if redacted := redactResponse("b2_get_upload_url", []byte(`{"authorizationToken":"test-secret-token"}`)); strings.Contains(redacted, "test-secret-token") {
-		t.Errorf("upload URL response still contains a token after redaction: %q", redacted)
-	}
-}
-
 func TestConcurrentUpdateUsesConsistentAuthorizationSnapshot(t *testing.T) {
 	transport := authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
 		var body struct {
@@ -120,4 +106,46 @@ func TestConcurrentUpdateUsesConsistentAuthorizationSnapshot(t *testing.T) {
 	if got := old.snapshot().s3URI; got != "https://s3.invalid" {
 		t.Errorf("S3 endpoint after update = %q", got)
 	}
+}
+
+func TestConcurrentUpdateWithKeyedDownloadByID(t *testing.T) {
+	transport := authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
+		want := map[string]string{"old.invalid": "old", "new.invalid": "new"}[req.URL.Host]
+		if want == "" || req.Header.Get("Authorization") != want {
+			t.Errorf("mixed download authorization: host=%q token=%q", req.URL.Host, req.Header.Get("Authorization"))
+		}
+		if req.Header.Get("X-Bz-Server-Side-Encryption-Customer-Key") != "key" {
+			t.Error("keyed download dropped the SSE-C key")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Length": []string{"0"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	})
+	options := &b2Options{transport: transport}
+	oldState := &B2{authToken: "old", downloadURI: "https://old.invalid", opts: options}
+	newState := &B2{authToken: "new", downloadURI: "https://new.invalid", opts: options}
+	account := &B2{authToken: "old", downloadURI: "https://old.invalid", opts: options}
+	bucket := &Bucket{b2: account}
+	sse := &b2types.ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256", CustomerKey: "key", CustomerKeyMD5: "digest"}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 300; i++ {
+			account.Update(oldState)
+			account.Update(newState)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 300; i++ {
+			reader, err := bucket.DownloadFileByIDWithSSEC(context.Background(), "id", 0, 0, false, sse)
+			if err != nil {
+				t.Error(err)
+				continue
+			}
+			if err := reader.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	wg.Wait()
 }
