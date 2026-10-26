@@ -321,7 +321,6 @@ func redactSSECFields(value any) {
 	}
 }
 
-
 func logResponse(resp *http.Response, reply []byte) {
 	if !blog.V(2) {
 		return
