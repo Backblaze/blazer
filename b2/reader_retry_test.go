@@ -33,7 +33,7 @@ type truncBucket struct {
 	r *truncRoot
 }
 
-func (b *truncBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool) (b2FileReaderInterface, error) {
+func (b *truncBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool, _ *SSECKey) (b2FileReaderInterface, error) {
 	gmux.Lock()
 	f := b.files[name]
 	gmux.Unlock()
@@ -57,8 +57,8 @@ func (b *truncBucket) downloadFileByName(_ context.Context, name string, offset,
 	}, nil
 }
 
-func (b *truncBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (b2FileReaderInterface, error) {
-	return b.downloadFileByName(ctx, id, offset, size, header)
+func (b *truncBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool, ssec *SSECKey) (b2FileReaderInterface, error) {
+	return b.downloadFileByName(ctx, id, offset, size, header, ssec)
 }
 
 // readTruncated reads a 1000-byte object whose chunk is truncated for the first

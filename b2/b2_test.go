@@ -343,7 +343,7 @@ func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	}, nil
 }
 
-func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string, _ *FileRetention, _ LegalHold) (b2LargeFileInterface, error) {
+func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *SSECKey) (b2LargeFileInterface, error) {
 	return &testLargeFile{
 		name:  name,
 		parts: make(map[int][]byte),
@@ -393,7 +393,7 @@ func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, co
 	return nil, "", fmt.Errorf("testBucket.listUnfinishedLargeFiles(ctx, %d, %q): not implemented", count, cont)
 }
 
-func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool) (b2FileReaderInterface, error) {
+func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool, _ *SSECKey) (b2FileReaderInterface, error) {
 	gmux.Lock()
 	defer gmux.Unlock()
 	f := t.files[name]
@@ -411,12 +411,12 @@ func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, 
 	}, nil
 }
 
-func (t *testBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (b2FileReaderInterface, error) {
-	return t.downloadFileByName(ctx, id, offset, size, header)
+func (t *testBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool, ssec *SSECKey) (b2FileReaderInterface, error) {
+	return t.downloadFileByName(ctx, id, offset, size, header, ssec)
 }
 
 func (t *testBucket) hideFile(context.Context, string) (b2FileInterface, error) { return nil, nil }
-func (t *testBucket) copyFile(context.Context, string, string, string, string, string, string, map[string]string) (b2FileInterface, error) {
+func (t *testBucket) copyFile(context.Context, string, string, string, string, string, string, map[string]string, *SSECKey, *SSECKey) (b2FileInterface, error) {
 	return nil, nil
 }
 func (t *testBucket) getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error) {
@@ -433,7 +433,7 @@ type testURL struct {
 
 func (t *testURL) reload(context.Context) error { return nil }
 
-func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string, _ *FileRetention, _ LegalHold) (b2FileInterface, error) {
+func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *SSECKey) (b2FileInterface, error) {
 	if err := t.errs.getError("uploadFile"); err != nil {
 		return nil, err
 	}
@@ -521,13 +521,14 @@ type testFile struct {
 	bypassGovernance bool
 }
 
-func (t *testFile) id() string           { return t.n }
-func (t *testFile) name() string         { return t.n }
-func (t *testFile) size() int64          { return t.s }
-func (t *testFile) timestamp() time.Time { return t.t }
-func (t *testFile) status() string       { return t.a }
+func (t *testFile) id() string                           { return t.n }
+func (t *testFile) name() string                         { return t.n }
+func (t *testFile) size() int64                          { return t.s }
+func (t *testFile) timestamp() time.Time                 { return t.t }
+func (t *testFile) status() string                       { return t.a }
+func (t *testFile) encryption() (string, string, string) { return "", "", "" }
 
-func (t *testFile) compileParts(int64, map[int]string) b2LargeFileInterface {
+func (t *testFile) compileParts(int64, map[int]string, *SSECKey) b2LargeFileInterface {
 	panic("not implemented")
 }
 
@@ -585,6 +586,100 @@ func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
 }
 func (t *testFile) updateFileRetention(context.Context, *FileRetention, bool) error { return nil }
 func (t *testFile) updateFileLegalHold(context.Context, LegalHold) error            { return nil }
+
+type attrsTestFile struct {
+	*testFile
+	info map[string]string
+}
+
+func (t *attrsTestFile) getFileInfo(context.Context) (b2FileInfoInterface, error) {
+	return attrsTestFileInfo{file: t}, nil
+}
+
+type attrsTestFileInfo struct{ file *attrsTestFile }
+
+func (t attrsTestFileInfo) stats() (string, string, int64, string, map[string]string, string, time.Time) {
+	return t.file.n, "", t.file.s, "application/octet-stream", t.file.info, t.file.a, t.file.t
+}
+
+func (attrsTestFileInfo) fileLock() (*FileRetention, LegalHold) { return nil, "" }
+
+func TestObjectAttrsDoesNotMutateCachedFileInfo(t *testing.T) {
+	mtime := time.UnixMilli(1700000000000)
+	file := &attrsTestFile{
+		testFile: &testFile{n: "metadata.txt", s: 1, a: "upload", files: make(map[string]string)},
+		info:     map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "large_file_sha1": "full-sha1", "public": "value"},
+	}
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	object := &Object{f: &beFile{b2file: file, ri: root}}
+
+	first, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.LastModified.IsZero() {
+		t.Fatal("first Attrs().LastModified is zero")
+	}
+	if !first.LastModified.Equal(second.LastModified) {
+		t.Fatalf("Attrs().LastModified changed between calls: first=%s second=%s", first.LastModified, second.LastModified)
+	}
+	wantInfo := map[string]string{"large_file_sha1": "full-sha1", "public": "value"}
+	if !reflect.DeepEqual(first.Info, wantInfo) || !reflect.DeepEqual(second.Info, wantInfo) {
+		t.Fatalf("Attrs().Info changed between calls: first=%#v second=%#v, want %#v", first.Info, second.Info, wantInfo)
+	}
+	first.Info["public"] = "changed"
+	delete(first.Info, "large_file_sha1")
+	third, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(third.Info, wantInfo) || !reflect.DeepEqual(file.info, map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "large_file_sha1": "full-sha1", "public": "value"}) {
+		t.Fatalf("mutating Attrs.Info changed cache: third=%#v cached=%#v", third.Info, file.info)
+	}
+}
+
+func TestAttrsFromFileInfoPreservesNilInfo(t *testing.T) {
+	attrs, err := attrsFromFileInfo(&beFileInfo{info: nil, status: "upload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Info != nil {
+		t.Fatalf("Attrs.Info = %#v, want nil when fileInfo is nil", attrs.Info)
+	}
+}
+
+type sharedNameInfoBucket struct {
+	beBucketInterface
+	info *beFileInfo
+}
+
+func (b *sharedNameInfoBucket) getFileInfoByName(context.Context, string) (beFileInfoInterface, error) {
+	return b.info, nil
+}
+
+func TestGetFileInfoByNameDoesNotMutateSharedInfo(t *testing.T) {
+	cached := map[string]string{"src_last_modified_millis": "1700000000000", "large_file_sha1": "whole-sha1", "custom": "value"}
+	bucket := &Bucket{b: &sharedNameInfoBucket{info: &beFileInfo{info: cached, status: "upload"}}}
+	first, err := bucket.GetFileInfoByName(context.Background(), "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Info["custom"] = "changed"
+	second, err := bucket.GetFileInfoByName(context.Background(), "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.LastModified.IsZero() || !first.LastModified.Equal(second.LastModified) || !reflect.DeepEqual(second.Info, map[string]string{"large_file_sha1": "whole-sha1", "custom": "value"}) {
+		t.Fatalf("shared name info changed: first=%+v second=%+v", first, second)
+	}
+	if !reflect.DeepEqual(cached, map[string]string{"src_last_modified_millis": "1700000000000", "large_file_sha1": "whole-sha1", "custom": "value"}) {
+		t.Fatalf("cached GetFileInfoByName map mutated: %#v", cached)
+	}
+}
 
 type testFileReader struct {
 	b io.ReadCloser
@@ -1487,6 +1582,25 @@ func TestReadRangeReturnsRight(t *testing.T) {
 	}
 	if i != 1400 {
 		t.Errorf("NewRangeReader(_, 200, 1400): want 1400, got %d", i)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
+
+	// Exact multiples of ChunkSize must still mark the final requested chunk.
+	// With more than one worker, the remaining-length calculation is shared.
+	r = obj.NewRangeReader(ctx, 200, 2000)
+	r.ChunkSize = 1000
+	r.ConcurrentDownloads = 2
+	i, err = io.Copy(ioutil.Discard, r)
+	if err != nil {
+		t.Error(err)
+	}
+	if i != 2000 {
+		t.Errorf("parallel NewRangeReader(_, 200, 2000): want 2000, got %d", i)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
 	}
 }
 

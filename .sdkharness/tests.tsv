@@ -7,6 +7,7 @@ conformance	bucket.replication_config	simulator	./.sdkharness/tests/run-conforma
 conformance	client.progress	simulator	./.sdkharness/tests/run-conformance
 conformance	client.simulator	simulator	./.sdkharness/tests/run-conformance
 conformance	enc.sse_b2	simulator	./.sdkharness/tests/run-conformance
+conformance	enc.sse_c	simulator	./.sdkharness/tests/run-conformance
 conformance	files.delete_version	simulator	./.sdkharness/tests/run-conformance
 conformance	files.download_by_id	simulator	./.sdkharness/tests/run-conformance
 conformance	files.download_content	simulator	./.sdkharness/tests/run-conformance

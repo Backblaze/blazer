@@ -192,14 +192,14 @@ func TestDownloadFileByIDHeadAndRangeWire(t *testing.T) {
 	bucket := wire.baselineBucket(t)
 	ctx := context.Background()
 
-	reader, err := bucket.downloadFileByID(ctx, "file-id", 2, 3, false)
+	reader, err := bucket.downloadFileByID(ctx, "file-id", 2, 3, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reader, err = bucket.downloadFileByID(ctx, "file-id", 0, 0, true)
+	reader, err = bucket.downloadFileByID(ctx, "file-id", 0, 0, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestDownloadFileByIDHeadAndRangeWire(t *testing.T) {
 func TestDownloadFileByIDNewClientRangeWire(t *testing.T) {
 	wire := newDownloadByIDWire(t)
 	bucket := wire.publicBucket(t)
-	reader, err := bucket.b.downloadFileByID(context.Background(), "historical-id", 1, 2, false)
+	reader, err := bucket.b.downloadFileByID(context.Background(), "historical-id", 1, 2, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestDownloadFileByIDMapsStatusAndInvalidIDErrors(t *testing.T) {
 			wire := newDownloadByIDWire(t)
 			wire.setStatus(tc.status)
 			before := wire.requestCount()
-			_, err := wire.baselineBucket(t).downloadFileByID(context.Background(), tc.id, tc.offset, tc.size, false)
+			_, err := wire.baselineBucket(t).downloadFileByID(context.Background(), tc.id, tc.offset, tc.size, false, nil)
 			if err == nil {
 				t.Fatal("DownloadFileByID succeeded, want an error")
 			}
