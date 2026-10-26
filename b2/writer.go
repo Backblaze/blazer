@@ -184,41 +184,7 @@ func (w *Writer) thread() {
 			}
 			mr := &meteredReader{r: r, size: cnk.buf.Len()}
 			w.registerChunk(cnk.id, mr)
-			err = retry.Do(
-				w.ctx,
-				func() error {
-					n, err := fc.uploadPart(w.ctx, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
-					if err != nil {
-						return err
-					}
-					if n != cnk.buf.Len() {
-						return fmt.Errorf("wrote %d of %d", n, cnk.buf.Len())
-					}
-					return nil
-				},
-				retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
-					if attempt == 1 {
-						return w.o.b.r.maxReuploads(err) + 1
-					}
-					return attempts
-				}),
-				retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
-					return retry.Backoff(delay)
-				}),
-				retry.RetryIf(func(attempt uint, err error) bool {
-					return w.o.b.r.reupload(err)
-				}),
-				retry.OnRetry(func(attempt uint, err error) error {
-					blog.V(1).Infof("b2 writer: error: %v; retrying", err)
-					f, err := w.file.getUploadPartURL(w.ctx)
-					if err != nil {
-						return err
-					}
-					fc = f
-					return nil
-				}),
-				retry.WithAfter(retryAfterFor(w.o.b.r)),
-			)
+			err = uploadPartWithReupload(w.ctx, w.file, w.o.b.r, fc, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
 			if err != nil {
 				w.setErr(err)
 				w.completeChunk(cnk.id)
@@ -715,6 +681,46 @@ func (w *Writer) status() *WriterStatus {
 	}
 
 	return ws
+}
+
+// uploadPartWithReupload is shared by Writer and Compose. The reader must be
+// resettable so a failed upload can be replayed with a fresh part URL.
+func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, root beRootInterface, chunk beFileChunkInterface, reader readResetter, sha1 string, size, number int) error {
+	return retry.Do(
+		ctx,
+		func() error {
+			n, err := chunk.uploadPart(ctx, reader, sha1, size, number)
+			if err != nil {
+				return err
+			}
+			if n != size {
+				return fmt.Errorf("wrote %d of %d", n, size)
+			}
+			return nil
+		},
+		retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
+			if attempt == 1 {
+				return root.maxReuploads(err) + 1
+			}
+			return attempts
+		}),
+		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
+			return retry.Backoff(delay)
+		}),
+		retry.RetryIf(func(attempt uint, err error) bool {
+			return root.reupload(err)
+		}),
+		retry.OnRetry(func(attempt uint, err error) error {
+			blog.V(1).Infof("b2 upload part: error: %v; retrying", err)
+			fresh, err := large.getUploadPartURL(ctx)
+			if err != nil {
+				return err
+			}
+			chunk = fresh
+			return nil
+		}),
+		retry.WithAfter(retryAfterFor(root)),
+	)
 }
 
 type meteredReader struct {

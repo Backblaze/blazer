@@ -175,7 +175,7 @@ func (b *Bucket) Compose(ctx context.Context, name string, parts ...ComposePart)
 	for i, part := range parts {
 		number := i + 1
 		if part.reader != nil {
-			if err := uploadComposePart(ctx, large, number, part); err != nil {
+			if err := uploadComposePart(ctx, large, b.r, number, part); err != nil {
 				return nil, err
 			}
 			continue
@@ -199,7 +199,7 @@ func (b *Bucket) Compose(ctx context.Context, name string, parts ...ComposePart)
 	return &Object{name: name, b: b, f: file}, nil
 }
 
-func uploadComposePart(ctx context.Context, large beLargeFileInterface, number int, part ComposePart) (err error) {
+func uploadComposePart(ctx context.Context, large beLargeFileInterface, root beRootInterface, number int, part ComposePart) (err error) {
 	buffer, err := newFileBuffer("")
 	if err != nil {
 		return err
@@ -220,12 +220,5 @@ func uploadComposePart(ctx context.Context, large beLargeFileInterface, number i
 	if err != nil {
 		return err
 	}
-	n, err := chunk.uploadPart(ctx, reader, buffer.Hash(), buffer.Len(), number)
-	if err != nil {
-		return err
-	}
-	if n != buffer.Len() {
-		return fmt.Errorf("b2: Compose part %d: uploaded %d of %d bytes", number, n, buffer.Len())
-	}
-	return nil
+	return uploadPartWithReupload(ctx, large, root, chunk, reader, buffer.Hash(), buffer.Len(), number)
 }

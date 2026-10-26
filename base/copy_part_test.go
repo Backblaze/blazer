@@ -1,6 +1,7 @@
 package base
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -62,6 +63,83 @@ func TestCopyPartRecordsHashAndSizeForFinish(t *testing.T) {
 	}
 	if file.Size != 5e6+10 || !reflect.DeepEqual(finished["partSha1Array"], []any{"upload-sha", "copy-sha"}) {
 		t.Errorf("finish size=%d body=%v", file.Size, finished)
+	}
+}
+
+func TestCopyPartReplacementAdjustsCompiledSize(t *testing.T) {
+	var listCalls int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/b2api/v4/b2_list_parts":
+			listCalls++
+			_, _ = fmt.Fprint(w, `{"parts":[{"fileId":"large","partNumber":1,"contentSha1":"old-one","contentLength":5000000}],"nextPartNumber":2}`)
+		case "/b2api/v4/b2_copy_part":
+			_, _ = fmt.Fprint(w, `{"fileId":"large","partNumber":1,"contentLength":6000000,"contentSha1":"new-one"}`)
+		case "/b2api/v4/b2_finish_large_file":
+			_, _ = fmt.Fprint(w, `{"fileId":"large","fileName":"dst","action":"upload"}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := (&File{ID: "large", b2: b}).CompileParts(8e6, map[int]string{1: "old-one", 2: "old-two"})
+	if _, err := large.CopyPart(context.Background(), "src", 1, "bytes=0-5999999", nil); err != nil {
+		t.Fatal(err)
+	}
+	file, err := large.FinishLargeFile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listCalls != 1 || file.Size != 9e6 {
+		t.Errorf("list calls = %d, finished size = %d; want 1, 9000000", listCalls, file.Size)
+	}
+}
+
+func TestUploadPartReplacementAdjustsSize(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/part":
+			if r.Method != http.MethodPost || r.Header.Get("X-Bz-Part-Number") != "1" {
+				t.Errorf("upload method/part = %s/%q", r.Method, r.Header.Get("X-Bz-Part-Number"))
+			}
+			_, _ = io.Copy(io.Discard, r.Body)
+			_, _ = fmt.Fprint(w, `{}`)
+		case "/b2api/v4/b2_finish_large_file":
+			_, _ = fmt.Fprint(w, `{"fileId":"large","fileName":"dst","action":"upload"}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := (&File{ID: "large", b2: b}).CompileParts(0, nil)
+	chunk := &FileChunk{file: large, url: srv.URL + "/part", token: "part-token"}
+	for _, size := range []int{5e6, 6e6} {
+		if _, err := chunk.UploadPart(context.Background(), bytes.NewReader(bytes.Repeat([]byte("x"), size)), "sha", size, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := large.FinishLargeFile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Size != 6e6 {
+		t.Errorf("finished size = %d, want 6000000", file.Size)
 	}
 }
 

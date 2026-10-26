@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,7 +28,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const composeMinPartSize = 5e6
@@ -44,16 +47,18 @@ type composeWire struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 
-	failCopyPart     int
-	failUploadPart   bool
-	failFinish       bool
-	copySizeOverride int64
-	failCancel       bool
-	starts           []map[string]any
-	calls            []string
-	copies           []map[string]any
-	uploads          []composeUpload
-	finishes         []map[string]any
+	failCopyPart        int
+	failUploadPart      bool
+	failFirstUploadPart bool
+	uploadURLCalls      int
+	failFinish          bool
+	copySizeOverride    int64
+	failCancel          bool
+	starts              []map[string]any
+	calls               []string
+	copies              []map[string]any
+	uploads             []composeUpload
+	finishes            []map[string]any
 }
 
 func newComposeWire(t *testing.T) *composeWire {
@@ -86,7 +91,15 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.addCall("start")
 		_, _ = fmt.Fprint(rw, `{"fileId":"large"}`)
 	case "/b2api/v4/b2_get_upload_part_url":
-		_, _ = fmt.Fprintf(rw, `{"uploadUrl":%q,"authorizationToken":"part-token"}`, w.srv.URL+"/part")
+		w.mu.Lock()
+		w.uploadURLCalls++
+		urlCalls := w.uploadURLCalls
+		w.mu.Unlock()
+		token := "part-token"
+		if w.failFirstUploadPart {
+			token = fmt.Sprintf("part-token-%d", urlCalls)
+		}
+		_, _ = fmt.Fprintf(rw, `{"uploadUrl":%q,"authorizationToken":%q}`, w.srv.URL+"/part", token)
 	case "/part":
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -96,13 +109,23 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			w.t.Errorf("part number: %v", err)
 		}
-		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "part-token" {
+		if r.Method != http.MethodPost || (!w.failFirstUploadPart && r.Header.Get("Authorization") != "part-token") {
 			w.t.Errorf("upload part method/auth = %s/%q", r.Method, r.Header.Get("Authorization"))
 		}
 		w.mu.Lock()
 		w.uploads = append(w.uploads, composeUpload{number: number, sha1: r.Header.Get("X-Bz-Content-Sha1"), size: len(body)})
 		w.calls = append(w.calls, fmt.Sprintf("upload:%d", number))
+		uploadAttempt := len(w.uploads)
+		urlCalls := w.uploadURLCalls
 		w.mu.Unlock()
+		if w.failFirstUploadPart && r.Header.Get("Authorization") != fmt.Sprintf("part-token-%d", urlCalls) {
+			w.t.Errorf("upload used stale token %q after %d URL requests", r.Header.Get("Authorization"), urlCalls)
+		}
+		if w.failFirstUploadPart && uploadAttempt == 1 {
+			rw.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprint(rw, `{"status":503,"code":"service_unavailable","message":"retry with a new upload URL"}`)
+			return
+		}
 		if w.failUploadPart {
 			rw.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprint(rw, `{"status":400,"code":"bad_request","message":"upload part failed"}`)
@@ -344,11 +367,85 @@ func TestComposeRejectsOverlappingRangesBeforeStarting(t *testing.T) {
 	}
 }
 
+func TestComposeRetriesRecoverableUploadWithFreshURL(t *testing.T) {
+	wire := newComposeWire(t)
+	wire.failFirstUploadPart = true
+	payload := bytes.Repeat([]byte("r"), composeMinPartSize)
+	object, err := wire.bucket(t).Compose(context.Background(), "retry",
+		PartFromReader(bytes.NewReader(payload), int64(len(payload))),
+		PartFromCopy("source", "bytes=0-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object.ID() != "large" {
+		t.Fatalf("composed ID = %q, want large", object.ID())
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if wire.uploadURLCalls != 2 || len(wire.uploads) != 2 {
+		t.Fatalf("upload URL calls = %d, upload attempts = %d; want 2 each", wire.uploadURLCalls, len(wire.uploads))
+	}
+	if !reflect.DeepEqual(wire.uploads[0], wire.uploads[1]) {
+		t.Errorf("retry did not replay the same buffered part: %#v", wire.uploads)
+	}
+	if want := []string{"start", "upload:1", "upload:1", "copy:2", "finish"}; !reflect.DeepEqual(wire.calls, want) {
+		t.Errorf("calls = %v, want %v", wire.calls, want)
+	}
+}
+
 type composeCancelReader struct{ cancel context.CancelFunc }
 
 func (r composeCancelReader) Read([]byte) (int, error) {
 	r.cancel()
 	return 0, fmt.Errorf("injected read failure")
+}
+
+type composeExpiringContext struct {
+	context.Context
+	done    chan struct{}
+	expired atomic.Bool
+}
+
+func (c *composeExpiringContext) Deadline() (time.Time, bool) {
+	if c.expired.Load() {
+		return time.Now().Add(-time.Second), true
+	}
+	return time.Now().Add(time.Hour), true
+}
+
+func (c *composeExpiringContext) Done() <-chan struct{} { return c.done }
+
+func (c *composeExpiringContext) Err() error {
+	if c.expired.Load() {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+type composeDeadlineReader struct{ ctx *composeExpiringContext }
+
+func (r composeDeadlineReader) Read([]byte) (int, error) {
+	r.ctx.expired.Store(true)
+	close(r.ctx.done)
+	return 0, context.DeadlineExceeded
+}
+
+func TestComposeCancelsAfterCallerDeadlineExpires(t *testing.T) {
+	wire := newComposeWire(t)
+	ctx := &composeExpiringContext{Context: context.Background(), done: make(chan struct{})}
+	_, err := wire.bucket(t).Compose(ctx, "deadline",
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromReader(composeDeadlineReader{ctx: ctx}, 1))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Compose error = %v, want deadline exceeded", err)
+	}
+	calls, _, finishes, _ := wire.snapshot()
+	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls after deadline = %v, want %v", calls, want)
+	}
+	if len(finishes) != 0 {
+		t.Fatalf("finished after deadline: %#v", finishes)
+	}
 }
 
 func TestComposeCancelsAfterCallerContextIsCanceled(t *testing.T) {
