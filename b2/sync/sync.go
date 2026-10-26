@@ -137,6 +137,12 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 // without resuming a previous upload. Per-file failures are returned in
 // Result.Failed along with an aggregate error; other files continue.
 func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts ...Option) (*Result, error) {
+	return syncWithLocalIO(ctx, bucket, prefix, localRoot, filepath.WalkDir, fileSHA1, opts...)
+}
+
+func syncWithLocalIO(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string,
+	walkDir func(string, fs.WalkDirFunc) error,
+	hashFile func(context.Context, string, os.FileInfo) (string, error), opts ...Option) (*Result, error) {
 	settings := options{concurrency: 4}
 	for _, opt := range opts {
 		opt(&settings)
@@ -188,7 +194,7 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 		}
 		result.Failed = append(result.Failed, FileError{Rel: filepath.ToSlash(rel), Err: failure})
 	}
-	err = filepath.WalkDir(resolvedRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = walkDir(resolvedRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -213,7 +219,7 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 		}
 		local := localFile{path: path, rel: filepath.ToSlash(rel), size: info.Size(), modTime: info.ModTime(), info: info}
 		if settings.compare == CompareSHA1 {
-			local.sha1, err = fileSHA1(ctx, path, info)
+			local.sha1, err = hashFile(ctx, path, info)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()

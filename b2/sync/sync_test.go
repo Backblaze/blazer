@@ -19,13 +19,16 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	stdsync "sync"
@@ -293,6 +296,113 @@ func TestSyncContinuesAfterMissingFile(t *testing.T) {
 	}
 	if got := fmt.Sprint(result.Uploaded); got != "[a.txt c.txt]" {
 		t.Fatalf("uploaded = %s", got)
+	}
+}
+
+func assertPartialSyncFailure(t *testing.T, result *Result, err error, failed, uploaded string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("Sync returned no aggregate error")
+	}
+	if result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != failed || result.Failed[0].Err == nil {
+		t.Fatalf("failed = %+v, want one failure for %s", result, failed)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != uploaded {
+		t.Fatalf("uploaded = %s, want %s", got, uploaded)
+	}
+}
+
+func TestSyncContinuesAfterWalkDirError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod 000 does not reliably deny directory reads on this platform/user")
+	}
+	bucket, _ := newSyncWire(t)
+	root := t.TempDir()
+	blocked := filepath.Join(root, "blocked")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "hidden.txt"), []byte("hidden"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "good.txt"), []byte("good"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+	if _, err := os.ReadDir(blocked); err == nil {
+		t.Skip("chmod 000 did not deny directory reads")
+	}
+	result, err := Sync(context.Background(), bucket, "p", root)
+	assertPartialSyncFailure(t, result, err, "blocked", "[good.txt]")
+	if !errors.Is(result.Failed[0].Err, fs.ErrPermission) {
+		t.Fatalf("walk error = %v, want permission error", result.Failed[0].Err)
+	}
+}
+
+type statAtVisitEntry struct {
+	fs.DirEntry
+	path string
+}
+
+func (e statAtVisitEntry) Info() (fs.FileInfo, error) { return os.Lstat(e.path) }
+
+func TestSyncContinuesAfterEntryInfoError(t *testing.T) {
+	bucket, _ := newSyncWire(t)
+	root := t.TempDir()
+	for _, name := range []string{"a-good.txt", "m-removed.txt", "z-good.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	walk := func(root string, visit fs.WalkDirFunc) error {
+		return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if filepath.Base(path) == "m-removed.txt" && walkErr == nil {
+				if err := os.Remove(path); err != nil {
+					return err
+				}
+				// DirEntry.Info may be cached by the OS. Force a live stat at
+				// the point where Sync inspects the now-removed file.
+				entry = statAtVisitEntry{DirEntry: entry, path: path}
+			}
+			return visit(path, entry, walkErr)
+		})
+	}
+	result, err := syncWithLocalIO(context.Background(), bucket, "p", root, walk, fileSHA1)
+	assertPartialSyncFailure(t, result, err, "m-removed.txt", "[a-good.txt z-good.txt]")
+	if !errors.Is(result.Failed[0].Err, fs.ErrNotExist) {
+		t.Fatalf("entry.Info error = %v, want not-exist error", result.Failed[0].Err)
+	}
+}
+
+type failingHashReader struct{ err error }
+
+func (r failingHashReader) Read(p []byte) (int, error) {
+	p[0] = 'x'
+	return 1, r.err
+}
+
+func TestSyncContinuesAfterSHA1ReadError(t *testing.T) {
+	bucket, _ := newSyncWire(t)
+	root := t.TempDir()
+	for _, name := range []string{"a-good.txt", "m-bad.txt", "z-good.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readErr := errors.New("simulated SHA1 read failure")
+	hashFile := func(ctx context.Context, path string, info os.FileInfo) (string, error) {
+		if filepath.Base(path) == "m-bad.txt" {
+			return hashReader(ctx, failingHashReader{err: readErr})
+		}
+		return fileSHA1(ctx, path, info)
+	}
+	result, err := syncWithLocalIO(context.Background(), bucket, "p", root, filepath.WalkDir, hashFile, WithCompare(CompareSHA1))
+	assertPartialSyncFailure(t, result, err, "m-bad.txt", "[a-good.txt z-good.txt]")
+	if !errors.Is(result.Failed[0].Err, readErr) {
+		t.Fatalf("SHA1 error = %v, want read failure", result.Failed[0].Err)
 	}
 }
 
