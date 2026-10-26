@@ -1197,9 +1197,73 @@ type LargeFile struct {
 	ID string
 	b2 *B2
 
-	mu     sync.Mutex
-	size   int64
-	hashes map[int]string
+	mu        sync.Mutex
+	size      int64
+	hashes    map[int]string
+	partSizes map[int]int64
+}
+
+// previousPartSize resolves an old part's size before replacing it. CompileParts
+// carries hashes and a total, but not individual sizes, so replacements of its
+// seeded parts require one list-parts lookup before the old part is overwritten.
+func (l *LargeFile) previousPartSize(ctx context.Context, number int) (int64, error) {
+	l.mu.Lock()
+	sha1, exists := l.hashes[number]
+	size, known := l.partSizes[number]
+	l.mu.Unlock()
+	if !exists || known {
+		return size, nil
+	}
+	parts, _, err := (&File{ID: l.ID, b2: l.b2}).ListParts(ctx, number, 1)
+	if err != nil {
+		return 0, err
+	}
+	if len(parts) != 1 || parts[0].Number != number || parts[0].SHA1 != sha1 || parts[0].Size <= 0 {
+		return 0, fmt.Errorf("b2: cannot determine prior size of large-file part %d", number)
+	}
+	l.mu.Lock()
+	if l.hashes[number] != sha1 {
+		l.mu.Unlock()
+		return 0, fmt.Errorf("b2: large-file part %d changed while resolving its size", number)
+	}
+	if l.partSizes == nil {
+		l.partSizes = make(map[int]int64)
+	}
+	l.partSizes[number] = parts[0].Size
+	l.mu.Unlock()
+	return parts[0].Size, nil
+}
+
+// copyPartSSE reserves the optional encryption argument for a later SSE-C API.
+type copyPartSSE struct{}
+
+// CopyPart copies a source file or byte range into a part of this large file.
+func (l *LargeFile) CopyPart(ctx context.Context, sourceFileID string, partNumber int, byteRange string, _ *copyPartSSE) (*FilePart, error) {
+	previousSize, err := l.previousPartSize(ctx, partNumber)
+	if err != nil {
+		return nil, err
+	}
+	req := &b2types.CopyPartRequest{SourceFileID: sourceFileID, LargeFileID: l.ID, PartNumber: partNumber, Range: byteRange}
+	resp := &b2types.CopyPartResponse{}
+	headers := map[string]string{"Authorization": l.b2.authToken}
+	if err := l.b2.opts.makeRequest(ctx, "b2_copy_part", "POST", l.b2.apiURI+b2types.V4api+"b2_copy_part", req, resp, headers, nil); err != nil {
+		return nil, err
+	}
+	if resp.FileID != l.ID || resp.PartNumber != partNumber || resp.Size <= 0 || resp.Size > 5e9 || resp.SHA1 == "" {
+		return nil, fmt.Errorf("b2_copy_part: inconsistent response for file %q part %d", l.ID, partNumber)
+	}
+	l.mu.Lock()
+	if known, ok := l.partSizes[partNumber]; ok {
+		previousSize = known
+	}
+	l.hashes[partNumber] = resp.SHA1
+	if l.partSizes == nil {
+		l.partSizes = make(map[int]int64)
+	}
+	l.partSizes[partNumber] = resp.Size
+	l.size += resp.Size - previousSize
+	l.mu.Unlock()
+	return &FilePart{Number: resp.PartNumber, SHA1: resp.SHA1, Size: resp.Size}, nil
 }
 
 // StartLargeFile wraps b2_start_large_file. At most one FileLock may be given;
@@ -1233,9 +1297,10 @@ func (b *Bucket) StartLargeFileWithSSEC(ctx context.Context, name, contentType s
 		return nil, err
 	}
 	return &LargeFile{
-		ID:     b2resp.ID,
-		b2:     b.b2,
-		hashes: make(map[int]string),
+		ID:        b2resp.ID,
+		b2:        b.b2,
+		hashes:    make(map[int]string),
+		partSizes: make(map[int]int64),
 	}, nil
 }
 
@@ -1291,10 +1356,11 @@ func (f *File) CompileParts(size int64, seen map[int]string) *LargeFile {
 		s[k] = v
 	}
 	return &LargeFile{
-		ID:     f.ID,
-		b2:     f.b2,
-		size:   size,
-		hashes: s,
+		ID:        f.ID,
+		b2:        f.b2,
+		size:      size,
+		hashes:    s,
+		partSizes: make(map[int]int64),
 	}
 }
 
@@ -1352,6 +1418,10 @@ func (fc *FileChunk) UploadPart(ctx context.Context, r io.Reader, sha1 string, s
 // UploadPartWithSSEC wraps b2_upload_part and repeats the SSE-C headers selected
 // by b2_start_large_file.
 func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 string, size, index int, sse *b2types.ServerSideEncryption) (int, error) {
+	previousSize, err := fc.file.previousPartSize(ctx, index)
+	if err != nil {
+		return 0, err
+	}
 	headers := map[string]string{
 		"Authorization":     fc.token,
 		"X-Bz-Part-Number":  fmt.Sprintf("%d", index),
@@ -1368,11 +1438,18 @@ func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 s
 		return 0, err
 	}
 	fc.file.mu.Lock()
+	if known, ok := fc.file.partSizes[index]; ok {
+		previousSize = known
+	}
 	if sha1 == "hex_digits_at_end" {
 		sha1 = string(r.(*keepFinalBytes).sha[:])
 	}
 	fc.file.hashes[index] = sha1
-	fc.file.size += int64(size)
+	if fc.file.partSizes == nil {
+		fc.file.partSizes = make(map[int]int64)
+	}
+	fc.file.partSizes[index] = int64(size)
+	fc.file.size += int64(size) - previousSize
 	fc.file.mu.Unlock()
 	return size, nil
 }
@@ -1832,8 +1909,10 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 // AsLargeFile return a LargeFile with the same fields as this File
 func (f *File) AsLargeFile() *LargeFile {
 	return &LargeFile{
-		ID: f.ID,
-		b2: f.b2,
+		ID:        f.ID,
+		b2:        f.b2,
+		hashes:    make(map[int]string),
+		partSizes: make(map[int]int64),
 	}
 }
 

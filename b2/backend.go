@@ -110,6 +110,7 @@ type beFile struct {
 type beLargeFileInterface interface {
 	finishLargeFile(context.Context) (beFileInterface, error)
 	getUploadPartURL(context.Context) (beFileChunkInterface, error)
+	copyPart(context.Context, string, int, string) (beFilePartInterface, error)
 	cancel(context.Context) error
 }
 
@@ -819,6 +820,25 @@ func (b *beLargeFile) getUploadPartURL(ctx context.Context) (beFileChunkInterfac
 		return nil, err
 	}
 	return chunk, nil
+}
+
+func (b *beLargeFile) copyPart(ctx context.Context, sourceFileID string, partNumber int, byteRange string) (beFilePartInterface, error) {
+	var part beFilePartInterface
+	f := func() error {
+		g := func() error {
+			copied, err := b.b2largeFile.copyPart(ctx, sourceFileID, partNumber, byteRange)
+			if err != nil {
+				return err
+			}
+			part = &beFilePart{b2filePart: copied, ri: b.ri}
+			return nil
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return part, nil
 }
 
 func (b *beLargeFile) finishLargeFile(ctx context.Context) (beFileInterface, error) {

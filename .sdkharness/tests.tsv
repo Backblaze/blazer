@@ -19,6 +19,7 @@ conformance	files.upload	simulator	./.sdkharness/tests/run-conformance
 conformance	keys.crud	simulator	./.sdkharness/tests/run-conformance
 conformance	keys.multi_bucket	simulator	./.sdkharness/tests/run-conformance
 conformance	large.concurrent_parts	simulator	./.sdkharness/tests/run-conformance
+conformance	large.compose_mixed	simulator	./.sdkharness/tests/run-conformance
 conformance	large.multipart	simulator	./.sdkharness/tests/run-conformance
 conformance	large.parallel_download	simulator	./.sdkharness/tests/run-conformance
 conformance	large.resume	simulator	./.sdkharness/tests/run-conformance

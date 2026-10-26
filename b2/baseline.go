@@ -90,6 +90,7 @@ type b2FileInterface interface {
 type b2LargeFileInterface interface {
 	finishLargeFile(context.Context) (b2FileInterface, error)
 	getUploadPartURL(context.Context) (b2FileChunkInterface, error)
+	copyPart(context.Context, string, int, string) (b2FilePartInterface, error)
 	cancel(context.Context) error
 }
 
@@ -779,6 +780,14 @@ func (b *b2LargeFile) getUploadPartURL(ctx context.Context) (b2FileChunkInterfac
 		return nil, err
 	}
 	return &b2FileChunk{b: c, encryption: b.encryption}, nil
+}
+
+func (b *b2LargeFile) copyPart(ctx context.Context, sourceFileID string, partNumber int, byteRange string) (b2FilePartInterface, error) {
+	part, err := b.b.CopyPart(ctx, sourceFileID, partNumber, byteRange, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &b2FilePart{part}, nil
 }
 
 func (b *b2LargeFile) cancel(ctx context.Context) error {
