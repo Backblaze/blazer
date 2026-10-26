@@ -723,13 +723,14 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Reader{
-		ctx:    ctx,
-		cancel: cancel,
-		o:      o,
-		name:   o.name,
-		chunks: make(map[int]*rchunk),
-		length: length,
-		offset: offset,
+		ctx:     ctx,
+		cancel:  cancel,
+		o:       o,
+		name:    o.name,
+		chunks:  make(map[int]*rchunk),
+		length:  length,
+		bounded: length >= 0,
+		offset:  offset,
 	}
 }
 

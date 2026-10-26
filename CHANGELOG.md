@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Concurrent bounded reads stop allocating download chunks when the requested range is exhausted, rather than requesting data past its end.
 - Exact-boundary ranged reads now mark a chunk whose size equals the remaining requested length as final. The shared remaining-length accounting is kept under the reader mutex.
 
 ## [0.9.0] - 2026-10-22

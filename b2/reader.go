@@ -54,6 +54,7 @@ type Reader struct {
 	name       string
 	offset     int64 // the start of the file
 	length     int64 // the length to read, or -1
+	bounded    bool  // distinguishes an exhausted range from an unbounded read
 	csize      int   // chunk size
 	read       int   // amount read
 	chwid      int   // chunks written
@@ -124,11 +125,15 @@ func (r *Reader) thread() {
 				return
 			}
 			r.rmux.Lock()
+			if r.bounded && r.length == 0 {
+				r.rmux.Unlock()
+				return
+			}
 			chunkID := r.chwid
 			r.chwid++
 			offset := int64(chunkID*r.csize) + r.offset
 			size := int64(r.csize)
-			if r.length > 0 {
+			if r.bounded {
 				if size >= r.length {
 					buf.final = true
 					size = r.length
@@ -250,6 +255,9 @@ func (r *Reader) initFunc() {
 func (r *Reader) Read(p []byte) (int, error) {
 	if err := r.getErr(); err != nil {
 		return 0, err
+	}
+	if r.bounded && r.length == 0 && r.chbuf == nil {
+		return 0, io.EOF
 	}
 	r.init.Do(r.initFunc)
 	chunk, err := r.curChunk()

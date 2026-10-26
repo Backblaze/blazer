@@ -315,6 +315,7 @@ type testBucket struct {
 	fileLockEnabled        bool
 	replicationConfig      *ReplicationConfiguration
 	notificationRulesValue []NotificationRule
+	downloadOffsets        []int64
 }
 
 func (t *testBucket) name() string  { return t.n }
@@ -396,6 +397,7 @@ func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, co
 func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool) (b2FileReaderInterface, error) {
 	gmux.Lock()
 	defer gmux.Unlock()
+	t.downloadOffsets = append(t.downloadOffsets, offset)
 	f := t.files[name]
 	end := int(offset + size)
 	if end >= len(f) {
@@ -1487,6 +1489,10 @@ func TestReadRangeReturnsRight(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Error(err)
 	}
+	requests := bucket.b.(*beBucket).b2bucket.(*testBucket)
+	gmux.Lock()
+	requests.downloadOffsets = nil
+	gmux.Unlock()
 
 	// Exact multiples of ChunkSize must still mark the final requested chunk.
 	// With more than one worker, the remaining-length calculation is shared.
@@ -1499,6 +1505,61 @@ func TestReadRangeReturnsRight(t *testing.T) {
 	}
 	if i != 2000 {
 		t.Errorf("parallel NewRangeReader(_, 200, 2000): want 2000, got %d", i)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
+	gmux.Lock()
+	offsets := append([]int64(nil), requests.downloadOffsets...)
+	gmux.Unlock()
+	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+	if want := []int64{200, 1200}; !reflect.DeepEqual(offsets, want) {
+		t.Errorf("parallel bounded download offsets = %v, want %v", offsets, want)
+	}
+
+	gmux.Lock()
+	requests.downloadOffsets = nil
+	gmux.Unlock()
+	r = obj.NewRangeReader(ctx, 200, 1500)
+	r.ChunkSize = 1000
+	r.ConcurrentDownloads = 2
+	i, err = io.Copy(ioutil.Discard, r)
+	if err != nil || i != 1500 {
+		t.Errorf("non-boundary range: read %d bytes, error %v; want 1500, nil", i, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
+	gmux.Lock()
+	offsets = append([]int64(nil), requests.downloadOffsets...)
+	gmux.Unlock()
+	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+	if want := []int64{200, 1200}; !reflect.DeepEqual(offsets, want) {
+		t.Errorf("non-boundary download offsets = %v, want %v", offsets, want)
+	}
+
+	r = obj.NewRangeReader(ctx, 200, 0)
+	r.ConcurrentDownloads = 2
+	i, err = io.Copy(ioutil.Discard, r)
+	if err != nil || i != 0 {
+		t.Errorf("zero-length range: read %d bytes, error %v; want 0, nil", i, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
+	gmux.Lock()
+	if len(requests.downloadOffsets) != 2 {
+		t.Errorf("zero-length range changed download requests: %v", requests.downloadOffsets)
+	}
+	requests.downloadOffsets = nil
+	gmux.Unlock()
+
+	r = obj.NewReader(ctx)
+	r.ChunkSize = 1000
+	r.ConcurrentDownloads = 2
+	i, err = io.Copy(ioutil.Discard, r)
+	if err != nil || i != 1e6+42 {
+		t.Errorf("unbounded reader: read %d bytes, error %v; want %d, nil", i, err, int64(1e6+42))
 	}
 	if err := r.Close(); err != nil {
 		t.Error(err)
