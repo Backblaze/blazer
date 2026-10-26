@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Unreleased entries live in [`.changes/unreleased/`](.changes/unreleased/) until the next release. Add one with `changie new` (see [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries)).
+
 ## [0.9.0] - 2026-10-22
 
 ### Added
@@ -49,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uploads fetch a new upload URL after a connection-level failure (a reset or a stall), as B2's Integration Checklist asks, instead of retrying the broken one. An HTTP response such as 429 or 503 with `Retry-After` still waits as told and retries the same URL.
 - A `Reader` gives up on a chunk that keeps arriving truncated after 21 attempts (the first plus the 20 retries allowed for any download), with an error that wraps `io.ErrUnexpectedEOF`. It used to retry forever, until the caller's context ended. The wait between attempts grows from 1 ms to a cap of about 16 s, so an interruption of around two minutes is still survived.
 
+[0.9.0]: https://github.com/Backblaze/blazer/compare/v0.8.0...v0.9.0
+
 ## [0.8.0] - 2026-09-15
 
 ### Changed
@@ -64,12 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `b2.DefaultServerSideEncryption()`, use `b2.SSEB2WithAES256()` instead.
 
+[0.8.0]: https://github.com/Backblaze/blazer/compare/v0.7.2...v0.8.0
+
 ## [0.7.2] - 2025-01-23
 
 ### Changed
 
 - Removed unused `bonfire` and `pyre` code, greatly reducing the number of dependencies and the amount of work required to keep them up to date.
 - Restructured the repository as a [Go workspace](https://go.dev/ref/mod#workspaces) and moved the sole remaining third-party dependency into `bin/b2keys`.
+
+[0.7.2]: https://github.com/Backblaze/blazer/compare/v0.7.1...v0.7.2
 
 ## [0.7.1] - 2024-10-07
 
@@ -80,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Bumped dependencies in response to dependabot alerts
+
+[0.7.1]: https://github.com/Backblaze/blazer/compare/v0.7.0...v0.7.1
 
 ## [0.7.0] - 2024-10-04
 
@@ -97,6 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Migrated to Backblaze B2 Native API v3 
 
+[0.7.0]: https://github.com/Backblaze/blazer/compare/v0.6.1...v0.7.0
+
 ## [0.6.1] - 2023-10-16
 
 ### Added
@@ -111,11 +123,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reference license report from README ([tzeejay](https://github.com/tzeejay))
 
+[0.6.1]: https://github.com/Backblaze/blazer/compare/v0.6.0...v0.6.1
+
 ## [0.6.0] - 2023-09-26
 
 Tagged initial version at https://github.com/Backblaze/blazer
 
-[unreleased]: https://github.com/Backblaze/blazer/compare/v0.9.0...HEAD
-[0.9.0]: https://github.com/Backblaze/blazer/compare/v0.8.0...v0.9.0
-[0.6.1]: https://github.com/Backblaze/blazer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Backblaze/blazer/compare/v0.5.3...v0.6.0

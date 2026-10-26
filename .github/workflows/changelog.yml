@@ -1,0 +1,27 @@
+name: Changelog
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    name: changelog
+    if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # The base branch is needed to find the fragments this PR adds.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache-dependency-path: '**/go.sum'
+      - run: make changelog-check
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
