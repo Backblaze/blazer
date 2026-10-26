@@ -1,0 +1,3 @@
+kind: Added
+body: '`b2.WithSSEB2("AES256")` requests SSE-B2 for one upload without changing the bucket default. Resumed uploads validate the existing encryption mode and algorithm; SSE-B2 and SSE-C writer options cannot be combined.'
+time: 2026-10-26T14:32:34.511552-05:00
