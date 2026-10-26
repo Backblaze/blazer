@@ -79,8 +79,11 @@ Each line was raised by a reviewer on at least two PRs.
   [`intent/README.md`](intent/README.md). Bug fixes with a linked issue may skip straight to a failing test.
 - Bug fixes: commit the failing regression test first, then the fix, without editing the test.
 - Skills in `.claude/skills/` (`ai-native-sdlc` routes to the right one).
-- Review: [REVIEW.md](REVIEW.md). Agents never approve or merge their own PRs; a code owner from
-  `.github/CODEOWNERS` approves.
+- Before opening a PR, review your own diff in a fresh context (`/code-review` and `/security-review`, or a
+  subagent that did not write the code) and fix or answer what it finds. Say in the PR what it reported.
+- Review: [REVIEW.md](REVIEW.md). Every finding gets fixed or resolved with a reason. Agents never approve
+  or merge their own PRs; a code owner from `.github/CODEOWNERS` approves.
+- The person directing an agent owns its PR: they count as one of its reviewers and fix what it breaks.
 - Stacked PRs: state the base PR and merge order in the description; retarget to `main` after it merges.
 - Releases: [RELEASE.md](RELEASE.md). Security reports: [SECURITY.md](SECURITY.md).
 

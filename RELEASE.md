@@ -13,8 +13,8 @@ Every release since v0.7.0 (for example v0.9.0, `4ebbb6d`) changed exactly these
 | `base/base.go` | `DefaultUserAgent = "blazer/X.Y.Z"` (sent on every request) | `changie merge` (replacement in `.changie.yaml`) |
 | `bin/b2keys/go.mod` | `require github.com/Backblaze/blazer vX.Y.Z` | `changie merge` (replacement in `.changie.yaml`) |
 
-Past releases were pushed straight to `main`. Branch protection now requires the `ci-summary` check, so
-the release commit goes through a PR.
+Past releases were pushed straight to `main`. From now on the release commit goes through a PR like any
+other change, so CI and a code owner see it before it is tagged.
 
 ## Versioning
 
@@ -37,7 +37,8 @@ pass an explicit version to `changie batch` to override it.
 4. Check the diff touches exactly the three files above plus `.changes/`. Edit `.changes/vX.Y.Z.md` for
    readability if needed and run `merge` again. Run `make ci`.
 5. Commit as `Version X.Y.Z` and open a PR with the changelog section as its body. A code owner approves.
-6. After it merges, tag the merge commit on `main` with an annotated tag and push it:
+6. After it merges (`main` requires linear history, so squash or rebase), tag that commit on `main`
+   with an annotated tag and push it:
 
    ```bash
    git switch main && git pull --ff-only
