@@ -696,3 +696,313 @@ func TestCreateBucketReturnsReplicationConfiguration(t *testing.T) {
 		t.Fatalf("create replication readback = status %d value %#v", resp.StatusCode, body.ReplicationConfiguration.Value)
 	}
 }
+
+type seekableSource struct {
+	io.ReadSeeker
+	io.ReaderAt
+}
+
+func TestReadFromMultipartTrailingSHA1(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "read-from", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("read-from multipart!"), 750000) // 15 MB
+	obj := bucket.Object("large.bin")
+	w := obj.NewWriter(ctx)
+	w.ChunkSize = 5_000_000
+	source := bytes.NewReader(payload)
+	n, err := io.Copy(w, seekableSource{source, source})
+	if err != nil || n != int64(len(payload)) {
+		t.Fatalf("ReadFrom copied %d: %v", n, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readObject(ctx, obj, 0, -1)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("ReadFrom round-trip len=%d: %v", len(got), err)
+	}
+	if sim.Calls()["b2_upload_part"] < 2 {
+		t.Fatal("multipart part path was not exercised")
+	}
+}
+
+func TestListBucketsFiltersTypes(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.NewBucket(ctx, "private", &b2.BucketAttrs{Type: b2.Private}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.NewBucket(ctx, "public", &b2.BucketAttrs{Type: b2.Public}); err != nil {
+		t.Fatal(err)
+	}
+	buckets, err := client.ListBuckets(ctx, "allPublic")
+	if err != nil || len(buckets) != 1 || buckets[0].Name() != "public" {
+		t.Fatalf("public buckets = %v, %v", buckets, err)
+	}
+}
+
+func TestDeleteBucketRejectsUnfinishedLargeFile(t *testing.T) {
+	sim := New()
+	bucketID := sim.Seed("unfinished")
+	start := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": bucketID, "fileName": "large.bin", "contentType": "application/octet-stream"})
+	var body struct {
+		FileID string `json:"fileId"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if err := start.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp := postSimulatorJSON(t, sim, "b2_delete_bucket", map[string]any{"bucketId": bucketID})
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("delete with unfinished upload = %d, want 400", resp.StatusCode)
+	}
+	resp = postSimulatorJSON(t, sim, "b2_cancel_large_file", map[string]any{"fileId": body.FileID})
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp = postSimulatorJSON(t, sim, "b2_delete_bucket", map[string]any{"bucketId": bucketID})
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete after cancel = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestUploadInfoPreservesLastModified(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "metadata", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.UnixMilli(1_700_000_000_123)
+	w := bucket.Object("file").NewWriter(ctx, b2.WithAttrsOption(&b2.Attrs{LastModified: mtime}))
+	if _, err := w.Write([]byte("content")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := bucket.Object("file").Attrs(ctx)
+	if err != nil || !attrs.LastModified.Equal(mtime) {
+		t.Fatalf("LastModified = %v, %v; want %v", attrs.LastModified, err, mtime)
+	}
+}
+
+func TestDelimiterGroupsAcrossPages(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "folders", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a/one", "a/two", "b/one", "b/two", "root.txt", "z.txt"} {
+		if _, err := writeObject(ctx, bucket, name, []byte(name), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	iter := bucket.List(ctx, b2.ListDelimiter("/"), b2.ListPageSize(1))
+	var names []string
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a/", "b/", "root.txt", "z.txt"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("grouped names = %v, want %v", names, want)
+	}
+	iter = bucket.List(ctx, b2.ListPrefix("a/"), b2.ListDelimiter("/"), b2.ListPageSize(1))
+	names = nil
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a/one", "a/two"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("prefix + delimiter names = %v, want %v", names, want)
+	}
+	resp := postSimulatorJSON(t, sim, "b2_list_file_names", map[string]any{"bucketId": bucket.ID(), "delimiter": "/", "maxFileCount": 1})
+	var page struct {
+		Files []struct {
+			Name   string `json:"fileName"`
+			Action string `json:"action"`
+		} `json:"files"`
+		Next string `json:"nextFileName"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Files) != 1 || page.Files[0].Name != "a/" || page.Files[0].Action != "folder" || page.Next != "b/" {
+		t.Fatalf("first grouped wire page = %+v", page)
+	}
+}
+
+func TestFinishOrderMatchesListingAndDownload(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "order", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": bucket.ID(), "fileName": "same", "contentType": "application/octet-stream"})
+	var started struct {
+		FileID string `json:"fileId"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if err := start.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeObject(ctx, bucket, "same", []byte("simple"), 0); err != nil {
+		t.Fatal(err)
+	}
+	part := []byte("large")
+	req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+started.FileID, bytes.NewReader(part))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "b2sim-token")
+	req.Header.Set("X-Bz-Part-Number", "1")
+	req.Header.Set("X-Bz-Content-Sha1", digest(part))
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("part status = %d", resp.StatusCode)
+	}
+	resp = postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": started.FileID, "partSha1Array": []string{digest(part)}})
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("finish status = %d", resp.StatusCode)
+	}
+	iter := bucket.List(ctx)
+	if !iter.Next() {
+		t.Fatalf("list: %v", iter.Err())
+	}
+	if iter.Object().ID() != started.FileID {
+		t.Fatalf("listed version = %s, want %s", iter.Object().ID(), started.FileID)
+	}
+	got, err := readObject(ctx, bucket.Object("same"), 0, -1)
+	if err != nil || string(got) != "large" {
+		t.Fatalf("downloaded %q, %v; want large", got, err)
+	}
+}
+
+func TestDownloadInfoHeadersAreEscaped(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "info-header", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := bucket.Object("file")
+	w := obj.NewWriter(ctx, b2.WithAttrsOption(&b2.Attrs{Info: map[string]string{"tag": "a+b 100%"}}))
+	if _, err := w.Write([]byte("content")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readObject(ctx, obj, 0, -1)
+	if err != nil || string(got) != "content" {
+		t.Fatalf("download = %q, %v", got, err)
+	}
+	// The header itself must be encoded so the real client's decoder recovers the exact value.
+	req, err := http.NewRequest(http.MethodGet, origin+"/file/info-header/file", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "b2sim-token")
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if value := resp.Header.Get("X-Bz-Info-tag"); value != "a%2Bb+100%25" {
+		t.Fatalf("encoded info header = %q", value)
+	}
+}
+
+func TestPartTrailingDigestRejectsInvalid(t *testing.T) {
+	sim := New()
+	bucketID := sim.Seed("bad-digest")
+	start := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": bucketID, "fileName": "large", "contentType": "application/octet-stream"})
+	var body struct {
+		FileID string `json:"fileId"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if err := start.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, trailer := range []string{"not-hex", strings.Repeat("0", 40)} {
+		req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+body.FileID, bytes.NewReader(append([]byte("part"), []byte(trailer)...)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "b2sim-token")
+		req.Header.Set("X-Bz-Part-Number", "1")
+		req.Header.Set("X-Bz-Content-Sha1", "hex_digits_at_end")
+		resp, err := sim.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != 400 {
+			t.Errorf("invalid trailer %q status = %d, want 400", trailer, resp.StatusCode)
+		}
+	}
+}

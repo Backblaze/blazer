@@ -182,6 +182,20 @@ func digest(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func verifiedUpload(data []byte, supplied string) ([]byte, string, bool) {
+	if supplied == "hex_digits_at_end" {
+		if len(data) < 40 {
+			return nil, "", false
+		}
+		supplied = string(data[len(data)-40:])
+		data = data[:len(data)-40]
+		if _, err := hex.DecodeString(supplied); err != nil {
+			return nil, "", false
+		}
+	}
+	return data, supplied, supplied == digest(data)
+}
+
 func (b *bucket) response() map[string]any {
 	return map[string]any{
 		"bucketId": b.id, "bucketName": b.name, "bucketType": b.kind,
@@ -323,6 +337,18 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 			if filter := str(args["bucketName"]); filter != "" && filter != b.name {
 				continue
 			}
+			if types, ok := args["bucketTypes"].([]any); ok && len(types) > 0 {
+				matched := false
+				for _, kind := range types {
+					if str(kind) == b.kind {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
 			result = append(result, b.response())
 		}
 		sort.Slice(result, func(i, j int) bool {
@@ -370,6 +396,11 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		if len(b.versions) != 0 {
 			return failure(req, 400, "bad_request", "bucket is not empty")
+		}
+		for _, upload := range s.large {
+			if upload.file.bucketID == b.id {
+				return failure(req, 400, "bad_request", "bucket has unfinished large files")
+			}
 		}
 		delete(s.buckets, b.id)
 		return reply(req, 200, map[string]any{"bucketId": b.id})
@@ -453,12 +484,8 @@ func (s *Simulator) upload(req *http.Request, bucketID string, data []byte) (*ht
 	if err != nil || name == "" {
 		return failure(req, 400, "bad_request", "invalid file name")
 	}
-	sha := req.Header.Get("X-Bz-Content-Sha1")
-	if sha == "hex_digits_at_end" && len(data) >= 40 {
-		sha = string(data[len(data)-40:])
-		data = data[:len(data)-40]
-	}
-	if sha != digest(data) {
+	data, sha, valid := verifiedUpload(data, req.Header.Get("X-Bz-Content-Sha1"))
+	if !valid {
 		return failure(req, 400, "bad_request", "content SHA1 mismatch")
 	}
 	info := make(map[string]string)
@@ -468,7 +495,7 @@ func (s *Simulator) upload(req *http.Request, bucketID string, data []byte) (*ht
 			if err != nil {
 				return failure(req, 400, "bad_request", "invalid file info")
 			}
-			info[strings.TrimPrefix(key, "X-Bz-Info-")] = value
+			info[strings.ToLower(strings.TrimPrefix(key, "X-Bz-Info-"))] = value
 		}
 	}
 	fileSSE := b.sse
@@ -505,8 +532,8 @@ func (s *Simulator) uploadPart(req *http.Request, id string, data []byte) (*http
 	if err != nil || part < 1 {
 		return failure(req, 400, "bad_request", "invalid part number")
 	}
-	sha := req.Header.Get("X-Bz-Content-Sha1")
-	if sha != digest(data) {
+	data, sha, valid := verifiedUpload(data, req.Header.Get("X-Bz-Content-Sha1"))
+	if !valid {
 		return failure(req, 400, "bad_request", "part SHA1 mismatch")
 	}
 	l.parts[part] = append([]byte(nil), data...)
@@ -536,7 +563,13 @@ func (s *Simulator) finish(req *http.Request, args map[string]any) (*http.Respon
 	f.data = data
 	f.action = "upload"
 	f.stamp = time.Now().UnixMilli()
-	s.buckets[f.bucketID].versions = append(s.buckets[f.bucketID].versions, f)
+	b := s.buckets[f.bucketID]
+	if b == nil {
+		return failure(req, 404, "not_found", "bucket not found")
+	}
+	s.next++
+	f.order = s.next
+	b.versions = append(b.versions, f)
 	delete(s.large, id)
 	return reply(req, 200, f.response())
 }
@@ -555,7 +588,9 @@ func (s *Simulator) list(req *http.Request, method string, args map[string]any) 
 	})
 	result := make([]any, 0)
 	seen := make(map[string]bool)
+	seenFolders := make(map[string]bool)
 	startName, startID := str(args["startFileName"]), str(args["startFileId"])
+	prefix, delimiter := str(args["prefix"]), str(args["delimiter"])
 	started := startID == ""
 	for _, f := range versions {
 		if f.name < startName {
@@ -573,8 +608,22 @@ func (s *Simulator) list(req *http.Request, method string, args map[string]any) 
 			}
 			seen[f.name] = true
 		}
-		if prefix := str(args["prefix"]); prefix != "" && !strings.HasPrefix(f.name, prefix) {
+		if prefix != "" && !strings.HasPrefix(f.name, prefix) {
 			continue
+		}
+		if delimiter != "" {
+			if at := strings.Index(strings.TrimPrefix(f.name, prefix), delimiter); at >= 0 {
+				folderName := f.name[:len(prefix)+at+len(delimiter)]
+				if seenFolders[folderName] {
+					continue
+				}
+				seenFolders[folderName] = true
+				folder := *f
+				folder.name, folder.id, folder.action = folderName, "folder:"+folderName, "folder"
+				folder.data, folder.sha, folder.info = nil, "none", nil
+				result = append(result, folder.response())
+				continue
+			}
 		}
 		result = append(result, f.response())
 	}
@@ -655,7 +704,7 @@ func (s *Simulator) download(req *http.Request) (*http.Response, error) {
 	header.Set("X-Bz-File-Name", f.name)
 	header.Set("Content-Type", f.contentType)
 	for k, v := range f.info {
-		header.Set("X-Bz-Info-"+k, v)
+		header.Set("X-Bz-Info-"+url.QueryEscape(k), url.QueryEscape(v))
 	}
 	return rawReply(req, status, data, header), nil
 }
