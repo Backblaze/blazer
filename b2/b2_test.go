@@ -73,6 +73,41 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 	}
 }
 
+func TestNewBucketReplicationConfig(t *testing.T) {
+	ctx := context.Background()
+	want := &ReplicationConfiguration{
+		AsReplicationSource: AsReplicationSource{
+			SourceApplicationKeyID: "source-key",
+			ReplicationRules: []ReplicationRules{{
+				ReplicationRuleName:  "rule",
+				DestinationBucketID:  "destination-bucket-id",
+				FileNamePrefix:       "prefix/",
+				IncludeExistingFiles: true,
+				IsEnabled:            true,
+				Priority:             1,
+			}},
+		},
+		AsReplicationDestination: &AsReplicationDestination{
+			SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"},
+		},
+	}
+	client := &Client{backend: &beRoot{b2i: &testRoot{
+		bucketMap: make(map[string]map[string]string),
+		errs:      &errCont{},
+	}}}
+	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private, ReplicationConfig: want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := bucket.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.ReplicationConfig, want) {
+		t.Errorf("Bucket.Attrs().ReplicationConfig = %#v, want %#v", got.ReplicationConfig, want)
+	}
+}
+
 func TestBucketID(t *testing.T) {
 	b := &Bucket{b: &beBucket{b2bucket: &testBucket{idv: "bucket-id"}}}
 	if got := b.ID(); got != "bucket-id" {
@@ -149,8 +184,9 @@ func (a *testAfter) count() int {
 }
 
 type testBucketSettings struct {
-	corsRules       []CORSRule
-	fileLockEnabled bool
+	corsRules         []CORSRule
+	fileLockEnabled   bool
+	replicationConfig *ReplicationConfiguration
 }
 
 func (t *testRoot) authorizeAccount(context.Context, string, string, clientOptions) error {
@@ -231,7 +267,7 @@ func (t *testRoot) listKeys(context.Context, int, string) ([]b2KeyInterface, str
 	return nil, "", nil
 }
 
-func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule, _ *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (b2BucketInterface, error) {
+func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]string, _ []LifecycleRule, _ *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (b2BucketInterface, error) {
 	if err := t.errs.getError("createBucket"); err != nil {
 		return nil, err
 	}
@@ -243,14 +279,15 @@ func (t *testRoot) createBucket(_ context.Context, name, _ string, _ map[string]
 	if t.bucketSettings == nil {
 		t.bucketSettings = make(map[string]testBucketSettings)
 	}
-	st := testBucketSettings{corsRules: append([]CORSRule(nil), corsRules...), fileLockEnabled: fileLockEnabled}
+	st := testBucketSettings{corsRules: append([]CORSRule(nil), corsRules...), fileLockEnabled: fileLockEnabled, replicationConfig: replicationConfig}
 	t.bucketSettings[name] = st
 	return &testBucket{
-		n:               name,
-		errs:            t.errs,
-		files:           m,
-		corsRules:       st.corsRules,
-		fileLockEnabled: st.fileLockEnabled,
+		n:                 name,
+		errs:              t.errs,
+		files:             m,
+		corsRules:         st.corsRules,
+		fileLockEnabled:   st.fileLockEnabled,
+		replicationConfig: st.replicationConfig,
 	}, nil
 }
 
@@ -258,11 +295,12 @@ func (t *testRoot) listBuckets(context.Context, string, ...string) ([]b2BucketIn
 	var b []b2BucketInterface
 	for k, v := range t.bucketMap {
 		b = append(b, &testBucket{
-			n:               k,
-			errs:            t.errs,
-			files:           v,
-			corsRules:       t.bucketSettings[k].corsRules,
-			fileLockEnabled: t.bucketSettings[k].fileLockEnabled,
+			n:                 k,
+			errs:              t.errs,
+			files:             v,
+			corsRules:         t.bucketSettings[k].corsRules,
+			fileLockEnabled:   t.bucketSettings[k].fileLockEnabled,
+			replicationConfig: t.bucketSettings[k].replicationConfig,
 		})
 	}
 	return b, nil
@@ -275,13 +313,14 @@ type testBucket struct {
 	files                  map[string]string
 	corsRules              []CORSRule
 	fileLockEnabled        bool
+	replicationConfig      *ReplicationConfiguration
 	notificationRulesValue []NotificationRule
 }
 
 func (t *testBucket) name() string  { return t.n }
 func (t *testBucket) btype() string { return "allPrivate" }
 func (t *testBucket) attrs() *BucketAttrs {
-	return &BucketAttrs{CORSRules: t.corsRules, FileLockEnabled: t.fileLockEnabled}
+	return &BucketAttrs{CORSRules: t.corsRules, FileLockEnabled: t.fileLockEnabled, ReplicationConfig: t.replicationConfig}
 }
 func (t *testBucket) deleteBucket(context.Context) error               { return nil }
 func (t *testBucket) updateBucket(context.Context, *BucketAttrs) error { return nil }
