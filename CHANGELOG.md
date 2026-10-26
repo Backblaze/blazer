@@ -10,7 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `(*b2.Bucket).Compose` builds a large file from ordered uploaded and server-side copied parts, using `b2_copy_part`. It validates part sizes and copy ranges before starting, rejects overlapping ranges from the same source, and cancels an unfinished file if a part fails, even after caller cancellation.
+- Per-request SSE-C keys for uploads, downloads, metadata lookup, and server-side copies. Large-file uploads send the key on the start request and every part; keys cannot be configured as client writer defaults. Keyed resume refuses an unfinished upload when its encryption mode or key digest cannot be verified.
 - `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
+
+### Fixed
+
+- Exact-boundary ranged reads now mark a chunk whose size equals the remaining requested length as final. The shared remaining-length accounting is kept under the reader mutex.
 
 ## [0.9.0] - 2026-10-22
 
