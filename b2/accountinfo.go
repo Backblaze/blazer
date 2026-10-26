@@ -120,14 +120,8 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("account info: parent %q is not a directory", parent)
-	}
-	// Unix mode bits do not reflect access on Windows (directory privacy is
-	// governed by filesystem ACLs there, and Stat reports a synthetic 0777), so
-	// only enforce the private-parent requirement where the bits are meaningful.
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("account info: parent directory %q must have mode 0700", parent)
+	if err := checkPrivateAccountInfoParent(parent, info); err != nil {
+		return err
 	}
 	file, err := os.CreateTemp(parent, ".account-info-*")
 	if err != nil {
@@ -156,6 +150,19 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 		return closeErr
 	}
 	return renameReplace(file.Name(), a.path)
+}
+
+func checkPrivateAccountInfoParent(parent string, info os.FileInfo) error {
+	if !info.IsDir() {
+		return fmt.Errorf("account info: parent %q is not a directory", parent)
+	}
+	// Unix mode bits do not reflect access on Windows (directory privacy is
+	// governed by filesystem ACLs there, and Stat reports a synthetic 0777), so
+	// only enforce the private-parent requirement where the bits are meaningful.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("account info: parent directory %q must have mode 0700", parent)
+	}
+	return nil
 }
 
 // renameReplace atomically moves tmp onto dest. os.Rename replaces an existing
@@ -188,6 +195,20 @@ func renameReplace(tmp, dest string) error {
 func (a *AccountInfoFile) AuthData() (AuthData, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	parent := filepath.Dir(a.path)
+	parentInfo, err := os.Stat(parent)
+	if os.IsNotExist(err) {
+		a.err = nil
+		return AuthData{}, false
+	}
+	if err != nil {
+		a.err = err
+		return AuthData{}, false
+	}
+	if err := checkPrivateAccountInfoParent(parent, parentInfo); err != nil {
+		a.err = err
+		return AuthData{}, false
+	}
 	file, err := os.Open(a.path)
 	if os.IsNotExist(err) {
 		a.err = nil
@@ -196,6 +217,19 @@ func (a *AccountInfoFile) AuthData() (AuthData, bool) {
 	if err != nil {
 		a.err = err
 		return AuthData{}, false
+	}
+	if runtime.GOOS != "windows" {
+		info, statErr := file.Stat()
+		if statErr != nil {
+			_ = file.Close()
+			a.err = statErr
+			return AuthData{}, false
+		}
+		if info.Mode().Perm() != 0o600 {
+			_ = file.Close()
+			a.err = fmt.Errorf("account info: session file %q must have mode 0600", a.path)
+			return AuthData{}, false
+		}
 	}
 	// The session file is untrusted input. Read one byte beyond the maximum
 	// so even a growing or sparse file cannot make loading allocate without bound.

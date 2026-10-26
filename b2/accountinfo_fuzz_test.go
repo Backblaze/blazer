@@ -9,7 +9,10 @@ import (
 )
 
 func FuzzAccountInfoLoad(f *testing.F) {
-	path := filepath.Join(f.TempDir(), "account.json")
+	path := filepath.Join(f.TempDir(), "private", "account.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		f.Fatal(err)
+	}
 	for _, seed := range []string{"", "null", "{}", `{"AuthToken":"token","AllowedBuckets":["a","b"]}`, `{"AuthToken":`, strings.Repeat(" ", 1<<20) + "{}"} {
 		f.Add([]byte(seed))
 	}

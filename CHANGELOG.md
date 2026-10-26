@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `AccountInfoFile` rejects cached sessions read from non-private POSIX paths, incomplete sessions reauthorize and refresh the cache, and verbose authorization-response logging omits the response body entirely.
 - Verbose B2 wire logging redacts authorization tokens, newly created application keys, and SSE-C key fields; logs header names without values and omits malformed or failed response bodies and untrusted transport error text. This fixes credential exposure in logs (#149).
 - Large-file Writer uploads retain a replacement upload-part endpoint across later chunks; copied and uploaded part replacement safely retain the verified prior size across ambiguous responses. `File.AsLargeFile().CopyPart` no longer panics, and Compose stops buffering promptly when its context is canceled.
 - Download response lengths that cannot fit in the platform's `int` are rejected before conversion, including on 32-bit systems. Download-by-ID logging and free-form error details redact file IDs; HTTP status and B2 error codes remain available.

@@ -348,6 +348,10 @@ func logResponse(resp *http.Response, reply []byte) {
 		blog.V(2).Infof("<< b2_download_file_by_id status=%d [headers and body redacted]", resp.StatusCode)
 		return
 	}
+	if resp.Request != nil && resp.Request.Header.Get("X-Blazer-Method") == "b2_authorize_account" {
+		blog.V(2).Infof("<< b2_authorize_account status=%d [redacted]", resp.StatusCode)
+		return
+	}
 	var headers []string
 	for k := range resp.Header {
 		if resp.StatusCode >= 400 || sensitiveLogField(k) {

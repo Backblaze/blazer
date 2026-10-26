@@ -113,6 +113,90 @@ func TestAccountInfoFileRejectsPublicParent(t *testing.T) {
 	}
 }
 
+func TestAccountInfoFileRejectsUnsafeReadPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits are not authoritative on Windows")
+	}
+	for _, tc := range []struct {
+		name   string
+		mode   os.FileMode
+		parent bool
+	}{
+		{name: "public parent", mode: 0o777, parent: true},
+		{name: "public file", mode: 0o644},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newAccountInfoWire(t)
+			path := filepath.Join(t.TempDir(), "private", "account.json")
+			store := NewAccountInfoFile(path)
+			store.Set(sampleAuthData())
+			if err := store.Err(); err != nil {
+				t.Fatal(err)
+			}
+			target := path
+			if tc.parent {
+				target = filepath.Dir(path)
+			}
+			if err := os.Chmod(target, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := store.AuthData(); ok || store.Err() == nil {
+				t.Fatalf("unsafe cached session was trusted: ok=%t err=%v", ok, store.Err())
+			}
+			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err == nil {
+				t.Fatal("NewClient accepted unsafe cached session")
+			}
+			wire.mu.Lock()
+			calls := wire.authCalls
+			wire.mu.Unlock()
+			if calls != 0 {
+				t.Fatalf("authorize calls=%d, want fail-closed before network", calls)
+			}
+		})
+	}
+}
+
+func TestNewClientReauthorizesIncompleteSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		omit func(*AuthData)
+	}{
+		{"account ID", func(data *AuthData) { data.AccountID = "" }},
+		{"S3 URL", func(data *AuthData) { data.S3URL = "" }},
+		{"minimum part size", func(data *AuthData) { data.AbsMinPartSize = 0 }},
+		{"recommended part size", func(data *AuthData) { data.RecommendedPartSize = 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newAccountInfoWire(t)
+			path := filepath.Join(t.TempDir(), "private", "account.json")
+			store := NewAccountInfoFile(path)
+			incomplete := sampleAuthData()
+			tc.omit(&incomplete)
+			store.Set(incomplete)
+			if err := store.Err(); err != nil {
+				t.Fatal(err)
+			}
+			client, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire.mu.Lock()
+			calls := wire.authCalls
+			wire.mu.Unlock()
+			if calls != 1 {
+				t.Fatalf("authorize calls=%d, want 1", calls)
+			}
+			if _, err := client.ListBuckets(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got, ok := NewAccountInfoFile(path).AuthData()
+			if !ok || got.AccountID == "" || got.AuthToken != "token-1" || got.AbsMinPartSize <= 0 || got.RecommendedPartSize <= 0 {
+				t.Fatalf("replacement session=%+v ok=%t", got, ok)
+			}
+		})
+	}
+}
+
 func TestAccountInfoConcurrency(t *testing.T) {
 	stores := []AccountInfo{&InMemoryAccountInfo{}, NewAccountInfoFile(filepath.Join(t.TempDir(), "private", "account.json"))}
 	for _, store := range stores {

@@ -78,6 +78,12 @@ func TestAuthResponseLoggingRedactsSecrets(t *testing.T) {
 			{"nested field", "b2_authorize_account", `{"nested":{"authorizationToken":"nested-auth-secret"},"safe":"safe-marker"}`, "nested-auth-secret"},
 		} {
 			tc := tc
+			absent := []string{tc.secret, "response-header-secret", "cookie-secret", "unlabeled-response-secret"}
+			present := "safe-marker"
+			if tc.method == "b2_authorize_account" {
+				absent = append(absent, "safe-marker")
+				present = "[redacted]"
+			}
 			check(tc.name, func() {
 				options := &b2Options{transport: logRoundTrip(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{Request: req, StatusCode: 200, Status: "200 OK", Body: io.NopCloser(strings.NewReader(tc.body)), Header: http.Header{
@@ -88,7 +94,7 @@ func TestAuthResponseLoggingRedactsSecrets(t *testing.T) {
 				if err := options.makeRequest(context.Background(), tc.method, http.MethodPost, "https://example.invalid/b2api/v4/"+tc.method, nil, &decoded, map[string]string{"Authorization": "request-authorization-secret"}, nil); err != nil {
 					t.Fatal(err)
 				}
-			}, []string{tc.secret, "response-header-secret", "cookie-secret", "unlabeled-response-secret"}, "safe-marker")
+			}, absent, present)
 		}
 		request.Header.Set("X-Blazer-Method", "b2_authorize_account")
 		request.Header.Set("Authorization", "request-authorization-secret")
@@ -102,10 +108,10 @@ func TestAuthResponseLoggingRedactsSecrets(t *testing.T) {
 		}, []string{"request-authorization-secret", "request-header-secret", "request-md5-secret", "request-json-key-secret", "request-json-md5-secret", "unlabeled-request-secret", "url-user-secret", "url-password-secret", "query-secret"}, "benign-json-marker")
 		check("truncated response body", func() {
 			logResponse(&http.Response{Request: request, StatusCode: 200, Status: "200 OK", Header: make(http.Header)}, []byte(`{"authorizationToken":"truncated-secret","safe":"truncated-public-marker",`))
-		}, []string{"truncated-secret", "truncated-public-marker"}, "[unparseable JSON omitted]")
+		}, []string{"truncated-secret", "truncated-public-marker"}, "[redacted]")
 		check("untrusted status text", func() {
 			logResponse(&http.Response{Request: request, StatusCode: 200, Status: "200 status-text-secret", Header: make(http.Header)}, []byte(`{"safe":"safe-marker"}`))
-		}, []string{"status-text-secret"}, "safe-marker")
+		}, []string{"status-text-secret", "safe-marker"}, "[redacted]")
 		check("error response message and retry header", func() {
 			response := &http.Response{Request: request, StatusCode: 429, Status: "429 Too Many Requests", Header: http.Header{"Retry-After": {"retry-header-secret"}}, Body: io.NopCloser(strings.NewReader(`{"status":429,"code":"busy","message":"error-body-secret"}`))}
 			_ = mkErr(response)
