@@ -15,6 +15,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/json"
@@ -51,6 +52,7 @@ func TestShouldTransfer(t *testing.T) {
 		{"modtime equal to millisecond", CompareModTime, &baseDest, false},
 		{"modtime size differs", CompareModTime, &b2.Attrs{Size: 13, LastModified: baseDest.LastModified}, true},
 		{"modtime differs by millisecond", CompareModTime, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Millisecond)}, true},
+		{"newer cloud file still yields to local source", CompareModTime, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Hour)}, true},
 		{"size equal", CompareSize, &baseDest, false},
 		{"size differs", CompareSize, &b2.Attrs{Size: 13}, true},
 		{"none existing", CompareNone, &b2.Attrs{Size: 13}, false},
@@ -68,19 +70,55 @@ func TestShouldTransfer(t *testing.T) {
 	}
 }
 
+func TestSyncRejectsConflictingOptions(t *testing.T) {
+	bucket, _ := newSyncWire(t)
+	for _, test := range []struct {
+		name string
+		opts []Option
+	}{
+		{"comparison", []Option{WithCompare(CompareSize), WithCompare(CompareSHA1)}},
+		{"concurrency", []Option{WithConcurrency(1), WithConcurrency(2)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Sync(context.Background(), bucket, "p", t.TempDir(), test.opts...)
+			if err == nil || !strings.Contains(err.Error(), "conflicting") {
+				t.Fatalf("conflicting options error = %v", err)
+			}
+		})
+	}
+	if _, err := Sync(context.Background(), bucket, "p", t.TempDir(),
+		WithCompare(CompareSize), WithCompare(CompareSize), WithConcurrency(2), WithConcurrency(2)); err != nil {
+		t.Fatalf("identical repeated options rejected: %v", err)
+	}
+}
+
 type syncWire struct {
-	server   *httptest.Server
-	mu       stdsync.Mutex
-	files    map[string]map[string]interface{}
-	pending  map[string]interface{}
-	parts    int64
-	onUpload func(string)
+	server     *httptest.Server
+	mu         stdsync.Mutex
+	files      map[string]map[string]interface{}
+	pending    map[string]interface{}
+	parts      int64
+	failPart   bool
+	failCancel bool
+	cancels    int
+	onUpload   func(string)
+	requests   []syncRequest
+	uploads    []syncUpload
+}
+
+type syncRequest struct{ method, path string }
+type syncUpload struct {
+	method, path, name, auth, sha, mtime string
+	body                                 []byte
 }
 
 func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 	t.Helper()
 	w := &syncWire{files: make(map[string]map[string]interface{})}
 	w.server = httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
+		w.mu.Lock()
+		w.requests = append(w.requests, syncRequest{method: req.Method, path: req.URL.Path})
+		w.mu.Unlock()
 		write := func(value interface{}) {
 			if err := json.NewEncoder(out).Encode(value); err != nil {
 				t.Errorf("encode: %v", err)
@@ -136,6 +174,13 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 					t.Error("invalid SHA1 trailer")
 				}
 			}
+			w.mu.Lock()
+			w.uploads = append(w.uploads, syncUpload{
+				method: req.Method, path: req.URL.Path, name: name,
+				auth: req.Header.Get("Authorization"), sha: sha,
+				mtime: req.Header.Get("X-Bz-Info-Src_last_modified_millis"), body: append([]byte(nil), payload...),
+			})
+			w.mu.Unlock()
 			n := int64(len(payload))
 			info := map[string]string{}
 			for key, values := range req.Header {
@@ -161,6 +206,14 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 		case strings.HasSuffix(req.URL.Path, "/b2_get_upload_part_url"):
 			write(map[string]interface{}{"uploadUrl": w.server.URL + "/upload-part", "authorizationToken": "t"})
 		case req.URL.Path == "/upload-part":
+			w.mu.Lock()
+			fail := w.failPart
+			w.mu.Unlock()
+			if fail {
+				out.WriteHeader(http.StatusBadRequest)
+				write(map[string]interface{}{"status": 400, "code": "bad_request", "message": "part rejected"})
+				return
+			}
 			n, err := io.Copy(io.Discard, req.Body)
 			if err != nil {
 				t.Errorf("part body: %v", err)
@@ -176,6 +229,17 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 			w.files[name] = file
 			w.mu.Unlock()
 			write(file)
+		case strings.HasSuffix(req.URL.Path, "/b2_cancel_large_file"):
+			w.mu.Lock()
+			w.cancels++
+			fail := w.failCancel
+			w.mu.Unlock()
+			if fail {
+				out.WriteHeader(http.StatusBadRequest)
+				write(map[string]interface{}{"status": 400, "code": "bad_request", "message": "cancel rejected"})
+				return
+			}
+			write(map[string]interface{}{})
 		default:
 			t.Errorf("unexpected request %s", req.URL.Path)
 			out.WriteHeader(http.StatusNotFound)
@@ -210,7 +274,9 @@ func TestSyncContinuesAfterMissingFile(t *testing.T) {
 			}
 		}
 	}
-	result, err := Sync(context.Background(), bucket, "p", root, WithConcurrency(1))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := Sync(ctx, bucket, "p", root, WithConcurrency(1))
 	if err == nil {
 		t.Fatal("Sync returned no aggregate error")
 	}
@@ -219,6 +285,178 @@ func TestSyncContinuesAfterMissingFile(t *testing.T) {
 	}
 	if got := fmt.Sprint(result.Uploaded); got != "[a.txt c.txt]" {
 		t.Fatalf("uploaded = %s", got)
+	}
+}
+
+func TestSyncPublicUploadWire(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	root := t.TempDir()
+	payload := []byte("public wire payload")
+	modified := time.UnixMilli(1_700_000_000_000)
+	path := filepath.Join(root, "wire.txt")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sync(context.Background(), bucket, "wire", root); err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	requests := append([]syncRequest(nil), wire.requests...)
+	uploads := append([]syncUpload(nil), wire.uploads...)
+	wire.mu.Unlock()
+	for _, want := range []syncRequest{
+		{http.MethodPost, "/b2api/v4/b2_list_file_names"},
+		{http.MethodPost, "/b2api/v4/b2_get_upload_url"},
+		{http.MethodPost, "/upload"},
+	} {
+		found := false
+		for _, got := range requests {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("requests=%+v, missing %+v", requests, want)
+		}
+	}
+	if len(uploads) != 1 {
+		t.Fatalf("uploads=%+v, want one", uploads)
+	}
+	got := uploads[0]
+	wantSHA1 := fmt.Sprintf("%x", sha1.Sum(payload))
+	if got.method != http.MethodPost || got.path != "/upload" || got.name != "wire/wire.txt" || got.auth != "t" || got.sha != wantSHA1 || got.mtime != "1700000000000" || !bytes.Equal(got.body, payload) {
+		t.Errorf("upload wire shape = %+v", got)
+	}
+}
+
+func TestSyncUsesRequestedConcurrency(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	root := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var once stdsync.Once
+	defer once.Do(func() { close(release) })
+	var gate stdsync.Mutex
+	active, maximum := 0, 0
+	wire.onUpload = func(string) {
+		gate.Lock()
+		active++
+		if active > maximum {
+			maximum = active
+		}
+		gate.Unlock()
+		entered <- struct{}{}
+		<-release
+		gate.Lock()
+		active--
+		gate.Unlock()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { _, err := Sync(ctx, bucket, "parallel", root, WithConcurrency(2)); result <- err }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("two uploads did not overlap")
+		}
+	}
+	once.Do(func() { close(release) })
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	gate.Lock()
+	defer gate.Unlock()
+	if maximum != 2 {
+		t.Fatalf("maximum simultaneous uploads=%d, want 2", maximum)
+	}
+}
+
+func TestSyncContinuesAfterInvalidB2Name(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	root := t.TempDir()
+	for _, name := range []string{"a-long-filename.txt", "good.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prefix := strings.Repeat("p", 1010)
+	result, err := Sync(context.Background(), bucket, prefix, root, WithConcurrency(1))
+	if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != "a-long-filename.txt" || fmt.Sprint(result.Uploaded) != "[good.txt]" {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	wire.mu.Lock()
+	_, goodStored := wire.files[prefix+"/good.txt"]
+	_, badStored := wire.files[prefix+"/a-long-filename.txt"]
+	wire.mu.Unlock()
+	if !goodStored || badStored {
+		t.Fatalf("remote state: good=%t bad=%t", goodStored, badStored)
+	}
+}
+
+func TestSyncCancelsFailedLargeUploadAndContinues(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	wire.mu.Lock()
+	wire.failPart = true
+	wire.mu.Unlock()
+	root := t.TempDir()
+	large, err := os.Create(filepath.Join(root, "a-large.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := large.Truncate(100_000_001); err != nil {
+		t.Fatal(err)
+	}
+	if err := large.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "z-small.txt"), []byte("good"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithConcurrency(1))
+	if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != "a-large.bin" || fmt.Sprint(result.Uploaded) != "[z-small.txt]" {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	wire.mu.Lock()
+	cancels := wire.cancels
+	_, published := wire.files["p/a-large.bin"]
+	wire.mu.Unlock()
+	if cancels != 1 || published {
+		t.Fatalf("failed large upload: cancel calls=%d published=%t", cancels, published)
+	}
+}
+
+func TestSyncReportsFailedLargeUploadCleanup(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	wire.mu.Lock()
+	wire.failPart = true
+	wire.failCancel = true
+	wire.mu.Unlock()
+	root := t.TempDir()
+	path := filepath.Join(root, "large.bin")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(100_000_001); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Sync(context.Background(), bucket, "p", root)
+	if err == nil || result == nil || len(result.Failed) != 1 || !strings.Contains(result.Failed[0].Err.Error(), "cancel rejected") {
+		t.Fatalf("cleanup failure hidden: result=%+v error=%v", result, err)
 	}
 }
 
@@ -238,6 +476,34 @@ func TestSyncFollowsSymlinkRoot(t *testing.T) {
 	}
 	if got := fmt.Sprint(result.Uploaded); got != "[file.txt]" {
 		t.Fatalf("uploaded = %s", got)
+	}
+}
+
+func TestSyncSkipsSymlinksBelowRoot(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "real.txt"), []byte("real"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "outside.txt"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "outside.txt"), filepath.Join(root, "linked.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	result, err := Sync(context.Background(), bucket, "p", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != "[real.txt]" {
+		t.Fatalf("uploaded=%s, want only the real file", got)
+	}
+	wire.mu.Lock()
+	_, linked := wire.files["p/linked.txt"]
+	wire.mu.Unlock()
+	if linked {
+		t.Fatal("followed a symlink below the root")
 	}
 }
 
@@ -287,5 +553,48 @@ func TestSyncSHA1LargeFileRoundTrip(t *testing.T) {
 	}
 	if got := fmt.Sprint(result.Skipped); got != "[large.bin]" || len(result.Uploaded) != 0 {
 		t.Fatalf("second result = %+v", result)
+	}
+	changed, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := changed.WriteAt([]byte("different"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := changed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Preserve size and mtime: only the hash can detect this in-place edit.
+	modified := time.UnixMilli(1_700_000_000_000)
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+	result, err = Sync(context.Background(), bucket, "p", root, WithCompare(CompareSHA1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != "[large.bin]" {
+		t.Fatalf("same-size changed large file result = %+v", result)
+	}
+}
+
+func TestUploadFileRejectsGrowthBeforePublishing(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "growing.txt")
+	if err := os.WriteFile(path, []byte("now longer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := uploadFile(context.Background(), bucket, "p/growing.txt", localFile{
+		path: path, rel: "growing.txt", size: 3, modTime: time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "expected 3") {
+		t.Fatalf("growth error = %v, want expected-size mismatch", err)
+	}
+	wire.mu.Lock()
+	_, published := wire.files["p/growing.txt"]
+	wire.mu.Unlock()
+	if published {
+		t.Fatal("changed file was published even though Sync reported failure")
 	}
 }

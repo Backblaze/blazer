@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package sync uploads a local directory tree into a B2 bucket prefix.
+// Package sync pushes a local directory tree into a B2 bucket prefix. The local
+// tree is the source of truth: a differing file overwrites the cloud version,
+// even when the cloud version is newer. This package has no skip-newer or
+// replace-newer mode, does not delete cloud-only files, and does not resume
+// interrupted large-file uploads. Symlinks below the root are not followed;
+// a symlinked root is resolved before the walk.
 package sync
 
 import (
@@ -45,16 +50,35 @@ type options struct {
 	compare     CompareMode
 	concurrency int
 	dryRun      bool
+	compareSet  bool
+	workersSet  bool
+	err         error
 }
 
 // Option configures Sync.
 type Option func(*options)
 
 // WithCompare selects the comparison policy. The default is CompareModTime.
-func WithCompare(mode CompareMode) Option { return func(o *options) { o.compare = mode } }
+// Different comparison options in one Sync call are rejected.
+func WithCompare(mode CompareMode) Option {
+	return func(o *options) {
+		if o.compareSet && o.compare != mode {
+			o.err = fmt.Errorf("sync: conflicting comparison options")
+		}
+		o.compare, o.compareSet = mode, true
+	}
+}
 
-// WithConcurrency sets the maximum number of files uploaded at once.
-func WithConcurrency(n int) Option { return func(o *options) { o.concurrency = n } }
+// WithConcurrency sets the maximum number of files uploaded at once. Different
+// concurrency options in one Sync call are rejected.
+func WithConcurrency(n int) Option {
+	return func(o *options) {
+		if o.workersSet && o.concurrency != n {
+			o.err = fmt.Errorf("sync: conflicting concurrency options")
+		}
+		o.concurrency, o.workersSet = n, true
+	}
+}
 
 // WithDryRun reports planned uploads without writing to B2.
 func WithDryRun() Option { return func(o *options) { o.dryRun = true } }
@@ -104,8 +128,9 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 
 // Sync pushes files below localRoot into bucket under prefix. The local tree is
 // the source of truth: a differing local file overwrites the cloud copy even
-// when its modification time is older. Matching files are skipped, and cloud
-// objects are never deleted. Symlinks below the root are not followed; a
+// when its modification time is older; skip-newer and replace-newer policies
+// are not available. Matching files are skipped, and cloud objects are never
+// deleted. Symlinks below the root are not followed; a
 // symlinked root is followed. Changed large files are re-uploaded in full,
 // without resuming a previous upload. Per-file failures are returned in
 // Result.Failed along with an aggregate error; other files continue.
@@ -113,6 +138,9 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 	settings := options{concurrency: 4}
 	for _, opt := range opts {
 		opt(&settings)
+	}
+	if settings.err != nil {
+		return nil, settings.err
 	}
 	if settings.concurrency < 1 {
 		return nil, fmt.Errorf("sync: concurrency must be positive")
@@ -280,25 +308,53 @@ func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local local
 	if err != nil {
 		return 0, err
 	}
+	uploadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	attrs := &b2.Attrs{LastModified: local.modTime}
 	if local.sha1 != "" {
 		attrs.SHA1 = local.sha1
 	}
-	writer := bucket.Object(name).NewWriter(ctx, b2.WithAttrsOption(attrs))
+	var cleanupCancel context.CancelFunc
+	var cleanupErr error
+	writer := bucket.Object(name).NewWriter(uploadCtx, b2.WithAttrsOption(attrs),
+		b2.WithCancelOnError(func() context.Context {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			cleanupCancel = cancel
+			return cleanupCtx
+		}, func(err error) {
+			cleanupErr = err
+			if cleanupCancel != nil {
+				cleanupCancel()
+			}
+		}))
+	withCleanupError := func(err error) error {
+		if cleanupErr != nil {
+			return fmt.Errorf("%w; cancel unfinished upload: %v", err, cleanupErr)
+		}
+		return err
+	}
 	n, readErr := writer.ReadFrom(file)
+	if readErr != nil || n != local.size {
+		// Do not finish a file that changed during the walk. Closing a canceled
+		// writer also cancels an unfinished large upload. Keep the source file
+		// open until Close has drained any asynchronous part readers.
+		cancel()
+		_ = writer.Close()
+		_ = file.Close()
+		switch {
+		case readErr != nil:
+			return 0, withCleanupError(readErr)
+		default:
+			return 0, withCleanupError(fmt.Errorf("read %d bytes, expected %d", n, local.size))
+		}
+	}
 	writeCloseErr := writer.Close()
 	fileCloseErr := file.Close()
-	if readErr != nil {
-		return 0, readErr
-	}
 	if writeCloseErr != nil {
-		return 0, writeCloseErr
+		return 0, withCleanupError(writeCloseErr)
 	}
 	if fileCloseErr != nil {
 		return 0, fileCloseErr
-	}
-	if n != local.size {
-		return 0, fmt.Errorf("read %d bytes, expected %d", n, local.size)
 	}
 	return n, nil
 }

@@ -93,6 +93,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/Backblaze/blazer/b2"
@@ -261,11 +262,12 @@ func run(ctx context.Context) error {
 	defer os.RemoveAll(failureRoot)
 	good := []byte("good file survives bad neighbor")
 	if err := writeLocal(filepath.Join(failureRoot, "good.txt"), good, modified); err != nil { return err }
-	badPath := filepath.Join(failureRoot, "bad\n.txt")
+	badPath := filepath.Join(failureRoot, "bad-long-filename.txt")
 	if err := writeLocal(badPath, []byte("invalid long B2 name"), modified); err != nil { return err }
 	badRel, err := filepath.Rel(failureRoot, badPath)
 	if err != nil { return err }
-	failurePrefix := "failure-" + randomHex()
+	// Both local names are portable; only the longer B2 name exceeds its limit.
+	failurePrefix := strings.Repeat("p", 1010)
 	result, err = b2sync.Sync(ctx, bucket, failurePrefix, failureRoot)
 	if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != filepath.ToSlash(badRel) {
 		return fmt.Errorf("continue-and-report result=%+v error=%v", result, err)
