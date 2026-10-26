@@ -186,7 +186,7 @@ func (w *Writer) thread() {
 			}
 			mr := &meteredReader{r: r, size: cnk.buf.Len()}
 			w.registerChunk(cnk.id, mr)
-			err = uploadPartWithReupload(w.ctx, w.file, w.o.b.r, fc, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
+			fc, err = uploadPartWithReupload(w.ctx, w.file, w.o.b.r, fc, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
 			if err != nil {
 				w.setErr(err)
 				w.completeChunk(cnk.id)
@@ -726,8 +726,8 @@ func (w *Writer) status() *WriterStatus {
 
 // uploadPartWithReupload is shared by Writer and Compose. The reader must be
 // resettable so a failed upload can be replayed with a fresh part URL.
-func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, root beRootInterface, chunk beFileChunkInterface, reader readResetter, sha1 string, size, number int) error {
-	return retry.Do(
+func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, root beRootInterface, chunk beFileChunkInterface, reader readResetter, sha1 string, size, number int) (beFileChunkInterface, error) {
+	err := retry.Do(
 		ctx,
 		func() error {
 			n, err := chunk.uploadPart(ctx, reader, sha1, size, number)
@@ -762,6 +762,7 @@ func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, roo
 		}),
 		retry.WithAfter(retryAfterFor(root)),
 	)
+	return chunk, err
 }
 
 type meteredReader struct {

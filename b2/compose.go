@@ -159,7 +159,7 @@ func (b *Bucket) Compose(ctx context.Context, name string, parts ...ComposePart)
 	if err := validateComposeOverlap(parts); err != nil {
 		return nil, err
 	}
-	large, err := b.b.startLargeFile(ctx, name, "application/octet-stream", nil, nil, "")
+	large, err := b.b.startLargeFile(ctx, name, "application/octet-stream", nil, nil, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -172,10 +172,12 @@ func (b *Bucket) Compose(ctx context.Context, name string, parts ...ComposePart)
 			}
 		}
 	}()
+	var uploadChunk beFileChunkInterface
 	for i, part := range parts {
 		number := i + 1
 		if part.reader != nil {
-			if err := uploadComposePart(ctx, large, b.r, number, part); err != nil {
+			uploadChunk, err = uploadComposePart(ctx, large, b.r, uploadChunk, number, part)
+			if err != nil {
 				return nil, err
 			}
 			continue
@@ -199,26 +201,47 @@ func (b *Bucket) Compose(ctx context.Context, name string, parts ...ComposePart)
 	return &Object{name: name, b: b, f: file}, nil
 }
 
-func uploadComposePart(ctx context.Context, large beLargeFileInterface, root beRootInterface, number int, part ComposePart) (err error) {
+func uploadComposePart(ctx context.Context, large beLargeFileInterface, root beRootInterface, chunk beFileChunkInterface, number int, part ComposePart) (working beFileChunkInterface, err error) {
+	working = chunk
+	if err := ctx.Err(); err != nil {
+		return working, err
+	}
 	buffer, err := newFileBuffer("")
 	if err != nil {
-		return err
+		return working, err
 	}
 	defer func() {
 		if closeErr := buffer.Close(); err == nil {
 			err = closeErr
 		}
 	}()
-	if _, err := io.CopyN(buffer, part.reader, part.size); err != nil {
-		return fmt.Errorf("b2: Compose part %d: read %d bytes: %w", number, part.size, err)
+	if _, err := io.CopyN(buffer, composeContextReader{ctx: ctx, reader: part.reader}, part.size); err != nil {
+		return working, fmt.Errorf("b2: Compose part %d: read %d bytes: %w", number, part.size, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return working, err
 	}
 	reader, err := buffer.Reader()
 	if err != nil {
-		return err
+		return working, err
 	}
-	chunk, err := large.getUploadPartURL(ctx)
-	if err != nil {
-		return err
+	if working == nil {
+		working, err = large.getUploadPartURL(ctx)
+		if err != nil {
+			return working, err
+		}
 	}
-	return uploadPartWithReupload(ctx, large, root, chunk, reader, buffer.Hash(), buffer.Len(), number)
+	return uploadPartWithReupload(ctx, large, root, working, reader, buffer.Hash(), buffer.Len(), number)
+}
+
+type composeContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r composeContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }

@@ -48,6 +48,9 @@ type composeWire struct {
 	mu  sync.Mutex
 
 	failCopyPart        int
+	copyFailStatus      int
+	copyFailures        int
+	authCalls           int
 	failUploadPart      bool
 	failFirstUploadPart bool
 	uploadURLCalls      int
@@ -72,6 +75,9 @@ func newComposeWire(t *testing.T) *composeWire {
 func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/b2api/v4/b2_authorize_account":
+		w.mu.Lock()
+		w.authCalls++
+		w.mu.Unlock()
 		_, _ = fmt.Fprintf(rw, updateAuthJSON, w.srv.URL)
 	case "/b2api/v4/b2_list_buckets":
 		_, _ = fmt.Fprint(rw, `{"buckets":[]}`)
@@ -145,7 +151,28 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.copies = append(w.copies, body)
 		w.calls = append(w.calls, fmt.Sprintf("copy:%d", partNumber))
 		fail := w.failCopyPart == partNumber
+		status := w.copyFailStatus
+		if status != 0 && w.copyFailures == 0 {
+			w.copyFailures++
+		} else {
+			status = 0
+		}
 		w.mu.Unlock()
+		if status != 0 {
+			if status == http.StatusTooManyRequests {
+				rw.Header().Set("Retry-After", "1")
+			}
+			rw.WriteHeader(status)
+			code := "service_unavailable"
+			if status == http.StatusUnauthorized {
+				code = "expired_auth_token"
+			}
+			if status == http.StatusTooManyRequests {
+				code = "too_many_requests"
+			}
+			_, _ = fmt.Fprintf(rw, `{"status":%d,"code":%q,"message":"retry copy"}`, status, code)
+			return
+		}
 		if fail {
 			rw.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprint(rw, `{"status":400,"code":"bad_request","message":"copy part failed"}`)
@@ -393,7 +420,142 @@ func TestComposeRetriesRecoverableUploadWithFreshURL(t *testing.T) {
 	}
 }
 
+func TestComposeReusesReplacementPartURL(t *testing.T) {
+	wire := newComposeWire(t)
+	wire.failFirstUploadPart = true
+	payload := bytes.Repeat([]byte("r"), composeMinPartSize)
+	_, err := wire.bucket(t).Compose(context.Background(), "retry-two-uploads",
+		PartFromReader(bytes.NewReader(payload), int64(len(payload))),
+		PartFromReader(bytes.NewReader([]byte("z")), 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if wire.uploadURLCalls != 2 || len(wire.uploads) != 3 {
+		t.Fatalf("upload URL calls = %d, attempts = %d; want 2 URLs and 3 attempts", wire.uploadURLCalls, len(wire.uploads))
+	}
+	if want := []string{"start", "upload:1", "upload:1", "upload:2", "finish"}; !reflect.DeepEqual(wire.calls, want) {
+		t.Fatalf("calls = %v, want %v", wire.calls, want)
+	}
+}
+
+func TestWriterReusesReplacementPartURL(t *testing.T) {
+	wire := newComposeWire(t)
+	wire.failFirstUploadPart = true
+	w := wire.bucket(t).Object("writer-retry").NewWriter(context.Background())
+	w.ChunkSize = composeMinPartSize
+	w.ConcurrentUploads = 1
+	if _, err := w.Write(bytes.Repeat([]byte("w"), composeMinPartSize*2+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if wire.uploadURLCalls != 2 {
+		t.Fatalf("get_upload_part_url calls = %d, want 2 (initial and replacement)", wire.uploadURLCalls)
+	}
+	if len(wire.uploads) != 4 {
+		t.Fatalf("upload attempts = %d, want failed first, retry, then two reused-endpoint parts", len(wire.uploads))
+	}
+}
+
 type composeCancelReader struct{ cancel context.CancelFunc }
+
+type composeContinuingReader struct {
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (r *composeContinuingReader) Read(p []byte) (int, error) {
+	r.reads++
+	if r.reads == 1 {
+		r.cancel()
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+func TestComposeStopsBufferingAfterCancellation(t *testing.T) {
+	wire := newComposeWire(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader := &composeContinuingReader{cancel: cancel}
+	_, err := wire.bucket(t).Compose(ctx, "cancel-buffer",
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromReader(reader, composeMinPartSize))
+	if !errors.Is(err, context.Canceled) || reader.reads != 1 {
+		t.Fatalf("Compose error=%v reads=%d, want context cancellation after one read", err, reader.reads)
+	}
+	calls, _, _, _ := wire.snapshot()
+	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("cleanup calls = %v, want %v", calls, want)
+	}
+}
+
+func TestComposeUploadedPartMinimumBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"one byte short", 4_999_999, true},
+		{"exact minimum", 5_000_000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newComposeWire(t)
+			_, err := wire.bucket(t).Compose(context.Background(), "boundary",
+				PartFromReader(bytes.NewReader(bytes.Repeat([]byte("x"), tc.size)), int64(tc.size)),
+				PartFromReader(bytes.NewReader([]byte("y")), 1))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Compose error=%v, wantErr=%t", err, tc.wantErr)
+			}
+			calls, _, _, _ := wire.snapshot()
+			if tc.wantErr && len(calls) != 0 {
+				t.Fatalf("rejected part started large file: %v", calls)
+			}
+			if !tc.wantErr && !reflect.DeepEqual(calls, []string{"start", "upload:1", "upload:2", "finish"}) {
+				t.Fatalf("accepted boundary calls=%v", calls)
+			}
+		})
+	}
+}
+
+func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		status, wantAuth int
+	}{
+		{"expired token", http.StatusUnauthorized, 2},
+		{"service unavailable", http.StatusServiceUnavailable, 1},
+		{"rate limited", http.StatusTooManyRequests, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newComposeWire(t)
+			wire.copyFailStatus = tc.status
+			bucket := wire.bucket(t)
+			started := time.Now()
+			_, err := bucket.Compose(context.Background(), "retry-copy",
+				PartFromCopy("source-one", "bytes=0-4999999"),
+				PartFromCopy("source-two", "bytes=0-2"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.status == http.StatusTooManyRequests && time.Since(started) < 900*time.Millisecond {
+				t.Fatal("copy_part retry ignored Retry-After: 1")
+			}
+			wire.mu.Lock()
+			defer wire.mu.Unlock()
+			if len(wire.copies) != 3 || wire.authCalls != tc.wantAuth || !reflect.DeepEqual(wire.calls, []string{"start", "copy:1", "copy:1", "copy:2", "finish"}) {
+				t.Fatalf("copies=%d auth=%d calls=%v", len(wire.copies), wire.authCalls, wire.calls)
+			}
+		})
+	}
+}
 
 func (r composeCancelReader) Read([]byte) (int, error) {
 	r.cancel()

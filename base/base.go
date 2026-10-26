@@ -1163,6 +1163,16 @@ func (l *LargeFile) previousPartSize(ctx context.Context, number int) (int64, er
 	if len(parts) != 1 || parts[0].Number != number || parts[0].SHA1 != sha1 || parts[0].Size <= 0 {
 		return 0, fmt.Errorf("b2: cannot determine prior size of large-file part %d", number)
 	}
+	l.mu.Lock()
+	if l.hashes[number] != sha1 {
+		l.mu.Unlock()
+		return 0, fmt.Errorf("b2: large-file part %d changed while resolving its size", number)
+	}
+	if l.partSizes == nil {
+		l.partSizes = make(map[int]int64)
+	}
+	l.partSizes[number] = parts[0].Size
+	l.mu.Unlock()
 	return parts[0].Size, nil
 }
 
@@ -1793,8 +1803,10 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 // AsLargeFile return a LargeFile with the same fields as this File
 func (f *File) AsLargeFile() *LargeFile {
 	return &LargeFile{
-		ID: f.ID,
-		b2: f.b2,
+		ID:        f.ID,
+		b2:        f.b2,
+		hashes:    make(map[int]string),
+		partSizes: make(map[int]int64),
 	}
 }
 

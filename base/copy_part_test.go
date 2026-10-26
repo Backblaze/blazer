@@ -66,6 +66,76 @@ func TestCopyPartRecordsHashAndSizeForFinish(t *testing.T) {
 	}
 }
 
+func TestCopyPartOnAsLargeFile(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/b2api/v4/b2_copy_part":
+			_, _ = fmt.Fprint(w, `{"fileId":"large","partNumber":1,"contentLength":5,"contentSha1":"sha"}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	b, err := AuthorizeAccount(context.Background(), "account", "key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := (&File{ID: "large", b2: b}).AsLargeFile()
+	part, err := large.CopyPart(context.Background(), "source", 1, "bytes=0-4", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if part.SHA1 != "sha" || large.hashes[1] != "sha" || large.size != 5 {
+		t.Fatalf("part=%+v hashes=%v size=%d", part, large.hashes, large.size)
+	}
+}
+
+func TestCopyPartRetryAfterLostResponseUsesVerifiedOldSize(t *testing.T) {
+	var listCalls, copyCalls int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/b2api/v4/b2_list_parts":
+			listCalls++
+			sha := "old"
+			if copyCalls > 0 {
+				sha = "new"
+			}
+			_, _ = fmt.Fprintf(w, `{"parts":[{"fileId":"large","partNumber":1,"contentSha1":%q,"contentLength":5000000}],"nextPartNumber":2}`, sha)
+		case "/b2api/v4/b2_copy_part":
+			copyCalls++
+			if copyCalls == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = fmt.Fprint(w, `{"status":503,"code":"service_unavailable","message":"response lost after copy"}`)
+				return
+			}
+			_, _ = fmt.Fprint(w, `{"fileId":"large","partNumber":1,"contentLength":6000000,"contentSha1":"new"}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	b, err := AuthorizeAccount(context.Background(), "account", "key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := (&File{ID: "large", b2: b}).CompileParts(5e6, map[int]string{1: "old"})
+	if _, err := large.CopyPart(context.Background(), "src", 1, "bytes=0-5999999", nil); err == nil {
+		t.Fatal("first copy unexpectedly succeeded")
+	}
+	if _, err := large.CopyPart(context.Background(), "src", 1, "bytes=0-5999999", nil); err != nil {
+		t.Fatal(err)
+	}
+	if listCalls != 1 || copyCalls != 2 || large.size != 6e6 || large.hashes[1] != "new" {
+		t.Fatalf("list=%d copy=%d size=%d hashes=%v", listCalls, copyCalls, large.size, large.hashes)
+	}
+}
+
 func TestCopyPartReplacementAdjustsCompiledSize(t *testing.T) {
 	var listCalls int
 	var srv *httptest.Server
