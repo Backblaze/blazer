@@ -1480,34 +1480,16 @@ func mkRange(offset, size int64) string {
 // DownloadFileByName wraps b2_download_file_by_name.
 func (b *Bucket) DownloadFileByName(ctx context.Context, name string, offset, size int64, header bool) (*FileReader, error) {
 	uri := fmt.Sprintf("%s/file/%s/%s", b.b2.downloadURI, b.Name, escape(name))
-	method := "GET"
-	if header {
-		method = "HEAD"
-	}
-	req, err := http.NewRequest(method, uri, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", b.b2.authToken)
-	req.Header.Set("X-Blazer-Request-ID", fmt.Sprintf("%d", atomic.AddInt64(&reqID, 1)))
-	req.Header.Set("X-Blazer-Method", "b2_download_file_by_name")
-	b.b2.opts.addHeaders(req)
-	rng := mkRange(offset, size)
-	if rng != "" {
-		req.Header.Set("Range", rng)
-	}
-	logRequest(req, nil)
-	resp, err := makeNetRequest(ctx, req, b.b2.opts.getTransport())
-	if err != nil {
-		return nil, err
-	}
-	logResponse(resp, nil)
-	return newFileReader(resp)
+	return b.downloadFile(ctx, uri, "b2_download_file_by_name", offset, size, header)
 }
 
 // DownloadFileByID wraps b2_download_file_by_id.
 func (b *Bucket) DownloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (*FileReader, error) {
 	uri := b.b2.downloadURI + b2types.V4api + "b2_download_file_by_id?fileId=" + url.QueryEscape(id)
+	return b.downloadFile(ctx, uri, "b2_download_file_by_id", offset, size, header)
+}
+
+func (b *Bucket) downloadFile(ctx context.Context, uri, b2Method string, offset, size int64, header bool) (*FileReader, error) {
 	method := "GET"
 	if header {
 		method = "HEAD"
@@ -1518,7 +1500,10 @@ func (b *Bucket) DownloadFileByID(ctx context.Context, id string, offset, size i
 	}
 	req.Header.Set("Authorization", b.b2.authToken)
 	req.Header.Set("X-Blazer-Request-ID", fmt.Sprintf("%d", atomic.AddInt64(&reqID, 1)))
-	req.Header.Set("X-Blazer-Method", "b2_download_file_by_id")
+	req.Header.Set("X-Blazer-Method", b2Method)
+	// B2 returns the stored bytes, including gzip-encoded files. Prevent Go's
+	// transport from transparently decompressing and discarding Content-Length.
+	req.Header.Set("Accept-Encoding", "identity")
 	b.b2.opts.addHeaders(req)
 	rng := mkRange(offset, size)
 	if rng != "" {
@@ -1542,15 +1527,14 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		defer resp.Body.Close()
 		return nil, mkErr(resp)
 	}
-	clen, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
-	if err != nil {
-		resp.Body.Close()
-		return nil, err
-	}
-	contentLength, err := checkedDownloadLength(clen, maxInt)
+	contentLength, err := strconv.Atoi(resp.Header.Get("Content-Length"))
 	if err != nil {
 		_ = resp.Body.Close()
 		return nil, err
+	}
+	if contentLength < 0 || int64(contentLength) > maxInt {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("invalid download content length %d", contentLength)
 	}
 	info := make(map[string]string)
 	for key := range resp.Header {
@@ -1581,16 +1565,6 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		ContentLength: contentLength,
 		Info:          info,
 	}, nil
-}
-
-// checkedDownloadLength checks the bound before narrowing to the platform's
-// int width. This matters on 32-bit systems, where an HTTP Content-Length may
-// still be a valid int64 but cannot be represented by FileReader.ContentLength.
-func checkedDownloadLength(length, maxInt int64) (int, error) {
-	if length < 0 || length > maxInt {
-		return 0, fmt.Errorf("invalid download content length %d", length)
-	}
-	return int(length), nil
 }
 
 // HideFile wraps b2_hide_file.

@@ -153,7 +153,7 @@ func (w *downloadByIDWire) baselineBucket(t *testing.T) *b2Bucket {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := account.CreateBucket(context.Background(), "bucket", "allPrivate", nil, nil, nil, nil, false)
+	bucket, err := account.CreateBucket(context.Background(), "bucket", "allPrivate", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `(*b2.Bucket).DownloadFileByID` downloads the exact file version identified by its B2 file ID, including historical versions; `(*base.Bucket).DownloadFileByID` provides low-level GET, HEAD, and range requests.
+- `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
 
 ### Fixed
 
 - Download response lengths that cannot fit in the platform's `int` are rejected before conversion, including on 32-bit systems. Download-by-ID logging and free-form error details redact file IDs; HTTP status and B2 error codes remain available.
-- `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
+- Downloads by ID and by name request stored bytes without HTTP gzip decompression, preserving the file's content length and SHA1 for gzip-encoded objects.
 
 ## [0.9.0] - 2026-10-22
 

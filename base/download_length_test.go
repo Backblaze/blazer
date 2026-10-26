@@ -1,9 +1,11 @@
 package base
 
 import (
+	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,12 +33,24 @@ func TestDownloadContentLengthFitsNativeInt(t *testing.T) {
 		{"negative", -1, math.MaxInt64, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := checkedDownloadLength(tc.length, tc.maxInt)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("checkedDownloadLength(%d, %d) error = %v, want error %v", tc.length, tc.maxInt, err, tc.wantErr)
+			resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}
+			resp.Header.Set("Content-Length", fmt.Sprint(tc.length))
+			got, err := newFileReaderWithMaxLength(resp, tc.maxInt)
+			if strconv.IntSize == 32 && tc.length > math.MaxInt32 {
+				tc.wantErr = true
 			}
-			if err == nil && int64(got) != tc.length {
-				t.Fatalf("checkedDownloadLength(%d, %d) = %d", tc.length, tc.maxInt, got)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("newFileReaderWithMaxLength(%d, %d) error = %v, want error %v", tc.length, tc.maxInt, err, tc.wantErr)
+			}
+			if err == nil {
+				defer func() {
+					if err := got.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				if int64(got.ContentLength) != tc.length {
+					t.Fatalf("content length = %d, want %d", got.ContentLength, tc.length)
+				}
 			}
 		})
 	}
