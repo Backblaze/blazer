@@ -3,6 +3,9 @@
 # Run from the root of the checkout the agent worked in. Needs jq and git.
 # RUN_AS (e.g. "sudo -u agent -H") runs each check as the agent's user, so code under test cannot
 # write to this script or the eval definitions.
+# GRADE_DIR names a checkout of the same commit that the grader owns. When set, the run's files
+# (without its agent-writable .git) are copied there and inspected, so Git never reads metadata
+# the agent could have planted.
 set -u
 eval_file=$1
 result_file=$2
@@ -11,13 +14,27 @@ name=$(jq -r '.name' "$eval_file")
 export EVALS=$(cd "$(dirname "$eval_file")" && pwd)   # checks may call helpers kept beside the evals
 
 # Files changed outside the folders/files the eval allows (Git-ignored files don't show up).
+# A tree that cannot be copied or inspected counts as a stray, never as clean.
 strays() {
-  git status --porcelain=v1 -z --untracked-files=all --no-renames | while IFS= read -r -d '' entry; do
+  local dir=$PWD status
+  if [ -n "${GRADE_DIR:-}" ]; then
+    rsync -a --delete --exclude=/.git "$PWD"/ "$GRADE_DIR"/ 2>/dev/null \
+      || { echo "       (could not copy the run's files for inspection)"; return; }
+    dir=$GRADE_DIR
+  fi
+  status=$(mktemp)
+  if ! git -C "$dir" status --porcelain=v1 -z --untracked-files=all --no-renames > "$status" 2>/dev/null; then
+    echo "       (git status failed; the working tree could not be inspected)"
+    rm -f "$status"
+    return
+  fi
+  while IFS= read -r -d '' entry; do
     path=${entry:3}
     jq -e --arg p "$path" \
       'any(.may_change[]; . as $ok | $p == $ok or ($p | startswith($ok + "/")))' \
       "$eval_file" >/dev/null || echo "       $path"
-  done
+  done < "$status"
+  rm -f "$status"
 }
 
 total=$(jq '.checks | length' "$eval_file")
