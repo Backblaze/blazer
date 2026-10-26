@@ -29,6 +29,31 @@ type progressSample struct {
 	total    int64
 }
 
+func TestProgressTerminalCallbackAfterAlreadyDelivered(t *testing.T) {
+	first := make(chan struct{})
+	var mu sync.Mutex
+	var samples []progressSample
+	p := newProgressReporter(func(complete, total int64) {
+		mu.Lock()
+		samples = append(samples, progressSample{complete, total})
+		if len(samples) == 1 {
+			close(first)
+		}
+		mu.Unlock()
+	}, 5)
+	p.add(5)
+	select {
+	case <-first:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first progress sample was not delivered")
+	}
+	p.finish()
+	got := progressSnapshot(&mu, &samples)
+	if len(got) != 2 || got[0] != (progressSample{5, 5}) || got[1] != (progressSample{5, 5}) {
+		t.Fatalf("progress samples = %+v, want update and guaranteed terminal", got)
+	}
+}
+
 func TestProgressCallbacks(t *testing.T) {
 	ctx := context.Background()
 	client := &Client{backend: &beRoot{b2i: &testRoot{

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `b2.WithProgress` reports byte-level upload progress, and `b2.Reader.Progress` reports byte-level download progress. Callbacks are serialized off transfer locks and finish with a terminal value; known upload sizes and finite download ranges report their actual totals.
+
 ## [0.9.0] - 2026-10-22
 
 ### Added

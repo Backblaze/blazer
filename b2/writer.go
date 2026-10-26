@@ -537,8 +537,8 @@ func (w *Writer) sendChunk() error {
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
-// ReadFrom currently doesn't handle w.Resume; if w.Resume is true, ReadFrom
-// will act as if r is not an io.Seeker.
+// With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
+// its remaining length supplies the progress total.
 func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 	rs, ok := r.(io.ReadSeeker)
 	if !ok {

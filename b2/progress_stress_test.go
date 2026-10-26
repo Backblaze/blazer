@@ -44,5 +44,11 @@ func TestProgressConcurrentProducersAndFinish(t *testing.T) {
 		if last != 3200 {
 			t.Fatal("callback after terminal")
 		}
+		p.mu.Lock()
+		pending := p.pending
+		p.mu.Unlock()
+		if pending != 0 {
+			t.Fatalf("late update left %d pending bytes after terminal", pending)
+		}
 	}
 }
