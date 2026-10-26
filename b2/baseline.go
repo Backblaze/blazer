@@ -56,12 +56,13 @@ type b2BucketInterface interface {
 	notificationRules(context.Context) ([]NotificationRule, error)
 	setNotificationRules(context.Context, []NotificationRule) error
 	getUploadURL(context.Context) (b2URLInterface, error)
-	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold, ssec *SSECKey) (b2LargeFileInterface, error)
+	startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold, encryption *uploadEncryption) (b2LargeFileInterface, error)
 	listFileNames(context.Context, int, string, string, string) ([]b2FileInterface, string, error)
 	getFileInfoByName(context.Context, string) (b2FileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]b2FileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
+	downloadFileByID(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
 	hideFile(context.Context, string) (b2FileInterface, error)
 	copyFile(context.Context, string, string, string, string, string, string, map[string]string, *SSECKey, *SSECKey) (b2FileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
@@ -72,7 +73,7 @@ type b2BucketInterface interface {
 
 type b2URLInterface interface {
 	reload(context.Context) error
-	uploadFile(context.Context, io.Reader, int, string, string, string, map[string]string, *FileRetention, LegalHold, *SSECKey) (b2FileInterface, error)
+	uploadFile(context.Context, io.Reader, int, string, string, string, map[string]string, *FileRetention, LegalHold, *uploadEncryption) (b2FileInterface, error)
 }
 
 type b2FileInterface interface {
@@ -87,12 +88,13 @@ type b2FileInterface interface {
 	getFileInfo(context.Context) (b2FileInfoInterface, error)
 	encryption() (mode, algorithm, keyMD5 string)
 	listParts(context.Context, int, int) ([]b2FilePartInterface, int, error)
-	compileParts(int64, map[int]string, *SSECKey) b2LargeFileInterface
+	compileParts(int64, map[int]string, *uploadEncryption) b2LargeFileInterface
 }
 
 type b2LargeFileInterface interface {
 	finishLargeFile(context.Context) (b2FileInterface, error)
 	getUploadPartURL(context.Context) (b2FileChunkInterface, error)
+	copyPart(context.Context, string, int, string) (b2FilePartInterface, error)
 	cancel(context.Context) error
 }
 
@@ -110,6 +112,7 @@ type b2FileReaderInterface interface {
 type b2FileInfoInterface interface {
 	stats() (string, string, int64, string, map[string]string, string, time.Time) // bleck
 	fileLock() (*FileRetention, LegalHold)
+	serverSideEncryption() *ServerSideEncryption
 }
 
 type b2FilePartInterface interface {
@@ -144,13 +147,13 @@ type b2File struct {
 }
 
 type b2LargeFile struct {
-	b    *base.LargeFile
-	ssec *SSECKey
+	b          *base.LargeFile
+	encryption *uploadEncryption
 }
 
 type b2FileChunk struct {
-	b    *base.FileChunk
-	ssec *SSECKey
+	b          *base.FileChunk
+	encryption *uploadEncryption
 }
 
 type b2FileReader struct {
@@ -351,6 +354,33 @@ func ssecToBase(key *SSECKey) *b2types.ServerSideEncryption {
 		CustomerKey:    encodedKey,
 		CustomerKeyMD5: keyMD5,
 	}
+}
+
+func serverSideEncryptionFromBase(sse *b2types.ServerSideEncryption) *ServerSideEncryption {
+	if sse == nil || sse.Mode == "" {
+		return nil
+	}
+	return newServerSideEncryption(sse.Mode, sse.Algorithm)
+}
+
+func (e *uploadEncryption) toBase() *b2types.ServerSideEncryption {
+	if e == nil {
+		return nil
+	}
+	if e.ssec != nil {
+		return ssecToBase(e.ssec)
+	}
+	if e.sse == nil {
+		return nil
+	}
+	return &b2types.ServerSideEncryption{Mode: e.sse.Mode, Algorithm: e.sse.Algorithm}
+}
+
+func (e *uploadEncryption) ssecToBase() *b2types.ServerSideEncryption {
+	if e == nil {
+		return nil
+	}
+	return ssecToBase(e.ssec)
 }
 
 func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
@@ -558,12 +588,12 @@ func (b *b2Bucket) getUploadURL(ctx context.Context) (b2URLInterface, error) {
 	return &b2URL{url}, nil
 }
 
-func (b *b2Bucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, retention *FileRetention, legalHold LegalHold, ssec *SSECKey) (b2LargeFileInterface, error) {
-	lf, err := b.b.StartLargeFileWithSSEC(ctx, name, ct, info, ssecToBase(ssec), base.FileLock{Retention: retention.toBase(), LegalHold: string(legalHold)})
+func (b *b2Bucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, retention *FileRetention, legalHold LegalHold, encryption *uploadEncryption) (b2LargeFileInterface, error) {
+	lf, err := b.b.StartLargeFileWithSSEC(ctx, name, ct, info, encryption.toBase(), base.FileLock{Retention: retention.toBase(), LegalHold: string(legalHold)})
 	if err != nil {
 		return nil, err
 	}
-	return &b2LargeFile{b: lf, ssec: ssec}, nil
+	return &b2LargeFile{b: lf, encryption: encryption}, nil
 }
 
 func (b *b2Bucket) listFileNames(ctx context.Context, count int, continuation, prefix, delimiter string) ([]b2FileInterface, string, error) {
@@ -625,6 +655,21 @@ func (b *b2Bucket) downloadFileByName(ctx context.Context, name string, offset, 
 	return &b2FileReader{fr}, nil
 }
 
+func (b *b2Bucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool, ssec *SSECKey) (b2FileReaderInterface, error) {
+	fr, err := b.b.DownloadFileByIDWithSSEC(ctx, id, offset, size, header, ssecToBase(ssec))
+	if err != nil {
+		code, _ := base.Code(err)
+		switch code {
+		case http.StatusRequestedRangeNotSatisfiable:
+			return nil, errNoMoreContent
+		case http.StatusNotFound:
+			return nil, b2err{err: err, notFoundErr: true}
+		}
+		return nil, err
+	}
+	return &b2FileReader{fr}, nil
+}
+
 func (b *b2Bucket) hideFile(ctx context.Context, name string) (b2FileInterface, error) {
 	f, err := b.b.HideFile(ctx, name)
 	if err != nil {
@@ -655,8 +700,8 @@ func (b *b2Bucket) s3URL() string {
 
 func (b *b2Bucket) file(id, name string) b2FileInterface { return &b2File{b.b.File(id, name)} }
 
-func (b *b2URL) uploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, retention *FileRetention, legalHold LegalHold, ssec *SSECKey) (b2FileInterface, error) {
-	file, err := b.b.UploadFileWithSSEC(ctx, r, size, name, contentType, sha1, info, ssecToBase(ssec), base.FileLock{Retention: retention.toBase(), LegalHold: string(legalHold)})
+func (b *b2URL) uploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, retention *FileRetention, legalHold LegalHold, encryption *uploadEncryption) (b2FileInterface, error) {
+	file, err := b.b.UploadFileWithSSEC(ctx, r, size, name, contentType, sha1, info, encryption.toBase(), base.FileLock{Retention: retention.toBase(), LegalHold: string(legalHold)})
 	if err != nil {
 		return nil, err
 	}
@@ -737,8 +782,8 @@ func (b *b2File) listParts(ctx context.Context, next, count int) ([]b2FilePartIn
 	return rtn, n, nil
 }
 
-func (b *b2File) compileParts(size int64, seen map[int]string, ssec *SSECKey) b2LargeFileInterface {
-	return &b2LargeFile{b: b.b.CompileParts(size, seen), ssec: ssec}
+func (b *b2File) compileParts(size int64, seen map[int]string, encryption *uploadEncryption) b2LargeFileInterface {
+	return &b2LargeFile{b: b.b.CompileParts(size, seen), encryption: encryption}
 }
 
 func (b *b2LargeFile) finishLargeFile(ctx context.Context) (b2FileInterface, error) {
@@ -754,7 +799,15 @@ func (b *b2LargeFile) getUploadPartURL(ctx context.Context) (b2FileChunkInterfac
 	if err != nil {
 		return nil, err
 	}
-	return &b2FileChunk{b: c, ssec: b.ssec}, nil
+	return &b2FileChunk{b: c, encryption: b.encryption}, nil
+}
+
+func (b *b2LargeFile) copyPart(ctx context.Context, sourceFileID string, partNumber int, byteRange string) (b2FilePartInterface, error) {
+	part, err := b.b.CopyPart(ctx, sourceFileID, partNumber, byteRange, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &b2FilePart{part}, nil
 }
 
 func (b *b2LargeFile) cancel(ctx context.Context) error {
@@ -766,7 +819,7 @@ func (b *b2FileChunk) reload(ctx context.Context) error {
 }
 
 func (b *b2FileChunk) uploadPart(ctx context.Context, r io.Reader, sha1 string, size, index int) (int, error) {
-	return b.b.UploadPartWithSSEC(ctx, r, sha1, size, index, ssecToBase(b.ssec))
+	return b.b.UploadPartWithSSEC(ctx, r, sha1, size, index, b.encryption.ssecToBase())
 }
 
 func (b *b2FileReader) Read(p []byte) (int, error) {
@@ -789,6 +842,10 @@ func (b *b2FileInfo) stats() (string, string, int64, string, map[string]string, 
 
 func (b *b2FileInfo) fileLock() (*FileRetention, LegalHold) {
 	return retentionFromBase(b.b.Retention), LegalHold(b.b.LegalHold)
+}
+
+func (b *b2FileInfo) serverSideEncryption() *ServerSideEncryption {
+	return serverSideEncryptionFromBase(b.b.ServerSideEncryption)
 }
 
 func (b *b2FilePart) number() int  { return b.b.Number }

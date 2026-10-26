@@ -88,8 +88,8 @@ func CopyDestinationSSECKey(key *SSECKey) CopyOption {
 // same account.
 //
 // The resulting file must be smaller than 5 GB; B2 rejects a larger source with
-// source_too_large unless CopyRange selects a smaller part of it. Copying a
-// larger file takes b2_copy_part, which blazer does not wrap.
+// source_too_large unless CopyRange selects a smaller part of it. Use Compose
+// to include a server-side copied range in a large file.
 //
 // Copy does not expose B2's per-copy Object Lock (fileRetention, legalHold)
 // parameters. Use CopySourceSSECKey for an SSE-C source and optionally
