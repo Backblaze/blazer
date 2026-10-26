@@ -3,15 +3,108 @@ package b2sim
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Backblaze/blazer/b2"
 )
+
+type recordedRequest struct {
+	method, path, authorization, fileName, contentSHA string
+	body                                              []byte
+}
+
+type recordingTransport struct {
+	sim      *Simulator
+	mu       sync.Mutex
+	requests []recordedRequest
+}
+
+func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var body []byte
+	if req.Body != nil {
+		var err error
+		body, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	r.mu.Lock()
+	r.requests = append(r.requests, recordedRequest{method: req.Method, path: req.URL.Path, authorization: req.Header.Get("Authorization"), fileName: req.Header.Get("X-Bz-File-Name"), contentSHA: req.Header.Get("X-Bz-Content-Sha1"), body: body})
+	r.mu.Unlock()
+	return r.sim.RoundTrip(req)
+}
+
+func (r *recordingTransport) snapshot() []recordedRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]recordedRequest(nil), r.requests...)
+}
+
+func TestPublicClientSendsB2WireRequests(t *testing.T) {
+	ctx := context.Background()
+	recorder := &recordingTransport{sim: New()}
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(recorder))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "wire", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := writeObject(ctx, bucket, "object.txt", []byte("content"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := readObject(ctx, object, 0, -1)
+	if err != nil || string(got) != "content" {
+		t.Fatalf("read = %q, %v", got, err)
+	}
+	want := map[string]bool{"GET /b2api/v4/b2_authorize_account": false, "POST /b2api/v4/b2_create_bucket": false, "POST /b2api/v4/b2_get_upload_url": false, "POST /upload/file/": false, "GET /file/wire/object.txt": false}
+	for _, request := range recorder.snapshot() {
+		path := request.path
+		if strings.HasPrefix(path, "/upload/file/") {
+			path = "/upload/file/"
+		}
+		key := request.method + " " + path
+		if _, ok := want[key]; !ok {
+			continue
+		}
+		want[key] = true
+		if strings.HasSuffix(key, "b2_authorize_account") {
+			if !strings.HasPrefix(request.authorization, "Basic ") {
+				t.Errorf("authorize was not Basic-authenticated")
+			}
+		} else if request.authorization != "b2sim-token" {
+			t.Errorf("%s authorization = %q", key, request.authorization)
+		}
+		if strings.HasSuffix(key, "b2_create_bucket") && !bytes.Contains(request.body, []byte(`"bucketName":"wire"`)) {
+			t.Errorf("create body omitted bucketName: %q", request.body)
+		}
+		if path == "/upload/file/" {
+			sha := sha1.Sum(request.body)
+			if request.fileName != "object.txt" || request.authorization != "b2sim-token" || request.contentSHA != hex.EncodeToString(sha[:]) {
+				t.Errorf("upload wire fields missing or mismatched")
+			}
+		}
+	}
+	for request, seen := range want {
+		if !seen {
+			t.Errorf("missing actual request %s", request)
+		}
+	}
+}
 
 func writeObject(ctx context.Context, bucket *b2.Bucket, name string, data []byte, chunkSize int) (*b2.Object, error) {
 	object := bucket.Object(name)
@@ -200,6 +293,21 @@ func TestEscapedNameAndVersionPagination(t *testing.T) {
 	if err != nil || string(got) != "second" {
 		t.Fatalf("escaped-name download = %q, %v", got, err)
 	}
+	infoResp := postSimulatorJSON(t, sim, "b2_get_file_info", map[string]any{"fileId": first.ID()})
+	var historical struct {
+		FileID     string `json:"fileId"`
+		FileName   string `json:"fileName"`
+		ContentSHA string `json:"contentSha1"`
+	}
+	if err := json.NewDecoder(infoResp.Body).Decode(&historical); err != nil {
+		t.Fatal(err)
+	}
+	if err := infoResp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if historical.FileID != first.ID() || historical.FileName != name || historical.ContentSHA != digest([]byte("first")) {
+		t.Fatalf("historical by-ID metadata = %+v, want first version", historical)
+	}
 	iter := bucket.List(ctx, b2.ListHidden(), b2.ListPageSize(1))
 	var ids []string
 	for iter.Next() {
@@ -277,5 +385,314 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	if fileAttrs.Retention == nil || fileAttrs.Retention.Mode != b2.RetentionGovernance || !fileAttrs.Retention.RetainUntil.Equal(until) || fileAttrs.LegalHold != b2.LegalHoldOn {
 		t.Fatalf("file lock metadata not returned: %+v", fileAttrs)
+	}
+}
+
+func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
+	sim := New()
+	ctx := context.Background()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "range", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeObject(ctx, bucket, "tiny", []byte("small"), 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, value string
+		status      int
+		body        string
+	}{
+		{"start above MaxInt32", fmt.Sprintf("bytes=%d-", int64(math.MaxInt32)+1), http.StatusRequestedRangeNotSatisfiable, ""},
+		{"end above MaxInt32", fmt.Sprintf("bytes=0-%d", int64(math.MaxInt32)+1), http.StatusPartialContent, "small"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/file/range/tiny", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "b2sim-token")
+			req.Header.Set("Range", tc.value)
+			resp, err := sim.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status=%d body=%q, want %d", resp.StatusCode, body, tc.status)
+			}
+			if tc.body != "" && string(body) != tc.body {
+				t.Fatalf("body=%q, want %q", body, tc.body)
+			}
+		})
+	}
+}
+
+func TestUnsupportedOperationFailsLoudly(t *testing.T) {
+	sim := New()
+	for _, tc := range []struct{ method, operation string }{
+		{http.MethodPost, "b2_copy_file"},
+		{http.MethodGet, "b2_download_file_by_id"},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, origin+"/b2api/v4/"+tc.operation, strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "b2sim-token")
+			resp, err := sim.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := resp.Body.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			var failure struct{ Code, Message string }
+			if err := json.NewDecoder(resp.Body).Decode(&failure); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusNotImplemented || failure.Code != "unsupported_operation" || !strings.Contains(failure.Message, tc.operation) {
+				t.Fatalf("unsupported response = status %d code %q message %q", resp.StatusCode, failure.Code, failure.Message)
+			}
+		})
+	}
+}
+
+func TestFileResponseReportsBucketDefaultEncryption(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "encrypted", &b2.BucketAttrs{DefaultServerSideEncryption: b2.SSEB2WithAES256()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err := writeObject(ctx, bucket, "one", []byte("content"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, origin+"/b2api/v4/b2_get_file_info", strings.NewReader(fmt.Sprintf(`{"fileId":%q}`, obj.ID())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "b2sim-token")
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var got struct {
+		ServerSideEncryption struct {
+			Mode      string `json:"mode"`
+			Algorithm string `json:"algorithm"`
+		} `json:"serverSideEncryption"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ServerSideEncryption.Mode != "SSE-B2" || got.ServerSideEncryption.Algorithm != "AES256" {
+		t.Fatalf("file encryption = %s/%s, want SSE-B2/AES256", got.ServerSideEncryption.Mode, got.ServerSideEncryption.Algorithm)
+	}
+}
+
+func TestConflictingUploadEncryptionHeadersFailClosed(t *testing.T) {
+	sim := New()
+	bucketID := sim.Seed("conflict")
+	payload := []byte("content")
+	sha := sha1.Sum(payload)
+	req, err := http.NewRequest(http.MethodPost, origin+"/upload/file/"+bucketID, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "b2sim-token")
+	req.Header.Set("X-Bz-File-Name", "conflict.txt")
+	req.Header.Set("X-Bz-Content-Sha1", hex.EncodeToString(sha[:]))
+	req.Header.Set("X-Bz-Server-Side-Encryption", "AES256")
+	req.Header.Set("X-Bz-Server-Side-Encryption-Customer-Algorithm", "AES256")
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("conflicting encryption status = %d, want 400", resp.StatusCode)
+	}
+	if len(sim.buckets[bucketID].versions) != 0 {
+		t.Fatal("conflicting encryption nevertheless stored a version")
+	}
+}
+
+func postSimulatorJSON(t *testing.T, sim *Simulator, method string, body any) *http.Response {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, origin+"/b2api/v4/"+method, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "b2sim-token")
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestFailedMultipartPartCanBeCancelledWithoutRetainingSSECKey(t *testing.T) {
+	sim := New()
+	bucketID := sim.Seed("multipart-error")
+	const secret = "a-customer-key-that-must-not-be-retained"
+	resp := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{
+		"bucketId": bucketID, "fileName": "failure.bin", "contentType": "application/octet-stream",
+		"serverSideEncryption": map[string]any{"mode": "SSE-C", "algorithm": "AES256", "customerKey": secret, "customerKeyMd5": "digest"},
+	})
+	var started struct {
+		FileID string `json:"fileId"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 || started.FileID == "" {
+		t.Fatalf("start = %d, ID=%q", resp.StatusCode, started.FileID)
+	}
+	stored, err := json.Marshal(sim.large[started.FileID].file.response())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(stored, []byte(secret)) || bytes.Contains(stored, []byte("digest")) {
+		t.Fatal("SSE-C key material retained or echoed in file response")
+	}
+	if !bytes.Contains(stored, []byte(`"mode":"SSE-C"`)) {
+		t.Fatalf("SSE-C mode absent from response: %q", stored)
+	}
+	partReq, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+started.FileID, strings.NewReader("bad part"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partReq.Header.Set("Authorization", "b2sim-token")
+	partReq.Header.Set("X-Bz-Part-Number", "1")
+	partReq.Header.Set("X-Bz-Content-Sha1", "wrong")
+	partResp, err := sim.RoundTrip(partReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := partResp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if partResp.StatusCode != http.StatusBadRequest || len(sim.large[started.FileID].parts) != 0 {
+		t.Fatalf("bad part status=%d or part was stored", partResp.StatusCode)
+	}
+	cancelResp := postSimulatorJSON(t, sim, "b2_cancel_large_file", map[string]any{"fileId": started.FileID})
+	if err := cancelResp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if cancelResp.StatusCode != 200 || sim.large[started.FileID] != nil {
+		t.Fatalf("cancel status=%d, unfinished upload remains", cancelResp.StatusCode)
+	}
+}
+
+func TestTerminalListCursorAndEmptyLockJSON(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "shape", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeObject(ctx, bucket, "one", []byte("x"), 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"b2_list_file_names", "b2_list_file_versions"} {
+		resp := postSimulatorJSON(t, sim, method, map[string]any{"bucketId": bucket.ID()})
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if string(body["nextFileName"]) != "null" {
+			t.Errorf("%s nextFileName = %s, want null", method, body["nextFileName"])
+		}
+		if method == "b2_list_file_versions" && string(body["nextFileId"]) != "null" {
+			t.Errorf("%s nextFileId = %s, want null", method, body["nextFileId"])
+		}
+		var files []map[string]json.RawMessage
+		if err := json.Unmarshal(body["files"], &files); err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 1 {
+			t.Fatalf("%s files = %d, want 1", method, len(files))
+		}
+		var retention struct {
+			Value map[string]json.RawMessage `json:"value"`
+		}
+		if err := json.Unmarshal(files[0]["fileRetention"], &retention); err != nil {
+			t.Fatal(err)
+		}
+		if string(retention.Value["mode"]) != "null" || string(retention.Value["retainUntilTimestamp"]) != "null" {
+			t.Errorf("%s empty retention = %s", method, files[0]["fileRetention"])
+		}
+		var hold struct {
+			Value *string `json:"value"`
+		}
+		if err := json.Unmarshal(files[0]["legalHold"], &hold); err != nil {
+			t.Fatal(err)
+		}
+		if hold.Value != nil {
+			t.Errorf("%s empty legalHold = %s", method, files[0]["legalHold"])
+		}
+	}
+}
+
+func TestCreateBucketReturnsReplicationConfiguration(t *testing.T) {
+	sim := New()
+	rule := map[string]any{"asReplicationSource": map[string]any{"sourceApplicationKeyId": "source-key", "replicationRules": []any{map[string]any{"replicationRuleName": "rule", "destinationBucketId": "destination"}}}}
+	resp := postSimulatorJSON(t, sim, "b2_create_bucket", map[string]any{"accountId": "b2sim-account", "bucketName": "replicated", "bucketType": "allPrivate", "replicationConfiguration": rule})
+	var body struct {
+		ReplicationConfiguration struct {
+			Value map[string]any `json:"value"`
+		} `json:"replicationConfiguration"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 || !reflect.DeepEqual(body.ReplicationConfiguration.Value, rule) {
+		t.Fatalf("create replication readback = status %d value %#v", resp.StatusCode, body.ReplicationConfiguration.Value)
 	}
 }

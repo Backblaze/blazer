@@ -1,5 +1,9 @@
 // Package b2sim provides an in-memory B2 wire server for blazer clients.
 // Pass New() to b2.Transport to exercise the normal HTTP, retry, and JSON path.
+// It is a testing aid, not a complete B2 emulator: it does not enforce
+// application-key credentials or capabilities, retention, replication, encryption, lifecycle,
+// CORS, or download-authorization signatures. Unsupported endpoints fail with
+// a non-2xx response; they never silently succeed.
 package b2sim
 
 import (
@@ -35,6 +39,7 @@ type version struct {
 	id, bucketID, name, contentType, sha, action string
 	data                                         []byte
 	info                                         map[string]string
+	sse                                          map[string]any
 	retention                                    any
 	legalHold                                    string
 	stamp                                        int64
@@ -164,6 +169,14 @@ func textMap(value any) map[string]string {
 	return result
 }
 
+// responseSSE keeps only the public mode and algorithm. In particular, a
+// request's SSE-C customer key must never be retained in simulator state or
+// echoed in file responses.
+func responseSSE(value any) map[string]any {
+	settings := argsMap(value)
+	return map[string]any{"mode": settings["mode"], "algorithm": settings["algorithm"]}
+}
+
 func digest(data []byte) string {
 	sum := sha1.Sum(data)
 	return hex.EncodeToString(sum[:])
@@ -183,12 +196,21 @@ func (b *bucket) response() map[string]any {
 }
 
 func (f *version) response() map[string]any {
+	retention := f.retention
+	if retention == nil {
+		retention = map[string]any{"mode": nil, "retainUntilTimestamp": nil}
+	}
+	var legalHold any
+	if f.legalHold != "" {
+		legalHold = f.legalHold
+	}
 	return map[string]any{
 		"fileId": f.id, "fileName": f.name, "accountId": "b2sim-account", "bucketId": f.bucketID,
 		"contentLength": len(f.data), "contentSha1": f.sha, "contentType": f.contentType,
 		"fileInfo": f.info, "action": f.action, "uploadTimestamp": f.stamp,
-		"fileRetention": map[string]any{"isClientAuthorizedToRead": true, "value": f.retention},
-		"legalHold":     map[string]any{"isClientAuthorizedToRead": true, "value": f.legalHold},
+		"serverSideEncryption": f.sse,
+		"fileRetention":        map[string]any{"isClientAuthorizedToRead": true, "value": retention},
+		"legalHold":            map[string]any{"isClientAuthorizedToRead": true, "value": legalHold},
 	}
 }
 
@@ -248,8 +270,19 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 			}},
 		})
 	}
-	if req.Method != http.MethodPost || req.Header.Get("Authorization") != "b2sim-token" {
+	if req.Header.Get("Authorization") != "b2sim-token" {
 		return failure(req, http.StatusUnauthorized, "bad_auth_token", "simulator authorization required")
+	}
+	switch method {
+	case "b2_create_bucket", "b2_list_buckets", "b2_update_bucket", "b2_delete_bucket",
+		"b2_get_upload_url", "b2_start_large_file", "b2_get_upload_part_url",
+		"b2_finish_large_file", "b2_cancel_large_file", "b2_list_file_names",
+		"b2_list_file_versions", "b2_delete_file_version", "b2_get_file_info":
+	default:
+		return failure(req, http.StatusNotImplemented, "unsupported_operation", "unsupported simulator endpoint: "+method)
+	}
+	if req.Method != http.MethodPost {
+		return failure(req, http.StatusMethodNotAllowed, "method_not_allowed", "simulator requires POST for "+method)
 	}
 	args, err := decode(data)
 	if err != nil {
@@ -266,7 +299,10 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 				return failure(req, 409, "duplicate_bucket_name", "bucket already exists")
 			}
 		}
-		b := &bucket{id: s.id("bucket"), name: name, kind: str(args["bucketType"]), info: argsMap(args["bucketInfo"]), rules: args["lifecycleRules"], cors: args["corsRules"], sse: args["defaultServerSideEncryption"], fileLock: args["fileLockEnabled"] == true, revision: 1}
+		b := &bucket{id: s.id("bucket"), name: name, kind: str(args["bucketType"]), info: argsMap(args["bucketInfo"]), rules: args["lifecycleRules"], cors: args["corsRules"], replication: args["replicationConfiguration"], fileLock: args["fileLockEnabled"] == true, revision: 1}
+		if value := args["defaultServerSideEncryption"]; value != nil {
+			b.sse = responseSSE(value)
+		}
 		if b.kind == "" {
 			b.kind = "allPrivate"
 		}
@@ -311,7 +347,10 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 			b.cors = v
 		}
 		if v, ok := args["defaultServerSideEncryption"]; ok {
-			b.sse = v
+			b.sse = nil
+			if v != nil {
+				b.sse = responseSSE(v)
+			}
 		}
 		if v, ok := args["defaultRetention"]; ok {
 			b.retention = v
@@ -345,7 +384,11 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		if s.buckets[id] == nil {
 			return failure(req, 404, "not_found", "bucket not found")
 		}
-		f := &version{id: s.id("large"), bucketID: id, name: str(args["fileName"]), contentType: str(args["contentType"]), info: textMap(args["fileInfo"]), sha: "none", action: "start", stamp: time.Now().UnixMilli(), retention: args["fileRetention"], legalHold: str(args["legalHold"]), order: s.next}
+		fileSSE := args["serverSideEncryption"]
+		if fileSSE == nil {
+			fileSSE = s.buckets[id].sse
+		}
+		f := &version{id: s.id("large"), bucketID: id, name: str(args["fileName"]), contentType: str(args["contentType"]), info: textMap(args["fileInfo"]), sse: responseSSE(fileSSE), sha: "none", action: "start", stamp: time.Now().UnixMilli(), retention: args["fileRetention"], legalHold: str(args["legalHold"]), order: s.next}
 		s.large[f.id] = &largeFile{file: f, parts: make(map[int][]byte), hashes: make(map[int]string)}
 		return reply(req, 200, map[string]any{"fileId": f.id})
 	case "b2_get_upload_part_url":
@@ -387,7 +430,7 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		return failure(req, 404, "not_found", "file not found")
 	default:
-		return failure(req, 404, "not_found", "unsupported simulator endpoint")
+		return failure(req, http.StatusNotImplemented, "unsupported_operation", "unsupported simulator endpoint: "+method)
 	}
 }
 
@@ -428,7 +471,17 @@ func (s *Simulator) upload(req *http.Request, bucketID string, data []byte) (*ht
 			info[strings.TrimPrefix(key, "X-Bz-Info-")] = value
 		}
 	}
-	f := &version{id: s.id("file"), bucketID: b.id, name: name, contentType: req.Header.Get("Content-Type"), data: append([]byte(nil), data...), sha: sha, info: info, action: "upload", stamp: time.Now().UnixMilli(), legalHold: req.Header.Get("X-Bz-File-Legal-Hold"), order: s.next}
+	fileSSE := b.sse
+	if algorithm := req.Header.Get("X-Bz-Server-Side-Encryption"); algorithm != "" {
+		fileSSE = map[string]any{"mode": "SSE-B2", "algorithm": algorithm}
+	}
+	if algorithm := req.Header.Get("X-Bz-Server-Side-Encryption-Customer-Algorithm"); algorithm != "" {
+		if req.Header.Get("X-Bz-Server-Side-Encryption") != "" {
+			return failure(req, 400, "bad_request", "conflicting SSE-B2 and SSE-C headers")
+		}
+		fileSSE = map[string]any{"mode": "SSE-C", "algorithm": algorithm}
+	}
+	f := &version{id: s.id("file"), bucketID: b.id, name: name, contentType: req.Header.Get("Content-Type"), data: append([]byte(nil), data...), sha: sha, info: info, sse: responseSSE(fileSSE), action: "upload", stamp: time.Now().UnixMilli(), legalHold: req.Header.Get("X-Bz-File-Legal-Hold"), order: s.next}
 	if mode := req.Header.Get("X-Bz-File-Retention-Mode"); mode != "" {
 		until, err := strconv.ParseInt(req.Header.Get("X-Bz-File-Retention-Retain-Until-Timestamp"), 10, 64)
 		if err != nil {
@@ -534,7 +587,10 @@ func (s *Simulator) list(req *http.Request, method string, args map[string]any) 
 		}
 		return reply(req, 200, map[string]any{"files": result, "nextFileName": next["fileName"], "nextFileId": next["fileId"]})
 	}
-	return reply(req, 200, map[string]any{"files": result})
+	if method == "b2_list_file_names" {
+		return reply(req, 200, map[string]any{"files": result, "nextFileName": nil})
+	}
+	return reply(req, 200, map[string]any{"files": result, "nextFileName": nil, "nextFileId": nil})
 }
 
 func (s *Simulator) download(req *http.Request) (*http.Response, error) {
@@ -588,7 +644,9 @@ func (s *Simulator) download(req *http.Request) (*http.Response, error) {
 				end = requested
 			}
 		}
-		data = data[int(start) : int(end)+1]
+		// Both bounds were limited by len(data); use int64 slice indices so no
+		// unchecked narrowing conversion occurs on 32-bit platforms.
+		data = data[start : end+1]
 		status = 206
 		header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(f.data)))
 	}
