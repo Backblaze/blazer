@@ -24,8 +24,8 @@ Always give the session a way to check its own work before a person sees it. A l
 
 An agent fixing code must not be able to weaken the check on that code. Either:
 
-- block edits to test files during a fix task with a `PreToolUse` hook (`sdlc-policy-skill` shows the pattern), or
-- check the diff in review and reject any change that touches a test (`sdlc-pr-review`).
+- block edits to existing test files once the failing-test commit exists, with a `PreToolUse` hook (`sdlc-policy-skill` shows the pattern), or
+- check the diff in review: new regression tests are expected, but reject any change after the failing-test commit that weakens, skips or rewrites a test (`sdlc-pr-review`).
 
 ## Report format
 
