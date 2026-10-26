@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Progress status no longer waits on stalled transfer reads; cancellation closes a blocked download body before waiting for its copy. Reader shutdown now waits for initialization, zero-length ranges can be verified, and resumed uploads tolerate non-seekable inputs while clamping known totals to zero.
 - Exact-boundary ranged reads now mark a chunk whose size equals the remaining requested length as final. The shared remaining-length accounting is kept under the reader mutex.
 
 ## [0.9.0] - 2026-10-22

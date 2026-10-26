@@ -576,18 +576,19 @@ func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 		return copyContext(w.ctx, w, r)
 	}
 	if w.Resume {
-		position, err := rs.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return 0, err
+		if w.progress != nil {
+			if position, err := rs.Seek(0, io.SeekCurrent); err == nil {
+				if end, err := rs.Seek(0, io.SeekEnd); err == nil {
+					if _, err := rs.Seek(position, io.SeekStart); err != nil {
+						return 0, err
+					}
+					w.progressTotal = end - position
+					if w.progressTotal < 0 {
+						w.progressTotal = 0
+					}
+				}
+			}
 		}
-		end, err := rs.Seek(0, io.SeekEnd)
-		if err != nil {
-			return 0, err
-		}
-		if _, err := rs.Seek(position, io.SeekStart); err != nil {
-			return 0, err
-		}
-		w.progressTotal = end - position
 		return copyContext(w.ctx, w, rs)
 	}
 	blog.V(2).Info("streaming without buffer")
@@ -801,13 +802,12 @@ func (w *Writer) status() *WriterStatus {
 }
 
 type meteredReader struct {
-	read         int64
-	reported     int64 // high-water mark survives Reset and upload retries
+	read         atomic.Int64
+	reported     atomic.Int64 // high-water mark survives Reset and upload retries
 	size         int
 	progressSize int64 // excludes the 40-byte SHA1 trailer of nonBuffer
 	r            readResetter
 	progress     *progressReporter
-	mux          sync.Mutex
 }
 
 func newMeteredReader(r readResetter, buf writeBuffer, progress *progressReporter) *meteredReader {
@@ -819,27 +819,27 @@ func newMeteredReader(r readResetter, buf writeBuffer, progress *progressReporte
 }
 
 func (mr *meteredReader) Read(p []byte) (int, error) {
-	mr.mux.Lock()
 	n, err := mr.r.Read(p)
-	mr.read += int64(n)
 	var delta int64
-	counted := mr.read
+	counted := mr.read.Add(int64(n))
 	if counted > mr.progressSize {
 		counted = mr.progressSize
 	}
-	if counted > mr.reported {
-		delta = counted - mr.reported
-		mr.reported = counted
+	for {
+		previous := mr.reported.Load()
+		if counted <= previous || mr.reported.CompareAndSwap(previous, counted) {
+			if counted > previous {
+				delta = counted - previous
+			}
+			break
+		}
 	}
-	mr.mux.Unlock()
 	mr.progress.add(delta)
 	return n, err
 }
 
 func (mr *meteredReader) Reset() error {
-	mr.mux.Lock()
-	defer mr.mux.Unlock()
-	mr.read = 0
+	mr.read.Store(0)
 	return mr.r.Reset()
 }
 
@@ -847,8 +847,6 @@ func (mr *meteredReader) done() float64 {
 	if mr == nil {
 		return 1
 	}
-	mr.mux.Lock()
-	read := float64(mr.read)
-	mr.mux.Unlock()
+	read := float64(mr.read.Load())
 	return read / float64(mr.size)
 }
