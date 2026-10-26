@@ -14,10 +14,6 @@
 
 // Package base provides a very low-level interface on top of the B2 API.
 // It is not intended to be used directly.
-//
-// It currently lacks support for the following APIs:
-//
-// b2_download_file_by_id
 package base
 
 import (
@@ -161,15 +157,22 @@ func mkErr(resp *http.Response) error {
 	if msgBody == "" {
 		msgBody = msg.Msg
 	}
+	if isDownloadByIDRequest(resp.Request) {
+		// Server error text may echo the file ID.
+		msgBody = redactDownloadIDText(resp.Request, msgBody)
+	}
 	var retryAfter int
 	retry := resp.Header.Get("Retry-After")
 	if retry != "" {
-		r, err := strconv.ParseInt(retry, 10, 64)
+		parsed, err := parseRetryAfterSeconds(retry)
 		if err != nil {
-			r = 0
-			blog.V(1).Infof("couldn't parse retry-after header %q: %v", retry, err)
+			if isDownloadByIDRequest(resp.Request) {
+				blog.V(1).Infof("couldn't parse retry-after header for b2_download_file_by_id")
+			} else {
+				blog.V(1).Infof("couldn't parse retry-after header %q: %v", retry, err)
+			}
 		}
-		retryAfter = int(r)
+		retryAfter = parsed
 	}
 	return b2err{
 		msg:     msgBody,
@@ -178,6 +181,20 @@ func mkErr(resp *http.Response) error {
 		msgCode: msg.Code,
 		method:  resp.Request.Header.Get("X-Blazer-Method"),
 	}
+}
+
+func parseRetryAfterSeconds(raw string) (int, error) {
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if seconds <= 0 {
+		return 0, nil
+	}
+	if seconds >= 30 {
+		return 30, nil
+	}
+	return int(seconds), nil
 }
 
 // MaxReuploads returns an appropriate amount of retries for reuploading,
@@ -228,6 +245,12 @@ func Backoff(err error) time.Duration {
 
 func logRequest(req *http.Request, args []byte) {
 	if !blog.V(2) {
+		return
+	}
+	if isDownloadByIDRequest(req) {
+		// The file ID is in the query string. Do not log it or other query
+		// parameters that could have been appended to the download URL.
+		blog.V(2).Infof(">> b2_download_file_by_id %s [URL and headers redacted]", req.Method)
 		return
 	}
 	var headers []string
@@ -290,6 +313,10 @@ func logResponse(resp *http.Response, reply []byte) {
 	if !blog.V(2) {
 		return
 	}
+	if isDownloadByIDRequest(resp.Request) {
+		blog.V(2).Infof("<< b2_download_file_by_id status=%d [headers and body redacted]", resp.StatusCode)
+		return
+	}
 	var headers []string
 	for k, v := range resp.Header {
 		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
@@ -303,6 +330,30 @@ func logResponse(resp *http.Response, reply []byte) {
 		return
 	}
 	blog.V(2).Infof("<< %s (%s) %s {%s} (no reply)", method, id, resp.Status, hstr)
+}
+
+func isDownloadByIDRequest(req *http.Request) bool {
+	return req != nil && req.Header.Get("X-Blazer-Method") == "b2_download_file_by_id"
+}
+
+func redactDownloadIDText(req *http.Request, value string) string {
+	if !isDownloadByIDRequest(req) {
+		return value
+	}
+	id := req.URL.Query().Get("fileId")
+	if id != "" {
+		for _, secret := range []string{req.URL.String(), url.QueryEscape(id), url.PathEscape(id), id} {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	for _, header := range []string{"X-Bz-Server-Side-Encryption-Customer-Key", "X-Bz-Server-Side-Encryption-Customer-Key-Md5"} {
+		secret := req.Header.Get(header)
+		if secret != "" {
+			value = strings.ReplaceAll(value, url.QueryEscape(secret), "[REDACTED]")
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
 }
 
 func millitime(t int64) time.Time {
@@ -392,7 +443,11 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		return nil, err
 	default:
 		method := req.Header.Get("X-Blazer-Method")
-		blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		if isDownloadByIDRequest(req) {
+			blog.V(2).Infof(">> %s transport error [URL and error redacted]", method)
+		} else {
+			blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		}
 		// Only an upload fault is classified by method (see Action). Other
 		// transport errors stay method-less so their retry budget and message
 		// do not change.
@@ -413,8 +468,11 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 			return nil, err
 		}
 
+		// A transport error may include the full URL. Preserve ordinary error
+		// details while removing the file ID before a caller can log it.
+		message := redactDownloadIDText(req, err.Error())
 		return nil, b2err{
-			msg:    err.Error(),
+			msg:    message,
 			method: method,
 			retry:  1,
 		}
@@ -1538,6 +1596,22 @@ func (b *Bucket) DownloadFileByName(ctx context.Context, name string, offset, si
 // customer-managed key on GET, HEAD and ranged requests.
 func (b *Bucket) DownloadFileByNameWithSSEC(ctx context.Context, name string, offset, size int64, header bool, sse *b2types.ServerSideEncryption) (*FileReader, error) {
 	uri := fmt.Sprintf("%s/file/%s/%s", b.b2.downloadURI, b.Name, escape(name))
+	return b.downloadFile(ctx, uri, "b2_download_file_by_name", offset, size, header, sse)
+}
+
+// DownloadFileByID wraps b2_download_file_by_id.
+func (b *Bucket) DownloadFileByID(ctx context.Context, id string, offset, size int64, header bool) (*FileReader, error) {
+	return b.DownloadFileByIDWithSSEC(ctx, id, offset, size, header, nil)
+}
+
+// DownloadFileByIDWithSSEC downloads the requested version with an optional
+// customer-managed key on this request only.
+func (b *Bucket) DownloadFileByIDWithSSEC(ctx context.Context, id string, offset, size int64, header bool, sse *b2types.ServerSideEncryption) (*FileReader, error) {
+	uri := b.b2.downloadURI + b2types.V4api + "b2_download_file_by_id?fileId=" + url.QueryEscape(id)
+	return b.downloadFile(ctx, uri, "b2_download_file_by_id", offset, size, header, sse)
+}
+
+func (b *Bucket) downloadFile(ctx context.Context, uri, b2Method string, offset, size int64, header bool, sse *b2types.ServerSideEncryption) (*FileReader, error) {
 	method := "GET"
 	if header {
 		method = "HEAD"
@@ -1548,7 +1622,10 @@ func (b *Bucket) DownloadFileByNameWithSSEC(ctx context.Context, name string, of
 	}
 	req.Header.Set("Authorization", b.b2.authToken)
 	req.Header.Set("X-Blazer-Request-ID", fmt.Sprintf("%d", atomic.AddInt64(&reqID, 1)))
-	req.Header.Set("X-Blazer-Method", "b2_download_file_by_name")
+	req.Header.Set("X-Blazer-Method", b2Method)
+	// B2 returns the stored bytes, including gzip-encoded files. Prevent Go's
+	// transport from transparently decompressing and discarding Content-Length.
+	req.Header.Set("Accept-Encoding", "identity")
 	encryptionHeaders := map[string]string{}
 	if err := addServerSideEncryptionHeaders(encryptionHeaders, sse); err != nil {
 		return nil, err
@@ -1567,14 +1644,26 @@ func (b *Bucket) DownloadFileByNameWithSSEC(ctx context.Context, name string, of
 		return nil, err
 	}
 	logResponse(resp, nil)
+	return newFileReader(resp)
+}
+
+func newFileReader(resp *http.Response) (*FileReader, error) {
+	return newFileReaderWithMaxLength(resp, int64(^uint(0)>>1))
+}
+
+func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader, error) {
 	if resp.StatusCode != 200 && resp.StatusCode != 206 {
 		defer resp.Body.Close()
 		return nil, mkErr(resp)
 	}
-	clen, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+	contentLength, err := strconv.Atoi(resp.Header.Get("Content-Length"))
 	if err != nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, err
+	}
+	if contentLength < 0 || int64(contentLength) > maxInt {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("invalid download content length %d", contentLength)
 	}
 	info := make(map[string]string)
 	for key := range resp.Header {
@@ -1602,7 +1691,7 @@ func (b *Bucket) DownloadFileByNameWithSSEC(ctx context.Context, name string, of
 		SHA1:          sha1,
 		ID:            resp.Header.Get("X-Bz-File-Id"),
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: int(clen),
+		ContentLength: contentLength,
 		Info:          info,
 	}, nil
 }
