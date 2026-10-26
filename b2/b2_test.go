@@ -583,6 +583,100 @@ func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
 func (t *testFile) updateFileRetention(context.Context, *FileRetention, bool) error { return nil }
 func (t *testFile) updateFileLegalHold(context.Context, LegalHold) error            { return nil }
 
+type attrsTestFile struct {
+	*testFile
+	info map[string]string
+}
+
+func (t *attrsTestFile) getFileInfo(context.Context) (b2FileInfoInterface, error) {
+	return attrsTestFileInfo{file: t}, nil
+}
+
+type attrsTestFileInfo struct{ file *attrsTestFile }
+
+func (t attrsTestFileInfo) stats() (string, string, int64, string, map[string]string, string, time.Time) {
+	return t.file.n, "", t.file.s, "application/octet-stream", t.file.info, t.file.a, t.file.t
+}
+
+func (attrsTestFileInfo) fileLock() (*FileRetention, LegalHold) { return nil, "" }
+
+func TestObjectAttrsDoesNotMutateCachedFileInfo(t *testing.T) {
+	mtime := time.UnixMilli(1700000000000)
+	file := &attrsTestFile{
+		testFile: &testFile{n: "metadata.txt", s: 1, a: "upload", files: make(map[string]string)},
+		info:     map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "large_file_sha1": "full-sha1", "public": "value"},
+	}
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	object := &Object{f: &beFile{b2file: file, ri: root}}
+
+	first, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.LastModified.IsZero() {
+		t.Fatal("first Attrs().LastModified is zero")
+	}
+	if !first.LastModified.Equal(second.LastModified) {
+		t.Fatalf("Attrs().LastModified changed between calls: first=%s second=%s", first.LastModified, second.LastModified)
+	}
+	wantInfo := map[string]string{"large_file_sha1": "full-sha1", "public": "value"}
+	if !reflect.DeepEqual(first.Info, wantInfo) || !reflect.DeepEqual(second.Info, wantInfo) {
+		t.Fatalf("Attrs().Info changed between calls: first=%#v second=%#v, want %#v", first.Info, second.Info, wantInfo)
+	}
+	first.Info["public"] = "changed"
+	delete(first.Info, "large_file_sha1")
+	third, err := object.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(third.Info, wantInfo) || !reflect.DeepEqual(file.info, map[string]string{"src_last_modified_millis": fmt.Sprintf("%d", mtime.UnixMilli()), "large_file_sha1": "full-sha1", "public": "value"}) {
+		t.Fatalf("mutating Attrs.Info changed cache: third=%#v cached=%#v", third.Info, file.info)
+	}
+}
+
+func TestAttrsFromFileInfoPreservesNilInfo(t *testing.T) {
+	attrs, err := attrsFromFileInfo(&beFileInfo{info: nil, status: "upload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Info != nil {
+		t.Fatalf("Attrs.Info = %#v, want nil when fileInfo is nil", attrs.Info)
+	}
+}
+
+type sharedNameInfoBucket struct {
+	beBucketInterface
+	info *beFileInfo
+}
+
+func (b *sharedNameInfoBucket) getFileInfoByName(context.Context, string) (beFileInfoInterface, error) {
+	return b.info, nil
+}
+
+func TestGetFileInfoByNameDoesNotMutateSharedInfo(t *testing.T) {
+	cached := map[string]string{"src_last_modified_millis": "1700000000000", "large_file_sha1": "whole-sha1", "custom": "value"}
+	bucket := &Bucket{b: &sharedNameInfoBucket{info: &beFileInfo{info: cached, status: "upload"}}}
+	first, err := bucket.GetFileInfoByName(context.Background(), "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Info["custom"] = "changed"
+	second, err := bucket.GetFileInfoByName(context.Background(), "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.LastModified.IsZero() || !first.LastModified.Equal(second.LastModified) || !reflect.DeepEqual(second.Info, map[string]string{"large_file_sha1": "whole-sha1", "custom": "value"}) {
+		t.Fatalf("shared name info changed: first=%+v second=%+v", first, second)
+	}
+	if !reflect.DeepEqual(cached, map[string]string{"src_last_modified_millis": "1700000000000", "large_file_sha1": "whole-sha1", "custom": "value"}) {
+		t.Fatalf("cached GetFileInfoByName map mutated: %#v", cached)
+	}
+}
+
 type testFileReader struct {
 	b io.ReadCloser
 	s int
