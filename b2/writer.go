@@ -67,6 +67,9 @@ type Writer struct {
 	info           map[string]string
 	retention      *FileRetention
 	legalHold      LegalHold
+	progress       func(bytesComplete, bytesTotal int64)
+	progressTotal  int64
+	reporter       *progressReporter
 	encryption     *uploadEncryption
 	ssecRequested  bool
 	sseb2Requested bool
@@ -195,7 +198,9 @@ func (w *Writer) thread() {
 					w.setErr(errors.New("resumable upload was requested, but chunks don't match"))
 					return
 				}
+				skippedBytes := completedBytes(cnk.buf)
 				cnk.buf.Close()
+				w.reporter.add(skippedBytes)
 				w.completeChunk(cnk.id)
 				blog.V(2).Infof("skipping chunk %d", cnk.id)
 				continue
@@ -206,7 +211,7 @@ func (w *Writer) thread() {
 				w.setErr(err)
 				return
 			}
-			mr := &meteredReader{r: r, size: cnk.buf.Len()}
+			mr := newMeteredReader(r, cnk.buf, w.reporter)
 			w.registerChunk(cnk.id, mr)
 			fc, err = uploadPartWithReupload(w.ctx, w.file, w.o.b.r, fc, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
 			if err != nil {
@@ -225,6 +230,7 @@ func (w *Writer) thread() {
 func (w *Writer) init() {
 	w.start.Do(func() {
 		w.everStarted = true
+		w.reporter = newProgressReporter(w.progress, w.progressTotal)
 		w.smux.Lock()
 		w.smap = make(map[int]*meteredReader)
 		w.smux.Unlock()
@@ -344,7 +350,7 @@ func (w *Writer) simpleWriteFile() error {
 	if err != nil {
 		return err
 	}
-	mr := &meteredReader{r: r, size: w.w.Len()}
+	mr := newMeteredReader(r, w.w, w.reporter)
 	w.registerChunk(1, mr)
 	defer w.completeChunk(1)
 
@@ -564,18 +570,35 @@ func (w *Writer) sendChunk() error {
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
-// ReadFrom currently doesn't handle w.Resume; if w.Resume is true, ReadFrom
-// will act as if r is not an io.Seeker.
+// With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
+// its remaining length supplies the progress total.
 func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 	rs, ok := r.(io.ReadSeeker)
-	if !ok || w.Resume {
+	if !ok {
 		return copyContext(w.ctx, w, r)
+	}
+	if w.Resume {
+		if w.progress != nil {
+			if position, err := rs.Seek(0, io.SeekCurrent); err == nil {
+				if end, err := rs.Seek(0, io.SeekEnd); err == nil {
+					if _, err := rs.Seek(position, io.SeekStart); err != nil {
+						return 0, err
+					}
+					w.progressTotal = end - position
+					if w.progressTotal < 0 {
+						w.progressTotal = 0
+					}
+				}
+			}
+		}
+		return copyContext(w.ctx, w, rs)
 	}
 	blog.V(2).Info("streaming without buffer")
 	size, err := rs.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
+	w.progressTotal = size
 	var ra io.ReaderAt
 	if rat, ok := r.(io.ReaderAt); ok {
 		ra = rat
@@ -671,6 +694,7 @@ func (w *Writer) Close() error {
 		w.o.f = f
 		w.closed = true
 	})
+	w.reporter.finish()
 	return w.getErr()
 }
 
@@ -687,6 +711,13 @@ func (w *Writer) withAttrs(attrs *Attrs) *Writer {
 		w.info["src_last_modified_millis"] = fmt.Sprintf("%d", attrs.LastModified.UnixNano()/1e6)
 	}
 	return w
+}
+
+func completedBytes(buf writeBuffer) int64 {
+	if nb, ok := buf.(*nonBuffer); ok {
+		return int64(nb.size)
+	}
+	return int64(buf.Len())
 }
 
 // A WriterOption sets Writer-specific behavior.
@@ -711,6 +742,18 @@ func WithFileRetention(retention *FileRetention) WriterOption {
 func WithLegalHold(legalHold LegalHold) WriterOption {
 	return func(w *Writer) {
 		w.legalHold = legalHold
+	}
+}
+
+// WithProgress sets a callback that receives cumulative uploaded bytes. It runs
+// on one owner goroutine, never under a transfer lock; values are monotonic
+// non-decreasing and end with a final call at the bytes uploaded before Close
+// returns. The total is known for ReadFrom readers that implement io.Seeker
+// (including resume), and is -1 otherwise. Calling Close from this callback
+// is unsupported because Close waits for the callback to finish.
+func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
+	return func(w *Writer) {
+		w.progress = cb
 	}
 }
 
@@ -813,24 +856,44 @@ func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, roo
 }
 
 type meteredReader struct {
-	read int64
-	size int
-	r    readResetter
-	mux  sync.Mutex
+	read         atomic.Int64
+	reported     atomic.Int64 // high-water mark survives Reset and upload retries
+	size         int
+	progressSize int64 // excludes the 40-byte SHA1 trailer of nonBuffer
+	r            readResetter
+	progress     *progressReporter
+}
+
+func newMeteredReader(r readResetter, buf writeBuffer, progress *progressReporter) *meteredReader {
+	mr := &meteredReader{r: r, size: buf.Len(), progressSize: int64(buf.Len()), progress: progress}
+	if nb, ok := buf.(*nonBuffer); ok {
+		mr.progressSize = int64(nb.size)
+	}
+	return mr
 }
 
 func (mr *meteredReader) Read(p []byte) (int, error) {
-	mr.mux.Lock()
-	defer mr.mux.Unlock()
 	n, err := mr.r.Read(p)
-	mr.read += int64(n)
+	var delta int64
+	counted := mr.read.Add(int64(n))
+	if counted > mr.progressSize {
+		counted = mr.progressSize
+	}
+	for {
+		previous := mr.reported.Load()
+		if counted <= previous || mr.reported.CompareAndSwap(previous, counted) {
+			if counted > previous {
+				delta = counted - previous
+			}
+			break
+		}
+	}
+	mr.progress.add(delta)
 	return n, err
 }
 
 func (mr *meteredReader) Reset() error {
-	mr.mux.Lock()
-	defer mr.mux.Unlock()
-	mr.read = 0
+	mr.read.Store(0)
 	return mr.r.Reset()
 }
 
@@ -838,6 +901,6 @@ func (mr *meteredReader) done() float64 {
 	if mr == nil {
 		return 1
 	}
-	read := float64(atomic.LoadInt64(&mr.read))
+	read := float64(mr.read.Load())
 	return read / float64(mr.size)
 }
