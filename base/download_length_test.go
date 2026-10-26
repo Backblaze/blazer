@@ -104,6 +104,7 @@ func TestRetryAfterLargeValueIsBoundedBeforeNativeIntConversion(t *testing.T) {
 	}{
 		{"7", 7},
 		{"2147483648", 30},
+		{"99999999999", 30},
 		{"9223372036854775807", 30},
 		{"-1", 0},
 	} {

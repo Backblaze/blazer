@@ -188,12 +188,11 @@ func parseRetryAfterSeconds(raw string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// The backoff policy caps this value at 30 seconds. Clamp while it is
-	// still int64, before a 32-bit int conversion could overflow.
-	if seconds < 0 {
-		seconds = 0
-	} else if seconds > 30 {
-		seconds = 30
+	if seconds <= 0 {
+		return 0, nil
+	}
+	if seconds >= 30 {
+		return 30, nil
 	}
 	return int(seconds), nil
 }
