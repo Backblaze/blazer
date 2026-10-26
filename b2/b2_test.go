@@ -608,6 +608,35 @@ func TestAttrsFromFileInfoPreservesNilInfo(t *testing.T) {
 	}
 }
 
+type sharedNameInfoBucket struct {
+	beBucketInterface
+	info *beFileInfo
+}
+
+func (b *sharedNameInfoBucket) getFileInfoByName(context.Context, string) (beFileInfoInterface, error) {
+	return b.info, nil
+}
+
+func TestGetFileInfoByNameDoesNotMutateSharedInfo(t *testing.T) {
+	cached := map[string]string{"src_last_modified_millis": "1700000000000", "large_file_sha1": "whole-sha1", "custom": "value"}
+	bucket := &Bucket{b: &sharedNameInfoBucket{info: &beFileInfo{info: cached, status: "upload"}}}
+	first, err := bucket.GetFileInfoByName(context.Background(), "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Info["custom"] = "changed"
+	second, err := bucket.GetFileInfoByName(context.Background(), "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.LastModified.IsZero() || !first.LastModified.Equal(second.LastModified) || !reflect.DeepEqual(second.Info, map[string]string{"large_file_sha1": "whole-sha1", "custom": "value"}) {
+		t.Fatalf("shared name info changed: first=%+v second=%+v", first, second)
+	}
+	if !reflect.DeepEqual(cached, map[string]string{"src_last_modified_millis": "1700000000000", "large_file_sha1": "whole-sha1", "custom": "value"}) {
+		t.Fatalf("cached GetFileInfoByName map mutated: %#v", cached)
+	}
+}
+
 type testFileReader struct {
 	b io.ReadCloser
 	s int
