@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -408,6 +409,7 @@ func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
 		body        string
 	}{
 		{"start above MaxInt32", fmt.Sprintf("bytes=%d-", int64(math.MaxInt32)+1), http.StatusRequestedRangeNotSatisfiable, ""},
+		{"start wraps 32-bit", "bytes=4294967296-", http.StatusRequestedRangeNotSatisfiable, ""},
 		{"end above MaxInt32", fmt.Sprintf("bytes=0-%d", int64(math.MaxInt32)+1), http.StatusPartialContent, "small"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,6 +439,119 @@ func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
 				t.Fatalf("body=%q, want %q", body, tc.body)
 			}
 		})
+	}
+}
+
+func TestBucketUpdateRejectsStaleRevision(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.NewBucket(ctx, "revision", nil); err != nil {
+		t.Fatal(err)
+	}
+	first, err := client.Bucket(ctx, "revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.Bucket(ctx, "revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Update(ctx, &b2.BucketAttrs{Info: map[string]string{"owner": "first"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Update(ctx, &b2.BucketAttrs{Info: map[string]string{"owner": "second"}}); !b2.IsUpdateConflict(err) {
+		t.Fatalf("stale update error = %v, want IsUpdateConflict", err)
+	}
+	attrs, err := first.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Info["owner"] != "first" {
+		t.Fatalf("stale update overwrote bucket info: %v", attrs.Info)
+	}
+}
+
+func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
+	sim := New()
+	id := sim.Seed("missing-part")
+	started := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": id, "fileName": "large", "contentType": "application/octet-stream"})
+	var body struct {
+		FileID string `json:"fileId"`
+	}
+	if err := json.NewDecoder(started.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if err := started.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	part := []byte("second")
+	req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+body.FileID, bytes.NewReader(part))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "b2sim-token")
+	req.Header.Set("X-Bz-Part-Number", "2")
+	req.Header.Set("X-Bz-Content-Sha1", digest(part))
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("part upload status = %d", resp.StatusCode)
+	}
+	finish := postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": body.FileID, "partSha1Array": []string{""}})
+	if err := finish.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if finish.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing part finish status = %d, want 400", finish.StatusCode)
+	}
+	if sim.large[body.FileID] == nil || len(sim.buckets[id].versions) != 0 {
+		t.Fatal("failed finish removed unfinished file or stored a version")
+	}
+}
+
+func TestDownloadFileNameHeaderIsEncoded(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "encoded-name", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "folder/100% space+name.txt"
+	if _, err := writeObject(ctx, bucket, name, []byte("data"), 0); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodGet, origin+"/file/encoded-name/folder/100%25%20space%2Bname.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "b2sim-token")
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("download status = %d", resp.StatusCode)
+	}
+	encoded := resp.Header.Get("X-Bz-File-Name")
+	decoded, err := url.QueryUnescape(encoded)
+	if err != nil || decoded != name || encoded == name {
+		t.Fatalf("file name header = %q, decoded = %q, err = %v", encoded, decoded, err)
 	}
 }
 

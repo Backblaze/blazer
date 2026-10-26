@@ -360,6 +360,11 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		if b == nil {
 			return failure(req, 404, "not_found", "bucket not found")
 		}
+		if revision, present := args["ifRevisionIs"]; present {
+			if value, ok := revision.(float64); !ok || value != float64(b.revision) {
+				return failure(req, 409, "conflict", "bucket revision does not match")
+			}
+		}
 		if v, ok := args["bucketType"]; ok {
 			b.kind = str(v)
 		}
@@ -554,10 +559,11 @@ func (s *Simulator) finish(req *http.Request, args map[string]any) (*http.Respon
 	var data []byte
 	for i, want := range wants {
 		part := i + 1
-		if str(want) != l.hashes[part] {
+		piece, exists := l.parts[part]
+		if !exists || l.hashes[part] == "" || str(want) != l.hashes[part] {
 			return failure(req, 400, "bad_request", "part SHA1 mismatch")
 		}
-		data = append(data, l.parts[part]...)
+		data = append(data, piece...)
 	}
 	f := l.file
 	f.data = data
@@ -679,29 +685,30 @@ func (s *Simulator) download(req *http.Request) (*http.Response, error) {
 		if len(bounds) != 2 {
 			return failure(req, 416, "range_not_satisfiable", "invalid range")
 		}
-		start, err := strconv.ParseInt(bounds[0], 10, 64)
-		if err != nil || start < 0 || start >= int64(len(data)) {
+		start, err := strconv.Atoi(bounds[0])
+		if err != nil || start < 0 || start >= len(data) {
 			return failure(req, 416, "range_not_satisfiable", "range beyond end")
 		}
-		end := int64(len(data) - 1)
+		end := len(data) - 1
 		if bounds[1] != "" {
 			requested, parseErr := strconv.ParseInt(bounds[1], 10, 64)
-			if parseErr != nil || requested < start {
+			if parseErr != nil || requested < int64(start) {
 				return failure(req, 416, "range_not_satisfiable", "invalid range")
 			}
-			if requested < end {
-				end = requested
+			if requested < int64(len(data)) {
+				end, err = strconv.Atoi(bounds[1])
+				if err != nil {
+					return failure(req, 416, "range_not_satisfiable", "invalid range")
+				}
 			}
 		}
-		// Both bounds were limited by len(data); use int64 slice indices so no
-		// unchecked narrowing conversion occurs on 32-bit platforms.
 		data = data[start : end+1]
 		status = 206
 		header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(f.data)))
 	}
 	header.Set("X-Bz-File-Id", f.id)
 	header.Set("X-Bz-Content-Sha1", f.sha)
-	header.Set("X-Bz-File-Name", f.name)
+	header.Set("X-Bz-File-Name", url.QueryEscape(f.name))
 	header.Set("Content-Type", f.contentType)
 	for k, v := range f.info {
 		header.Set("X-Bz-Info-"+url.QueryEscape(k), url.QueryEscape(v))
