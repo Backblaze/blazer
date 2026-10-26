@@ -53,7 +53,10 @@ Out of scope:
 
 - **Credentials**: application keys are passed to `b2.NewClient` and sent only to the B2 authorize
   endpoint; the authorization token returned is held in memory and sent in the `Authorization` header.
-- **SSE-C keys**: customer-provided encryption keys travel in request headers and are not persisted.
+- **SSE-C keys**: customer-provided encryption keys travel in request headers on uploads and downloads,
+  and in JSON request bodies on large-file start (`serverSideEncryption`) and server-side copy
+  (`sourceServerSideEncryption`, `destinationServerSideEncryption`). They are not persisted. If you log
+  requests, redact both headers and bodies.
 - **Transport**: all B2 API traffic uses HTTPS. Certificate verification failures stop retries and
   return the original error; they are never treated as retryable.
 - **Tests and CI**: live tests read `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` from the
