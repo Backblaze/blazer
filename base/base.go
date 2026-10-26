@@ -166,7 +166,7 @@ func mkErr(resp *http.Response) error {
 		r, err := strconv.ParseInt(retry, 10, 64)
 		if err != nil {
 			r = 0
-			blog.V(1).Infof("couldn't parse retry-after header %q: %v", retry, err)
+			blog.V(1).Info("couldn't parse retry-after header")
 		}
 		retryAfter = int(r)
 	}
@@ -239,10 +239,10 @@ func logRequest(req *http.Request, args []byte) {
 	hstr := strings.Join(headers, ";")
 	method := req.Header.Get("X-Blazer-Method")
 	if args != nil {
-		blog.V(2).Infof(">> %s %v: %v headers: {%s} args: (%s)", method, req.Method, req.URL, hstr, redactSensitiveJSON(args))
+		blog.V(2).Infof(">> %s %v headers: {%s} args: (%s)", method, req.Method, hstr, redactSensitiveJSON(args))
 		return
 	}
-	blog.V(2).Infof(">> %s %v: %v {%s} (no args)", method, req.Method, req.URL, hstr)
+	blog.V(2).Infof(">> %s %v {%s} (no args)", method, req.Method, hstr)
 }
 
 // sensitiveLogField recognizes credentials in both JSON field names and HTTP headers.
@@ -250,7 +250,8 @@ func sensitiveLogField(name string) bool {
 	name = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(name, "-", ""), "_", ""))
 	return strings.Contains(name, "authorization") || strings.Contains(name, "token") ||
 		strings.Contains(name, "secret") || strings.Contains(name, "applicationkey") ||
-		strings.Contains(name, "customerkey")
+		strings.Contains(name, "customerkey") || strings.Contains(name, "cookie") ||
+		strings.Contains(name, "authenticate")
 }
 
 func redactSensitiveValue(value interface{}) {
@@ -289,7 +290,7 @@ func logResponse(resp *http.Response, reply []byte) {
 	}
 	var headers []string
 	for k, v := range resp.Header {
-		if sensitiveLogField(k) {
+		if resp.StatusCode >= 400 || sensitiveLogField(k) {
 			continue
 		}
 		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
@@ -297,12 +298,16 @@ func logResponse(resp *http.Response, reply []byte) {
 	hstr := strings.Join(headers, "; ")
 	method := resp.Request.Header.Get("X-Blazer-Method")
 	id := resp.Request.Header.Get("X-Blazer-Request-ID")
-	if reply != nil {
-		safe := redactSensitiveJSON(reply)
-		blog.V(2).Infof("<< %s (%s) %s {%s} (%s)", method, id, resp.Status, hstr, safe)
+	if resp.StatusCode >= 400 {
+		blog.V(2).Infof("<< %s (%s) %d {%s} (error response omitted)", method, id, resp.StatusCode, hstr)
 		return
 	}
-	blog.V(2).Infof("<< %s (%s) %s {%s} (no reply)", method, id, resp.Status, hstr)
+	if reply != nil {
+		safe := redactSensitiveJSON(reply)
+		blog.V(2).Infof("<< %s (%s) %d {%s} (%s)", method, id, resp.StatusCode, hstr, safe)
+		return
+	}
+	blog.V(2).Infof("<< %s (%s) %d {%s} (no reply)", method, id, resp.StatusCode, hstr)
 }
 
 func millitime(t int64) time.Time {
@@ -440,7 +445,7 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		return nil, err
 	default:
 		method := req.Header.Get("X-Blazer-Method")
-		blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		blog.V(2).Infof(">> %s transport error: %T", method, err)
 		// Only an upload fault is classified by method (see Action). Other
 		// transport errors stay method-less so their retry budget and message
 		// do not change.
@@ -573,7 +578,7 @@ func (o *b2Options) makeRequest(ctx context.Context, method, verb, uri string, b
 	} else {
 		ra, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			blog.V(1).Infof("%s: couldn't read response: %v", method, err)
+			blog.V(1).Infof("%s: couldn't read response body", method)
 		}
 		replyArgs = ra
 	}
