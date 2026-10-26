@@ -411,6 +411,10 @@ func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, 
 	}, nil
 }
 
+func (t *testBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool, ssec *SSECKey) (b2FileReaderInterface, error) {
+	return t.downloadFileByName(ctx, id, offset, size, header, ssec)
+}
+
 func (t *testBucket) hideFile(context.Context, string) (b2FileInterface, error) { return nil, nil }
 func (t *testBucket) copyFile(context.Context, string, string, string, string, string, string, map[string]string, *SSECKey, *SSECKey) (b2FileInterface, error) {
 	return nil, nil
