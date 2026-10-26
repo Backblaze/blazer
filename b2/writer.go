@@ -67,12 +67,13 @@ type Writer struct {
 	// blank, os.TempDir() is used.
 	FileBufferDir string
 
-	contentType   string
-	info          map[string]string
-	retention     *FileRetention
-	legalHold     LegalHold
-	ssec          *SSECKey
-	ssecRequested bool
+	contentType    string
+	info           map[string]string
+	retention      *FileRetention
+	legalHold      LegalHold
+	encryption     *uploadEncryption
+	ssecRequested  bool
+	sseb2Requested bool
 
 	csize       int
 	ctx         context.Context
@@ -105,6 +106,27 @@ type Writer struct {
 
 	smux sync.RWMutex
 	smap map[int]*meteredReader
+}
+
+// uploadEncryption is the single per-request encryption setting shared by
+// simple uploads and large-file starts. SSE-C carries key material for each
+// part; SSE-B2 applies only when the file is created.
+type uploadEncryption struct {
+	sse  *ServerSideEncryption
+	ssec *SSECKey
+}
+
+func (e *uploadEncryption) validate() error {
+	if e == nil {
+		return nil
+	}
+	if e.ssec != nil && e.sse != nil {
+		return errors.New("b2: SSE-B2 and SSE-C cannot be used on the same upload")
+	}
+	if e.ssec != nil {
+		return e.ssec.validate()
+	}
+	return nil
 }
 
 type chunk struct {
@@ -274,13 +296,13 @@ func (w *Writer) checkObjectLock() error {
 	if err := w.legalHold.validate(true); err != nil {
 		return err
 	}
-	if w.ssecRequested && w.ssec == nil {
+	if w.ssecRequested && w.sseb2Requested {
+		return errors.New("b2: SSE-B2 and SSE-C cannot be used on the same upload")
+	}
+	if w.ssecRequested && (w.encryption == nil || w.encryption.ssec == nil) {
 		return errors.New("b2: SSE-C key is nil")
 	}
-	if w.ssec != nil {
-		return w.ssec.validate()
-	}
-	return nil
+	return w.encryption.validate()
 }
 
 // Write satisfies the io.Writer interface.
@@ -367,7 +389,7 @@ func (w *Writer) simpleWriteFile() error {
 	err = retry.Do(
 		w.ctx,
 		func() error {
-			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.ssec)
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.encryption)
 			if err != nil {
 				return err
 			}
@@ -415,7 +437,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		if ctype == "" {
 			ctype = "application/octet-stream"
 		}
-		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, info, w.retention, w.legalHold, w.ssec)
+		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, info, w.retention, w.legalHold, w.encryption)
 	}
 	var got bool
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
@@ -465,7 +487,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	for id, sha := range seen {
 		w.seen[id] = sha
 	}
-	return fi.compileParts(size, seen, w.ssec), nil
+	return fi.compileParts(size, seen, w.encryption), nil
 }
 
 const ssecKeyIDFileInfo = "sse_c_key_id"
@@ -473,10 +495,10 @@ const ssecKeyIDFileInfo = "sse_c_key_id"
 // ssecFileInfo follows b2-sdk-python's caller-assigned key-ID convention.
 // The helper adds no key-derived value to file info.
 func (w *Writer) ssecFileInfo() (map[string]string, error) {
-	if w.ssec == nil {
+	if w.encryption == nil || w.encryption.ssec == nil {
 		return w.info, nil
 	}
-	id := w.ssec.keyID
+	id := w.encryption.ssec.keyID
 	existing, present := w.info[ssecKeyIDFileInfo]
 	if id == "" {
 		if present {
@@ -517,36 +539,49 @@ func (w *Writer) checkResumedLock(fi beFileInterface) error {
 }
 
 // checkResumedEncryption refuses to reuse parts unless the unfinished file's
-// mode and file-info key identifier match the request. B2 does not return a
-// customer-key digest in b2_list_unfinished_large_files.
+// reported encryption matches the request. SSE-C also requires a matching
+// caller-supplied key identifier in file info; B2 may omit the key digest from
+// b2_list_unfinished_large_files.
 func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
 	mode, algorithm, gotMD5 := fi.encryption()
-	if w.ssec == nil {
+	if w.encryption == nil || (w.encryption.ssec == nil && w.encryption.sse == nil) {
 		if mode == "SSE-C" {
 			return fmt.Errorf("b2: cannot resume %q: unfinished upload requires an SSE-C key", w.name)
 		}
 		return nil
 	}
-	if mode != "SSE-C" || algorithm != "AES256" {
-		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C mode or algorithm does not match", w.name)
+	if w.encryption.ssec != nil {
+		key := w.encryption.ssec
+		if mode != "SSE-C" || algorithm != "AES256" {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C mode or algorithm does not match", w.name)
+		}
+		if key.keyID == "" {
+			return fmt.Errorf("b2: cannot resume %q: SSE-C key identifier is required", w.name)
+		}
+		_, wantMD5, err := key.encoded()
+		if err != nil {
+			return err
+		}
+		if gotMD5 != "" && gotMD5 != wantMD5 {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest does not match", w.name)
+		}
+		info, err := fi.getFileInfo(w.ctx)
+		if err != nil {
+			return err
+		}
+		_, _, _, _, fileInfo, _, _ := info.stats()
+		if fileInfo[ssecKeyIDFileInfo] == "" || fileInfo[ssecKeyIDFileInfo] != key.keyID {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key identifier is missing or does not match", w.name)
+		}
+		return nil
 	}
-	if w.ssec.keyID == "" {
-		return fmt.Errorf("b2: cannot resume %q: SSE-C key identifier is required", w.name)
-	}
-	_, wantMD5, err := w.ssec.encoded()
-	if err != nil {
-		return err
-	}
-	if gotMD5 != "" && gotMD5 != wantMD5 {
-		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest does not match", w.name)
-	}
-	info, err := fi.getFileInfo(w.ctx)
-	if err != nil {
-		return err
-	}
-	_, _, _, _, fileInfo, _, _ := info.stats()
-	if fileInfo[ssecKeyIDFileInfo] == "" || fileInfo[ssecKeyIDFileInfo] != w.ssec.keyID {
-		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key identifier is missing or does not match", w.name)
+	if requested := w.encryption.sse; requested != nil {
+		if requested.Mode != "SSE-B2" || requested.Algorithm != "AES256" {
+			return fmt.Errorf("b2: cannot resume %q: requested SSE-B2 encryption algorithm must be AES256", w.name)
+		}
+		if mode != requested.Mode || algorithm != requested.Algorithm {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload encryption mode or algorithm is missing or does not match", w.name)
+		}
 	}
 	return nil
 }
@@ -775,8 +810,19 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 // key. This option adds neither the key nor a key-derived value to file info.
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
-		w.ssec = key
+		w.encryption = &uploadEncryption{ssec: key}
 		w.ssecRequested = true
+	}
+}
+
+// WithSSEB2 encrypts this upload with a B2-managed key using algorithm. It
+// overrides the bucket's default for this upload only; the setting is used for
+// a simple upload request or the large-file start request. It carries no
+// customer-managed key material.
+func WithSSEB2(algorithm string) WriterOption {
+	return func(w *Writer) {
+		w.encryption = &uploadEncryption{sse: newServerSideEncryption("SSE-B2", algorithm)}
+		w.sseb2Requested = true
 	}
 }
 

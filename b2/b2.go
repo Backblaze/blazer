@@ -76,7 +76,7 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 	for _, option := range c.opts.writerOpts {
 		option(probe)
 	}
-	if probe.ssecRequested || probe.ssec != nil {
+	if probe.ssecRequested || (probe.encryption != nil && probe.encryption.ssec != nil) {
 		return nil, errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
 	}
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
@@ -265,10 +265,11 @@ type BucketAttrs struct {
 // AES256 algorithm. It is the only supported bucket default; leaving
 // BucketAttrs.DefaultServerSideEncryption nil uses the service default.
 func SSEB2WithAES256() *ServerSideEncryption {
-	return &ServerSideEncryption{
-		Mode:      "SSE-B2",
-		Algorithm: "AES256",
-	}
+	return newServerSideEncryption("SSE-B2", "AES256")
+}
+
+func newServerSideEncryption(mode, algorithm string) *ServerSideEncryption {
+	return &ServerSideEncryption{Mode: mode, Algorithm: algorithm}
 }
 
 // DefaultServerSideEncryption returns the SSE-B2 setting.
@@ -559,16 +560,17 @@ type Object struct {
 
 // Attrs holds an object's metadata.
 type Attrs struct {
-	Name            string            // Not used on upload.
-	Size            int64             // Not used on upload.
-	ContentType     string            // Used on upload, default is "application/octet-stream".
-	Status          ObjectState       // Not used on upload.
-	UploadTimestamp time.Time         // Not used on upload.
-	SHA1            string            // Can be "none" for large files.  If set on upload, will be used for large files.
-	LastModified    time.Time         // If present, and there are fewer than 10 keys in the Info field, this is saved on upload.
-	Info            map[string]string // Save arbitrary metadata on upload, but limited to 10 keys.
-	Retention       *FileRetention    // Object Lock retention of this file, nil when it has none or the key may not read it.
-	LegalHold       LegalHold         // Object Lock legal hold of this file, empty when unset or the key may not read it.
+	Name                 string                // Not used on upload.
+	Size                 int64                 // Not used on upload.
+	ContentType          string                // Used on upload, default is "application/octet-stream".
+	Status               ObjectState           // Not used on upload.
+	UploadTimestamp      time.Time             // Not used on upload.
+	SHA1                 string                // Can be "none" for large files.  If set on upload, will be used for large files.
+	LastModified         time.Time             // If present, and there are fewer than 10 keys in the Info field, this is saved on upload.
+	Info                 map[string]string     // Save arbitrary metadata on upload, but limited to 10 keys.
+	Retention            *FileRetention        // Object Lock retention of this file, nil when it has none or the key may not read it.
+	LegalHold            LegalHold             // Object Lock legal hold of this file, empty when unset or the key may not read it.
+	ServerSideEncryption *ServerSideEncryption // Server-side encryption applied to this file, nil when none was reported.
 }
 
 // Name returns an object's name
@@ -593,6 +595,7 @@ func (o *Object) Attrs(ctx context.Context, keys ...*SSECKey) (*Attrs, error) {
 	}
 	name, sha, size, ct, info, st, stamp := fi.stats()
 	retention, legalHold := fi.fileLock()
+	serverSideEncryption := fi.serverSideEncryption()
 	var state ObjectState
 	switch st {
 	case "upload", "copy":
@@ -617,16 +620,17 @@ func (o *Object) Attrs(ctx context.Context, keys ...*SSECKey) (*Attrs, error) {
 		sha = v
 	}
 	return &Attrs{
-		Name:            name,
-		Size:            size,
-		ContentType:     ct,
-		UploadTimestamp: stamp,
-		SHA1:            sha,
-		Info:            info,
-		Status:          state,
-		LastModified:    mtime,
-		Retention:       retention,
-		LegalHold:       legalHold,
+		Name:                 name,
+		Size:                 size,
+		ContentType:          ct,
+		UploadTimestamp:      stamp,
+		SHA1:                 sha,
+		Info:                 info,
+		Status:               state,
+		LastModified:         mtime,
+		Retention:            retention,
+		LegalHold:            legalHold,
+		ServerSideEncryption: serverSideEncryption,
 	}, nil
 }
 
@@ -642,6 +646,7 @@ func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*Attrs, er
 	}
 	fileName, sha, size, contentType, info, status, timestamp := fi.stats()
 	retention, legalHold := fi.fileLock()
+	serverSideEncryption := fi.serverSideEncryption()
 	var state ObjectState
 	switch status {
 	case "upload", "copy":
@@ -670,6 +675,7 @@ func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*Attrs, er
 		UploadTimestamp: timestamp, SHA1: sha, Info: info,
 		Status: state, LastModified: lastModified,
 		Retention: retention, LegalHold: legalHold,
+		ServerSideEncryption: serverSideEncryption,
 	}, nil
 }
 

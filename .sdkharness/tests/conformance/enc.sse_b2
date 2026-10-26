@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CONFORMANCE blazer x enc.sse_b2 -- the contract is bin/conformance/README.md.
 #
-# Scenario: SSE-B2 bucket default round-trip; PARTIAL: bucket default only
+# Scenario: SSE-B2 bucket-default and per-request upload round trips
 #
 # The expected value is B2's published contract. b2_upload_file's
 # X-Bz-Server-Side-Encryption: "B2 will encrypt the uploaded data before storing
@@ -102,23 +102,17 @@ exit "$run_rc"
 : <<'__EOF_GO__'
 package main
 
-// blazer x enc.sse_b2 -- a PARTIAL (⚠) cell.
+// blazer x enc.sse_b2.
 //
-// Setup   a bucket
-// Action  upload requesting SSE-B2
-// Assert  metadata reports SSE-B2/AES256; the download returns plaintext
-// Go ⚠    BUCKET-DEFAULT ONLY, no per-file request
+// Setup   one normal bucket (the simulator applies its SSE-B2 default)
+// Action  upload once with WithSSEB2("AES256") and once without an option
+// Assert  each returned object's encryption is SSE-B2/AES256; the default-path
+//         object still round-trips as plaintext
 //
-// The boundary is the assertion, not a detour around it. blazer's SSE support
-// is one bucket attribute -- BucketAttrs.DefaultServerSideEncryption, whose
-// only supported value is the hardcoded SSEB2WithAES256 (card.md, "SSE-B2
-// bucket default"; capabilities.tsv enc.sse_b2 = partial). This check proves
-// (1) the bucket default round-trips and its objects come back as plaintext,
-// and (2) the PUBLISHED package exposes no per-file SSE request at all, read
-// off b2.Attrs and b2.Writer rather than taken on the card's word.
-//
-// The API came from docs/sdks/blazer/card.md and godoc for
-// github.com/Backblaze/blazer/b2. Never from b2sdks/.
+// The expected value is the b2_upload_file contract cited in the shell header:
+// an X-Bz-Server-Side-Encryption request selects SSE-B2 for that upload and the
+// response reports its mode and algorithm. The public b2 surface—not this
+// check—must make both selection and returned metadata available.
 
 import (
 	"bytes"
@@ -129,7 +123,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -140,57 +133,54 @@ import (
 const capability = "enc.sse_b2"
 
 func runCheck(ctx context.Context, target *string) error {
-	// --- the ⚠ boundary, before any network -----------------------------
-	// A per-file SSE request would have to be reachable from the object
-	// attributes or the writer. Neither carries one.
-	for _, surface := range []struct {
-		label  string
-		fields []string
-	}{
-		{"b2.Attrs", exportedFields((*b2.Attrs)(nil))},
-		{"b2.Writer", exportedFields((*b2.Writer)(nil))},
-	} {
-		for _, field := range surface.fields {
-			lower := strings.ToLower(field)
-			if strings.Contains(lower, "encryption") || strings.Contains(lower, "sse") {
-				return failf("per-file boundary", "%s exposes %q, so the card's 'bucket default only' boundary is wrong: a per-file SSE request appears reachable", surface.label, field)
-			}
-		}
-	}
-	note("boundary confirmed offline: neither b2.Attrs %v nor b2.Writer %v carries a per-file SSE field", exportedFields((*b2.Attrs)(nil)), exportedFields((*b2.Writer)(nil)))
-
 	client, err := newClient(ctx, *target)
 	if err != nil {
 		return err
 	}
 
-	bucket, cleanup, err := newBucket(ctx, client, &b2.BucketAttrs{
-		Type:                        b2.Private,
-		DefaultServerSideEncryption: b2.SSEB2WithAES256(),
-	})
+	// --- per-request SSE-B2 and the simulator's normal bucket default -----
+	bucket, cleanup, err := newBucket(ctx, client, &b2.BucketAttrs{Type: b2.Private})
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-
-	attrs, err := bucket.Attrs(ctx)
+	bucketAttrs, err := bucket.Attrs(ctx)
 	if err != nil {
 		return classify("read bucket", err)
 	}
-	if attrs.DefaultServerSideEncryption == nil {
-		return failf("read back", "the bucket reports no default server-side encryption after being created with SSE-B2")
-	}
-	if !strings.EqualFold(attrs.DefaultServerSideEncryption.Mode, "SSE-B2") {
-		return failf("read back", "default encryption mode %q, expected SSE-B2", attrs.DefaultServerSideEncryption.Mode)
-	}
-	if !strings.EqualFold(attrs.DefaultServerSideEncryption.Algorithm, "AES256") {
-		return failf("read back", "default encryption algorithm %q, expected AES256", attrs.DefaultServerSideEncryption.Algorithm)
+	if err := assertSSEB2("read bucket", bucketAttrs.DefaultServerSideEncryption); err != nil {
+		return err
 	}
 
-	// --- plaintext on the way out -----------------------------------------
 	payload := payloadOf(4096)
-	name := objectName("sse-b2.bin")
+	perRequestName := objectName("sse-b2-per-request.bin")
+	perRequestObject := bucket.Object(perRequestName)
+	writer := perRequestObject.NewWriter(ctx, b2.WithSSEB2("AES256"))
+	if _, err := writer.Write(payload); err != nil {
+		_ = writer.Close()
+		return classify("per-request upload", err)
+	}
+	if err := writer.Close(); err != nil {
+		return classify("per-request upload", err)
+	}
+	perRequestAttrs, err := perRequestObject.Attrs(ctx)
+	if err != nil {
+		return classify("read per-request object", err)
+	}
+	if err := assertSSEB2("read per-request object", perRequestAttrs.ServerSideEncryption); err != nil {
+		return err
+	}
+
+	// --- unset option follows the bucket default and preserves plaintext ---
+	name := objectName("sse-b2-default.bin")
 	if _, err := upload(ctx, bucket, name, payload, nil, nil); err != nil {
+		return err
+	}
+	defaultAttrs, err := bucket.Object(name).Attrs(ctx)
+	if err != nil {
+		return classify("read default-path object", err)
+	}
+	if err := assertSSEB2("read default-path object", defaultAttrs.ServerSideEncryption); err != nil {
 		return err
 	}
 	got, err := download(ctx, bucket, name, nil)
@@ -200,8 +190,6 @@ func runCheck(ctx context.Context, target *string) error {
 	if !bytes.Equal(got, payload) {
 		return failf("round trip", "the object stored in an SSE-B2 bucket did not come back as the plaintext that went in")
 	}
-	note("per-object encryption metadata is not asserted because blazer's b2.Attrs carries none; the bucket default read-back above is the whole of what this SDK can report")
-
 	// --- the other half of the boundary: anything but SSE-B2 is refused ----
 	err = bucket.Update(ctx, &b2.BucketAttrs{
 		DefaultServerSideEncryption: &b2.ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"},
@@ -210,6 +198,19 @@ func runCheck(ctx context.Context, target *string) error {
 		return failf("per-file boundary", "an SSE-C bucket default was ACCEPTED; the card records SSE-C as rejected client-side (capabilities.tsv: enc.sse_c = no)")
 	}
 	note("an SSE-C bucket default was refused, as the card records: %s", scrub(err.Error()))
+	return nil
+}
+
+func assertSSEB2(step string, encryption *b2.ServerSideEncryption) error {
+	if encryption == nil {
+		return failf(step, "the object returned no server-side encryption metadata")
+	}
+	if !strings.EqualFold(encryption.Mode, "SSE-B2") {
+		return failf(step, "encryption mode %q, expected SSE-B2", encryption.Mode)
+	}
+	if !strings.EqualFold(encryption.Algorithm, "AES256") {
+		return failf(step, "encryption algorithm %q, expected AES256", encryption.Algorithm)
+	}
 	return nil
 }
 
@@ -518,26 +519,6 @@ func anyContains(values []string, substr string) bool {
 		}
 	}
 	return false
-}
-
-// exportedFields names a struct's exported fields, which is how the ⚠ boundary
-// assertions interrogate the PUBLISHED package rather than trusting the card.
-func exportedFields(v interface{}) []string {
-	var names []string
-	t := reflect.TypeOf(v)
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return names
-	}
-	for i := 0; i < t.NumField(); i++ {
-		if field := t.Field(i); field.PkgPath == "" {
-			names = append(names, field.Name)
-		}
-	}
-	sort.Strings(names)
-	return names
 }
 
 func infoValue(info map[string]string, key string) (string, bool) {
