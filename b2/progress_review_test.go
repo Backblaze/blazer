@@ -82,7 +82,11 @@ func TestProgressResumePipeWithoutCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { if err := pr.Close(); err != nil { t.Error(err) } }()
+	defer func() {
+		if err := pr.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := pw.Write([]byte("pipe payload")); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +200,11 @@ func (b pipeProgressBucket) downloadFileByName(context.Context, string, int64, i
 func TestProgressCancelClosesBlockedBody(t *testing.T) {
 	bucket := newProgressReviewBucket(t)
 	pr, pw := io.Pipe()
-	defer func() { if err := pw.Close(); err != nil { t.Error(err) } }()
+	defer func() {
+		if err := pw.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	body := &pipeProgressBody{r: pr, entered: make(chan struct{}), exited: make(chan struct{})}
 	bucket.b = pipeProgressBucket{bucket.b, body}
 	ctx, cancel := context.WithCancel(context.Background())
