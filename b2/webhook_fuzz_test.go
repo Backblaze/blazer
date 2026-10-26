@@ -1,6 +1,7 @@
 package b2
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -40,6 +41,9 @@ func FuzzVerifySignature(f *testing.F) {
 }
 
 func FuzzParseEvent(f *testing.F) {
+	emptyEvents := append([]byte(`{"events":[`), bytes.Repeat([]byte(`{},`), 9999)...)
+	emptyEvents = append(emptyEvents, []byte(`{}]}`)...)
+	f.Add(emptyEvents)
 	for _, seed := range []string{`{"events":[]}`, `null`, `{"events":[{"objectSize":null}]}`, `{"events":[{"eventVersion":2147483648,"objectSize":9223372036854775807}]}`, "\r\n{}\r\n", `{"events":[`} {
 		f.Add([]byte(seed))
 	}
@@ -51,6 +55,11 @@ func FuzzParseEvent(f *testing.F) {
 		encoded, err := json.Marshal(event)
 		if err != nil {
 			t.Fatal(err)
+		}
+		// The accepted input can expand beyond the API limit when zero-valued
+		// fields are emitted. Re-parse only bodies the API accepts.
+		if len(encoded) > MaxWebhookBodySize {
+			return
 		}
 		again, err := ParseEvent(encoded)
 		if err != nil || !reflect.DeepEqual(event, again) {
