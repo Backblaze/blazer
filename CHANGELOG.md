@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `(*b2.Bucket).Compose` builds a large file from ordered uploaded and server-side copied parts, using `b2_copy_part`. It validates part sizes and copy ranges before starting, rejects overlapping ranges from the same source, and cancels an unfinished file if a part fails, even after caller cancellation.
+
 ## [0.9.0] - 2026-10-22
 
 ### Added

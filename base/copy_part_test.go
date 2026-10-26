@@ -64,3 +64,42 @@ func TestCopyPartRecordsHashAndSizeForFinish(t *testing.T) {
 		t.Errorf("finish size=%d body=%v", file.Size, finished)
 	}
 }
+
+func TestCopyPartRejectsInconsistentResponseWithoutRecording(t *testing.T) {
+	for _, tc := range []struct {
+		name, response string
+	}{
+		{"wrong file", `{"fileId":"other","partNumber":1,"contentLength":5,"contentSha1":"sha"}`},
+		{"wrong part", `{"fileId":"large","partNumber":2,"contentLength":5,"contentSha1":"sha"}`},
+		{"missing hash", `{"fileId":"large","partNumber":1,"contentLength":5}`},
+		{"empty part", `{"fileId":"large","partNumber":1,"contentLength":0,"contentSha1":"sha"}`},
+		{"oversized part", `{"fileId":"large","partNumber":1,"contentLength":5000000001,"contentSha1":"sha"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var srv *httptest.Server
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/b2api/v4/b2_authorize_account":
+					_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+				case "/b2api/v4/b2_copy_part":
+					_, _ = fmt.Fprint(w, tc.response)
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			large := (&File{ID: "large", b2: b}).CompileParts(0, nil)
+			if _, err := large.CopyPart(context.Background(), "source", 1, "bytes=0-4", nil); err == nil {
+				t.Fatal("inconsistent copy-part response accepted")
+			}
+			if len(large.hashes) != 0 || large.size != 0 {
+				t.Fatalf("inconsistent response mutated large file: hashes=%v size=%d", large.hashes, large.size)
+			}
+		})
+	}
+}

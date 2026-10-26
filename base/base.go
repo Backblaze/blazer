@@ -1074,6 +1074,9 @@ func (l *LargeFile) CopyPart(ctx context.Context, sourceFileID string, partNumbe
 	if err := l.b2.opts.makeRequest(ctx, "b2_copy_part", "POST", l.b2.apiURI+b2types.V4api+"b2_copy_part", req, resp, headers, nil); err != nil {
 		return nil, err
 	}
+	if resp.FileID != l.ID || resp.PartNumber != partNumber || resp.Size <= 0 || resp.Size > 5e9 || resp.SHA1 == "" {
+		return nil, fmt.Errorf("b2_copy_part: inconsistent response for file %q part %d", l.ID, partNumber)
+	}
 	l.mu.Lock()
 	l.hashes[partNumber] = resp.SHA1
 	l.size += resp.Size

@@ -44,11 +44,16 @@ type composeWire struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 
-	failCopyPart int
-	calls        []string
-	copies       []map[string]any
-	uploads      []composeUpload
-	finishes     []map[string]any
+	failCopyPart     int
+	failUploadPart   bool
+	failFinish       bool
+	copySizeOverride int64
+	failCancel       bool
+	starts           []map[string]any
+	calls            []string
+	copies           []map[string]any
+	uploads          []composeUpload
+	finishes         []map[string]any
 }
 
 func newComposeWire(t *testing.T) *composeWire {
@@ -68,6 +73,16 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	case "/b2api/v4/b2_create_bucket":
 		_, _ = fmt.Fprint(rw, noReplicationBucketJSON)
 	case "/b2api/v4/b2_start_large_file":
+		body := map[string]any{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.t.Errorf("decode start: %v", err)
+		}
+		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "t" {
+			w.t.Errorf("start method/auth = %s/%q", r.Method, r.Header.Get("Authorization"))
+		}
+		w.mu.Lock()
+		w.starts = append(w.starts, body)
+		w.mu.Unlock()
 		w.addCall("start")
 		_, _ = fmt.Fprint(rw, `{"fileId":"large"}`)
 	case "/b2api/v4/b2_get_upload_part_url":
@@ -88,6 +103,11 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.uploads = append(w.uploads, composeUpload{number: number, sha1: r.Header.Get("X-Bz-Content-Sha1"), size: len(body)})
 		w.calls = append(w.calls, fmt.Sprintf("upload:%d", number))
 		w.mu.Unlock()
+		if w.failUploadPart {
+			rw.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(rw, `{"status":400,"code":"bad_request","message":"upload part failed"}`)
+			return
+		}
 		_, _ = fmt.Fprint(rw, `{}`)
 	case "/b2api/v4/b2_copy_part":
 		body := map[string]any{}
@@ -108,7 +128,14 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprint(rw, `{"status":400,"code":"bad_request","message":"copy part failed"}`)
 			return
 		}
-		_, _ = fmt.Fprintf(rw, `{"fileId":"large","partNumber":%d,"contentLength":3,"contentSha1":%q}`, partNumber, fmt.Sprintf("copy-sha-%d", partNumber))
+		size := int64(3)
+		if partNumber == 1 {
+			size = composeMinPartSize
+		}
+		if w.copySizeOverride != 0 {
+			size = w.copySizeOverride
+		}
+		_, _ = fmt.Fprintf(rw, `{"fileId":"large","partNumber":%d,"contentLength":%d,"contentSha1":%q}`, partNumber, size, fmt.Sprintf("copy-sha-%d", partNumber))
 	case "/b2api/v4/b2_finish_large_file":
 		body := map[string]any{}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -118,9 +145,19 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.finishes = append(w.finishes, body)
 		w.calls = append(w.calls, "finish")
 		w.mu.Unlock()
+		if w.failFinish {
+			rw.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(rw, `{"status":400,"code":"bad_request","message":"finish failed"}`)
+			return
+		}
 		_, _ = fmt.Fprint(rw, `{"fileId":"large","fileName":"composed","action":"upload"}`)
 	case "/b2api/v4/b2_cancel_large_file":
 		w.addCall("cancel")
+		if w.failCancel {
+			rw.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(rw, `{"status":400,"code":"bad_request","message":"cancel failed"}`)
+			return
+		}
 		_, _ = fmt.Fprint(rw, `{}`)
 	default:
 		w.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -168,6 +205,10 @@ func TestComposeValidationRejectsInvalidPartsBeforeStarting(t *testing.T) {
 		{"short copied non-final", []ComposePart{PartFromCopy("source", "bytes=0-4999998"), PartFromReader(bytes.NewReader([]byte("y")), 1)}, "nonfinal part"},
 		{"non-final copy without range", []ComposePart{PartFromCopy("source", ""), PartFromReader(bytes.NewReader([]byte("y")), 1)}, "needs a byte range"},
 		{"reader and source conflict", []ComposePart{{reader: bytes.NewReader(large), size: composeMinPartSize, sourceFileID: "source"}, PartFromReader(bytes.NewReader([]byte("y")), 1)}, "positive size and no copy source"},
+		{"reader and copy range conflict", []ComposePart{{reader: bytes.NewReader(large), size: composeMinPartSize, byteRange: "bytes=0-4999999"}, PartFromReader(bytes.NewReader([]byte("y")), 1)}, "copy range"},
+		{"copy and upload size conflict", []ComposePart{{sourceFileID: "source", byteRange: "bytes=0-4999999", size: composeMinPartSize}, PartFromReader(bytes.NewReader([]byte("y")), 1)}, "upload size"},
+		{"oversized uploaded part", []ComposePart{PartFromReader(bytes.NewReader(nil), 5e9+1), PartFromReader(bytes.NewReader([]byte("y")), 1)}, "exceeds"},
+		{"oversized copied range", []ComposePart{PartFromCopy("source", "bytes=0-5000000000"), PartFromReader(bytes.NewReader([]byte("y")), 1)}, "exceeds"},
 		{"malformed copy range", []ComposePart{PartFromCopy("source", "bytes=wrong"), PartFromReader(bytes.NewReader([]byte("y")), 1)}, "invalid copy range"},
 	}
 	for _, tc := range tests {
@@ -180,6 +221,22 @@ func TestComposeValidationRejectsInvalidPartsBeforeStarting(t *testing.T) {
 				t.Fatalf("invalid Compose made calls %v", calls)
 			}
 		})
+	}
+}
+
+func TestComposeRejectsMoreThan10000PartsBeforeStarting(t *testing.T) {
+	wire := newComposeWire(t)
+	wire.failCopyPart = 1 // Bound the unfixed path to one request.
+	parts := make([]ComposePart, 10001)
+	for i := range parts {
+		parts[i] = PartFromCopy(fmt.Sprintf("source-%d", i), "bytes=0-4999999")
+	}
+	if _, err := wire.bucket(t).Compose(context.Background(), "too-many", parts...); err == nil || !strings.Contains(err.Error(), "10000") {
+		t.Fatalf("Compose with 10001 parts error = %v, want preflight rejection", err)
+	}
+	calls, _, _, _ := wire.snapshot()
+	if len(calls) != 0 {
+		t.Fatalf("too many parts started an upload: %v", calls)
 	}
 }
 
@@ -213,6 +270,26 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 			},
 		},
 		{
+			name:       "adjacent copy ranges",
+			parts:      []ComposePart{PartFromCopy("same-source", "bytes=0-4999999"), PartFromCopy("same-source", "bytes=5000000-5000002")},
+			wantCalls:  []string{"start", "copy:1", "copy:2", "finish"},
+			wantHashes: []any{"copy-sha-1", "copy-sha-2"},
+			wantCopies: []map[string]any{
+				{"sourceFileId": "same-source", "largeFileId": "large", "partNumber": float64(1), "range": "bytes=0-4999999"},
+				{"sourceFileId": "same-source", "largeFileId": "large", "partNumber": float64(2), "range": "bytes=5000000-5000002"},
+			},
+		},
+		{
+			name:       "whole source as final part",
+			parts:      []ComposePart{PartFromCopy("source-one", "bytes=0-4999999"), PartFromCopy("source-two", "")},
+			wantCalls:  []string{"start", "copy:1", "copy:2", "finish"},
+			wantHashes: []any{"copy-sha-1", "copy-sha-2"},
+			wantCopies: []map[string]any{
+				{"sourceFileId": "source-one", "largeFileId": "large", "partNumber": float64(1), "range": "bytes=0-4999999"},
+				{"sourceFileId": "source-two", "largeFileId": "large", "partNumber": float64(2)},
+			},
+		},
+		{
 			name:       "upload only",
 			parts:      []ComposePart{PartFromReader(bytes.NewReader(first), composeMinPartSize), PartFromReader(bytes.NewReader(last), int64(len(last)))},
 			wantCalls:  []string{"start", "upload:1", "upload:2", "finish"},
@@ -227,6 +304,12 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 			}
 			if object.ID() != "large" {
 				t.Errorf("object ID = %q, want large", object.ID())
+			}
+			wire.mu.Lock()
+			starts := append([]map[string]any(nil), wire.starts...)
+			wire.mu.Unlock()
+			if len(starts) != 1 || starts[0]["fileName"] != "composed" || starts[0]["contentType"] != "application/octet-stream" {
+				t.Errorf("start bodies = %#v, want composed file and content type", starts)
 			}
 			calls, copies, finishes, uploads := wire.snapshot()
 			if !reflect.DeepEqual(calls, tc.wantCalls) {
@@ -247,6 +330,76 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 	}
 }
 
+func TestComposeRejectsOverlappingRangesBeforeStarting(t *testing.T) {
+	wire := newComposeWire(t)
+	_, err := wire.bucket(t).Compose(context.Background(), "overlap",
+		PartFromCopy("same-source", "bytes=0-4999999"),
+		PartFromCopy("same-source", "bytes=4999999-5000001"))
+	if err == nil || !strings.Contains(err.Error(), "overlap") {
+		t.Fatalf("overlapping copy ranges error = %v, want rejection", err)
+	}
+	calls, _, _, _ := wire.snapshot()
+	if len(calls) != 0 {
+		t.Fatalf("overlap started a large file: %v", calls)
+	}
+}
+
+type composeCancelReader struct{ cancel context.CancelFunc }
+
+func (r composeCancelReader) Read([]byte) (int, error) {
+	r.cancel()
+	return 0, fmt.Errorf("injected read failure")
+}
+
+func TestComposeCancelsAfterCallerContextIsCanceled(t *testing.T) {
+	wire := newComposeWire(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := wire.bucket(t).Compose(ctx, "canceled",
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromReader(composeCancelReader{cancel: cancel}, 1))
+	if err == nil || !strings.Contains(err.Error(), "injected read failure") {
+		t.Fatalf("Compose error = %v, want read failure", err)
+	}
+	calls, _, finishes, _ := wire.snapshot()
+	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls after cancellation = %v, want %v", calls, want)
+	}
+	if len(finishes) != 0 {
+		t.Fatalf("finished after failure: %#v", finishes)
+	}
+}
+
+func TestComposeRejectsShortCopyResponseAndCancels(t *testing.T) {
+	wire := newComposeWire(t)
+	wire.copySizeOverride = composeMinPartSize - 1
+	_, err := wire.bucket(t).Compose(context.Background(), "short-copy",
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromReader(bytes.NewReader([]byte("x")), 1))
+	if err == nil || !strings.Contains(err.Error(), "copied") {
+		t.Fatalf("short copy response error = %v, want rejection", err)
+	}
+	calls, _, finishes, _ := wire.snapshot()
+	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("short copy calls = %v, want %v", calls, want)
+	}
+	if len(finishes) != 0 {
+		t.Fatalf("finished short copy: %#v", finishes)
+	}
+}
+
+func TestComposeReportsCancelFailureAlongsidePartFailure(t *testing.T) {
+	wire := newComposeWire(t)
+	wire.failCopyPart = 2
+	wire.failCancel = true
+	_, err := wire.bucket(t).Compose(context.Background(), "cancel-fails",
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromCopy("source-two", "bytes=0-2"))
+	if err == nil || !strings.Contains(err.Error(), "copy part failed") || !strings.Contains(err.Error(), "cancel failed") {
+		t.Fatalf("Compose error = %v, want both part and cleanup errors", err)
+	}
+}
+
 func TestComposeCancelsLargeFileAfterPartFailure(t *testing.T) {
 	wire := newComposeWire(t)
 	wire.failCopyPart = 2
@@ -262,5 +415,29 @@ func TestComposeCancelsLargeFileAfterPartFailure(t *testing.T) {
 	}
 	if len(finishes) != 0 {
 		t.Errorf("finish called after part failure: %#v", finishes)
+	}
+}
+
+func TestComposeCancelsOnUploadAndFinishFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, wantErr string
+		configure     func(*composeWire)
+		parts         []ComposePart
+		wantCalls     []string
+	}{
+		{"upload", "upload part failed", func(w *composeWire) { w.failUploadPart = true }, []ComposePart{PartFromCopy("source", "bytes=0-4999999"), PartFromReader(bytes.NewReader([]byte("x")), 1)}, []string{"start", "copy:1", "upload:2", "cancel"}},
+		{"finish", "finish failed", func(w *composeWire) { w.failFinish = true }, []ComposePart{PartFromCopy("source-one", "bytes=0-4999999"), PartFromCopy("source-two", "bytes=0-2")}, []string{"start", "copy:1", "copy:2", "finish", "cancel"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newComposeWire(t)
+			tc.configure(wire)
+			if _, err := wire.bucket(t).Compose(context.Background(), "failure", tc.parts...); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Compose error = %v, want %q", err, tc.wantErr)
+			}
+			calls, _, _, _ := wire.snapshot()
+			if !reflect.DeepEqual(calls, tc.wantCalls) {
+				t.Errorf("calls = %v, want %v", calls, tc.wantCalls)
+			}
+		})
 	}
 }
