@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CONFORMANCE blazer x bucket.replication_config -- the contract is bin/conformance/README.md.
 #
-# Scenario: set a replication source rule on a bucket by update, read it back from the server
+# Scenario: set a replication source rule on a bucket by create and update, read it back from the server
 #
 # DOCS. The expected values are B2's published contract. b2_update_bucket
 # takes replicationConfiguration {asReplicationSource {replicationRules,
@@ -109,17 +109,12 @@ const capability = "bucket.replication_config"
 // blazer x bucket.replication_config.
 //
 // Setup   a source bucket, a destination bucket and an application key
-// Action  Bucket.Update with BucketAttrs.ReplicationConfig (one source rule)
-// Assert  the bucket, fetched afresh from the server (Client.NewBucket on an
+// Action  Client.NewBucket and Bucket.Update with BucketAttrs.ReplicationConfig
+//         (one source rule)
+// Assert  each bucket, fetched afresh from the server (Client.NewBucket on an
 //         existing name relists it), reports the source key id and the rule
 //         exactly as set: name, destination bucket id, prefix, priority and
 //         enabled flag
-//
-// The card marks this capability partial: blazer sends the configuration on
-// update but not on create. Client.NewBucket ignores BucketAttrs.ReplicationConfig
-// (it forwards no replication argument to the create call), and the check
-// reports what a create with one set actually did as a NOTE. That is the
-// documented partial coverage, not an assertion.
 //
 // The API came from docs/sdks/blazer/card.md and godoc for
 // github.com/Backblaze/blazer/b2 (ReplicationConfiguration, Bucket.Update,
@@ -183,41 +178,54 @@ func runCheck(ctx context.Context, target *string) error {
 	if err != nil {
 		return classify("read back", err)
 	}
-	cfg := attrs.ReplicationConfig
-	if cfg == nil {
-		return failf("read back", "the bucket reports no replication configuration after one was set")
-	}
-	if cfg.AsReplicationSource.SourceApplicationKeyID != key.ID() {
-		return failf("read back", "source application key id %q, expected the one that was set", cfg.AsReplicationSource.SourceApplicationKeyID)
-	}
-	rules := cfg.AsReplicationSource.ReplicationRules
-	if len(rules) != 1 {
-		return failf("read back", "the bucket reports %d replication rules, expected 1", len(rules))
-	}
-	if rules[0] != want {
-		return failf("read back", "replication rule %+v, expected %+v", rules[0], want)
+	if err := assertReplicationConfig("read back after update", attrs, key.ID(), want); err != nil {
+		return err
 	}
 
-	// The create side of the partial coverage: record what a create does with it.
 	probe := bucketName()
 	created, err := client.NewBucket(ctx, probe, &b2.BucketAttrs{
 		Type:              b2.Private,
 		ReplicationConfig: &b2.ReplicationConfiguration{AsReplicationSource: b2.AsReplicationSource{SourceApplicationKeyID: key.ID(), ReplicationRules: []b2.ReplicationRules{want}}},
 	})
 	if err != nil {
-		note("create with a replication configuration was refused: %s", scrub(err.Error()))
-		return nil
+		return classify("create with replication configuration", err)
 	}
 	defer destroyBucket(ctx, created)
+	createdAttrs, err := created.Attrs(ctx)
+	if err != nil {
+		return classify("read create response", err)
+	}
+	if err := assertReplicationConfig("read create response", createdAttrs, key.ID(), want); err != nil {
+		return err
+	}
 	createdFresh, err := client.NewBucket(ctx, probe, nil)
-	if err == nil {
-		if createdAttrs, err := createdFresh.Attrs(ctx); err == nil {
-			if createdAttrs.ReplicationConfig == nil || len(createdAttrs.ReplicationConfig.AsReplicationSource.ReplicationRules) == 0 {
-				note("a bucket created with BucketAttrs.ReplicationConfig has no replication rules: create does not send the configuration, only Update does (card: partial)")
-			} else {
-				note("a bucket created with BucketAttrs.ReplicationConfig reports its replication rules: create now sends the configuration, so the card's partial can be raised to yes")
-			}
-		}
+	if err != nil {
+		return classify("read created bucket", err)
+	}
+	createdAttrs, err = createdFresh.Attrs(ctx)
+	if err != nil {
+		return classify("read back after create", err)
+	}
+	if err := assertReplicationConfig("read back after create", createdAttrs, key.ID(), want); err != nil {
+		return err
+	}
+	return nil
+}
+
+func assertReplicationConfig(step string, attrs *b2.BucketAttrs, keyID string, want b2.ReplicationRules) error {
+	cfg := attrs.ReplicationConfig
+	if cfg == nil {
+		return failf(step, "the bucket reports no replication configuration after one was set")
+	}
+	if cfg.AsReplicationSource.SourceApplicationKeyID != keyID {
+		return failf(step, "source application key id %q, expected the one that was set", cfg.AsReplicationSource.SourceApplicationKeyID)
+	}
+	rules := cfg.AsReplicationSource.ReplicationRules
+	if len(rules) != 1 {
+		return failf(step, "the bucket reports %d replication rules, expected 1", len(rules))
+	}
+	if rules[0] != want {
+		return failf(step, "replication rule %+v, expected %+v", rules[0], want)
 	}
 	return nil
 }

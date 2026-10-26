@@ -35,7 +35,7 @@ type b2RootInterface interface {
 	retry(error) bool
 	reauth(error) bool
 	reupload(error) bool
-	createBucket(context.Context, string, string, map[string]string, []LifecycleRule, *ServerSideEncryption, []CORSRule, bool) (b2BucketInterface, error)
+	createBucket(context.Context, string, string, map[string]string, []LifecycleRule, *ServerSideEncryption, []CORSRule, bool, *ReplicationConfiguration) (b2BucketInterface, error)
 	listBuckets(context.Context, string, ...string) ([]b2BucketInterface, error)
 	createKey(context.Context, string, []string, time.Duration, string, string) (b2KeyInterface, error)
 	createKeyMultiBucket(context.Context, string, []string, time.Duration, []string, string) (b2KeyInterface, error)
@@ -223,7 +223,7 @@ func (*b2Root) reupload(err error) bool {
 	return base.Action(err) == base.AttemptNewUpload
 }
 
-func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (b2BucketInterface, error) {
+func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (b2BucketInterface, error) {
 	var baseRules []base.LifecycleRule
 	for _, rule := range rules {
 		baseRules = append(baseRules, base.LifecycleRule{
@@ -239,7 +239,7 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 			Algorithm: sse.Algorithm,
 		}
 	}
-	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE, toBaseCORSRules(corsRules), fileLockEnabled)
+	bucket, err := b.b.CreateBucket(ctx, name, btype, info, baseRules, baseSSE, toBaseCORSRules(corsRules), fileLockEnabled, toBaseReplicationConfiguration(replicationConfig, nil))
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +271,38 @@ func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
 		})
 	}
 	return out
+}
+
+func toBaseReplicationConfiguration(attrs *ReplicationConfiguration, existing *b2types.ReplicationConfiguration) *b2types.ReplicationConfiguration {
+	if attrs == nil {
+		return nil
+	}
+	cfg := &b2types.ReplicationConfiguration{}
+	source := attrs.AsReplicationSource
+	if source.SourceApplicationKeyID != "" || source.ReplicationRules != nil {
+		cfg.AsReplicationSource = &b2types.AsReplicationSource{
+			KeyID:            source.SourceApplicationKeyID,
+			ReplicationRules: make([]b2types.ReplicationRules, len(source.ReplicationRules)),
+		}
+	}
+	for i, rule := range source.ReplicationRules {
+		cfg.AsReplicationSource.ReplicationRules[i] = b2types.ReplicationRules{
+			ReplicationRuleName:  rule.ReplicationRuleName,
+			DestinationBucketID:  rule.DestinationBucketID,
+			FileNamePrefix:       rule.FileNamePrefix,
+			IncludeExistingFiles: rule.IncludeExistingFiles,
+			IsEnabled:            rule.IsEnabled,
+			Priority:             rule.Priority,
+		}
+	}
+	if dest := attrs.AsReplicationDestination; dest != nil {
+		cfg.AsReplicationDestination = &b2types.AsReplicationDestination{
+			SourceToDestinationKeyMapping: dest.SourceToDestinationKeyMapping,
+		}
+	} else if existing != nil {
+		cfg.AsReplicationDestination = existing.AsReplicationDestination
+	}
+	return cfg
 }
 
 // retentionDiffers reports whether the caller's retention differs from the
@@ -343,32 +375,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 
 	previousReplication := b.b.ReplicationConfiguration
 	if attrs.ReplicationConfig != nil {
-		cfg := &b2types.ReplicationConfiguration{}
-		source := attrs.ReplicationConfig.AsReplicationSource
-		if source.SourceApplicationKeyID != "" || source.ReplicationRules != nil {
-			cfg.AsReplicationSource = &b2types.AsReplicationSource{
-				KeyID:            source.SourceApplicationKeyID,
-				ReplicationRules: make([]b2types.ReplicationRules, len(source.ReplicationRules)),
-			}
-		}
-		for i, rule := range source.ReplicationRules {
-			cfg.AsReplicationSource.ReplicationRules[i] = b2types.ReplicationRules{
-				ReplicationRuleName:  rule.ReplicationRuleName,
-				DestinationBucketID:  rule.DestinationBucketID,
-				FileNamePrefix:       rule.FileNamePrefix,
-				IncludeExistingFiles: rule.IncludeExistingFiles,
-				IsEnabled:            rule.IsEnabled,
-				Priority:             rule.Priority,
-			}
-		}
-		if dest := attrs.ReplicationConfig.AsReplicationDestination; dest != nil {
-			cfg.AsReplicationDestination = &b2types.AsReplicationDestination{
-				SourceToDestinationKeyMapping: dest.SourceToDestinationKeyMapping,
-			}
-		} else if b.b.ReplicationConfiguration != nil {
-			cfg.AsReplicationDestination = b.b.ReplicationConfiguration.AsReplicationDestination
-		}
-		b.b.ReplicationConfiguration = cfg
+		b.b.ReplicationConfiguration = toBaseReplicationConfiguration(attrs.ReplicationConfig, b.b.ReplicationConfiguration)
 	}
 
 	newBucket, err := b.b.Update(ctx)
