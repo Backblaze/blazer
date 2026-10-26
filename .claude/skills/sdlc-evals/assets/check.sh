@@ -31,7 +31,7 @@ else
   for i in $(seq 0 $((total - 1))); do
     label=$(jq -r ".checks[$i].name" "$eval_file")
     cmd=$(jq -r ".checks[$i].run" "$eval_file")
-    if out=$(${RUN_AS:-} bash -c "$cmd" 2>&1 </dev/null); then
+    if out=$(${RUN_AS:-} env EVALS="$EVALS" bash -c "$cmd" 2>&1 </dev/null); then  # sudo resets the env
       passed=$((passed + 1))
     else
       report+="     failed: $label"$'\n'
