@@ -288,6 +288,9 @@ func (progressSkipFile) getUploadPartURL(context.Context) (beFileChunkInterface,
 }
 func (progressSkipFile) finishLargeFile(context.Context) (beFileInterface, error) { return nil, nil }
 func (progressSkipFile) cancel(context.Context) error                             { return nil }
+func (progressSkipFile) copyPart(context.Context, string, int, string) (beFilePartInterface, error) {
+	return nil, nil
+}
 
 type progressSkipChunk struct{}
 
