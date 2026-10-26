@@ -45,6 +45,7 @@ Prefer behavior checks (run the code, inspect logs or output) over text greps, s
 
 - The checker and the evals are copied out before any run and run from the copy. The agent under test must not be able to rewrite its own grader.
 - `check.sh` fails any run that changed files outside `may_change` (Git-ignored files excepted), so the agent cannot pass by editing the Makefile or the checks.
+- The agent, its hooks and the checks run as a separate unprivileged user (`agent` in the workflow, `RUN_AS` in `check.sh`); the grader and eval definitions belong to the runner user, so code under test cannot rewrite them.
 - Do not pass `--bare` to `claude -p` in the workflow: it skips `CLAUDE.md`, skills and hooks, which are the things under test.
 - Keep the suite's API spend visible and capped; run the full suite on a schedule and a changed-config subset on PRs if cost demands.
 

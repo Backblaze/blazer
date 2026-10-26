@@ -1,6 +1,8 @@
 #!/bin/bash
 # Grades one eval run. Usage: check.sh <eval.json> <result.json>
 # Run from the root of the checkout the agent worked in. Needs jq and git.
+# RUN_AS (e.g. "sudo -u agent -H") runs each check as the agent's user, so code under test cannot
+# write to this script or the eval definitions.
 set -u
 eval_file=$1
 result_file=$2
@@ -10,7 +12,7 @@ export EVALS=$(cd "$(dirname "$eval_file")" && pwd)   # checks may call helpers 
 
 # Files changed outside the folders/files the eval allows (Git-ignored files don't show up).
 strays() {
-  git status --porcelain | cut -c4- | while read -r path; do
+  git status --porcelain --untracked-files=all | cut -c4- | while read -r path; do
     jq -e --arg p "$path" \
       'any(.may_change[]; . as $ok | $p == $ok or ($p | startswith($ok + "/")))' \
       "$eval_file" >/dev/null || echo "       $path"
@@ -29,7 +31,7 @@ else
   for i in $(seq 0 $((total - 1))); do
     label=$(jq -r ".checks[$i].name" "$eval_file")
     cmd=$(jq -r ".checks[$i].run" "$eval_file")
-    if out=$(bash -c "$cmd" 2>&1 </dev/null); then
+    if out=$(${RUN_AS:-} bash -c "$cmd" 2>&1 </dev/null); then
       passed=$((passed + 1))
     else
       report+="     failed: $label"$'\n'

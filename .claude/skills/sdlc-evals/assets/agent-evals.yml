@@ -13,23 +13,29 @@ jobs:
         with:
           fetch-depth: 0   # each eval starts from an older commit
       - run: npm install -g @anthropic-ai/claude-code
+      # The agent, its hooks and every check run as an unprivileged user; the grader and eval
+      # definitions stay owned by the runner user, so code under test cannot rewrite them.
+      - run: sudo useradd --create-home agent
       - name: Run eval suite
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           git config --global user.name evals && git config --global user.email evals@example.com
-          cp -r evals /tmp/evals   # grade from a copy made before any run
+          git config --global --add safe.directory /tmp/run
+          cp -r evals /tmp/evals && chmod -R go-w /tmp/evals   # grade from a copy the agent cannot write
           failed=0
           for eval in /tmp/evals/*.json; do
             git worktree add -q --detach /tmp/run "$(jq -r '.from' "$eval")"
             rm -rf /tmp/run/evals /tmp/run/.claude      # keep the checks out of the run's checkout
             cp -r CLAUDE.md AGENTS.md REVIEW.md .claude /tmp/run/   # the configuration under test, incl. CLAUDE.md imports
             git -C /tmp/run add -A && git -C /tmp/run commit -q --allow-empty -m "configuration under test"
+            sudo chown -R agent: /tmp/run
             ( cd /tmp/run
-              claude -p "$(jq -r '.prompt' "$eval")" \
+              sudo -u agent -H --preserve-env=ANTHROPIC_API_KEY claude -p "$(jq -r '.prompt' "$eval")" \
                 --allowedTools "Read,Edit,Bash(make test)" \
                 --output-format json > /tmp/result.json
-              /tmp/evals/check.sh "$eval" /tmp/result.json ) || failed=$((failed + 1))
+              RUN_AS="sudo -u agent -H" /tmp/evals/check.sh "$eval" /tmp/result.json ) || failed=$((failed + 1))
+            sudo chown -R "$(id -u):$(id -g)" /tmp/run
             git worktree remove --force /tmp/run
           done
           echo "$failed eval(s) failed"
