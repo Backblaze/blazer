@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type ssecPublicRequest struct {
@@ -485,11 +486,15 @@ func TestSSECResumeChecksUnfinishedEncryption(t *testing.T) {
 	}{
 		{"unencrypted", `{"mode":null,"algorithm":null}`},
 		{"wrong mode", `{"mode":"SSE-B2","algorithm":"AES256"}`},
+		{"wrong algorithm", `{"mode":"SSE-C","algorithm":"AES128"}`},
 		{"missing identifier", `{"mode":"SSE-C","algorithm":"AES256"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newSSECPublicWire(t)
 			wire.unfinishedEncryption = tc.sse
+			if tc.name != "missing identifier" {
+				wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, keyID)
+			}
 			bucket := wire.newBucket(t)
 			w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, keyID)))
 			w.Resume = true
@@ -564,6 +569,48 @@ func TestSSECStartRejectsConflictingFileInfoKeyIdentifier(t *testing.T) {
 	}
 	if got := len(wire.requestsTo("/b2api/v4/b2_start_large_file")); got != 0 {
 		t.Fatalf("started %d large files with conflicting key identifier", got)
+	}
+}
+
+func TestSSECStartRejectsFileInfoOverLimit(t *testing.T) {
+	wire := newSSECPublicWire(t)
+	info := make(map[string]string)
+	for i := 0; i < 8; i++ {
+		info[fmt.Sprintf("user_%d", i)] = "value"
+	}
+	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(),
+		WithAttrsOption(&Attrs{Info: info, SHA1: strings.Repeat("a", 40), LastModified: time.Unix(123, 0)}),
+		WithSSECKey(wire.keyWithID(t, "caller-id")))
+	if got := len(w.info); got != 10 {
+		t.Fatalf("file info before key ID has %d entries, want 10", got)
+	}
+	if _, err := w.getLargeFile(); err == nil || !strings.Contains(err.Error(), "10") {
+		t.Fatalf("start with 11 file-info entries: error = %v, want limit rejection", err)
+	}
+	if got := len(wire.requestsTo("/b2api/v4/b2_start_large_file")); got != 0 {
+		t.Fatalf("started %d large files with too many file-info entries", got)
+	}
+}
+
+func TestSSECStartAcceptsTenFileInfoEntries(t *testing.T) {
+	wire := newSSECPublicWire(t)
+	info := make(map[string]string)
+	for i := 0; i < 7; i++ {
+		info[fmt.Sprintf("user_%d", i)] = "value"
+	}
+	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(),
+		WithAttrsOption(&Attrs{Info: info, SHA1: strings.Repeat("a", 40), LastModified: time.Unix(123, 0)}),
+		WithSSECKey(wire.keyWithID(t, "caller-id")))
+	if _, err := w.getLargeFile(); err != nil {
+		t.Fatal(err)
+	}
+	starts := wire.requestsTo("/b2api/v4/b2_start_large_file")
+	if len(starts) != 1 {
+		t.Fatalf("start calls = %d, want 1", len(starts))
+	}
+	fileInfo, ok := starts[0].body["fileInfo"].(map[string]any)
+	if !ok || len(fileInfo) != 10 || fileInfo[ssecKeyIDFileInfo] != "caller-id" {
+		t.Fatalf("start file info = %v, want ten entries including caller ID", starts[0].body["fileInfo"])
 	}
 }
 

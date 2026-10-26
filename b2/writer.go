@@ -486,6 +486,9 @@ func (w *Writer) ssecFileInfo() (map[string]string, error) {
 		info[k] = v
 	}
 	info[ssecKeyIDFileInfo] = id
+	if len(info) > 10 {
+		return nil, fmt.Errorf("b2: SSE-C key identifier would exceed the 10-entry file info limit")
+	}
 	return info, nil
 }
 
