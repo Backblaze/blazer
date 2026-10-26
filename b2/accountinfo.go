@@ -16,6 +16,7 @@ package b2
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,9 @@ import (
 )
 
 const maxAccountInfoFileBytes = 1 << 20
+
+// A corrupt or oversized session is a cache miss, not an authorization failure.
+var errUnavailableAccountInfoSession = errors.New("account info: unusable cached session")
 
 // AccountInfo stores an authorized session. It never stores the application
 // key secret; callers still supply that key to NewClient for reauthorization.
@@ -206,7 +210,7 @@ func (a *AccountInfoFile) AuthData() (AuthData, bool) {
 	}
 	var data AuthData
 	if err := json.Unmarshal(content, &data); err != nil {
-		a.err = fmt.Errorf("account info: invalid session JSON: %w", err)
+		a.err = fmt.Errorf("account info: invalid session JSON: %w: %v", errUnavailableAccountInfoSession, err)
 		return AuthData{}, false
 	}
 	a.err = nil
@@ -219,7 +223,7 @@ func readAccountInfo(reader io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	if len(content) > maxAccountInfoFileBytes {
-		return nil, fmt.Errorf("account info: session file exceeds %d bytes", maxAccountInfoFileBytes)
+		return nil, fmt.Errorf("%w: account info: session file exceeds %d bytes", errUnavailableAccountInfoSession, maxAccountInfoFileBytes)
 	}
 	return content, nil
 }

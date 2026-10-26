@@ -16,6 +16,7 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -199,7 +200,7 @@ func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c cl
 	f := func() error {
 		if r.account == "" && r.accountInfo != nil {
 			data, ok := r.accountInfo.AuthData()
-			if err := accountInfoError(r.accountInfo); err != nil {
+			if err := accountInfoError(r.accountInfo); err != nil && !errors.Is(err, errUnavailableAccountInfoSession) {
 				return err
 			}
 			if ok && data.ApplicationKeyID == account && data.AuthToken != "" && data.APIURL != "" && data.DownloadURL != "" {

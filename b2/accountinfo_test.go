@@ -206,6 +206,9 @@ func TestNewClientFallsBackFromUnavailableSession(t *testing.T) {
 		create  bool
 	}{
 		{name: "missing"},
+		{name: "empty", content: nil, create: true},
+		{name: "malformed", content: []byte(`{"authToken":`), create: true},
+		{name: "oversized", content: bytes.Repeat([]byte("x"), (1<<20)+1), create: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire := newAccountInfoWire(t)
@@ -250,7 +253,6 @@ func TestAccountInfoFileRejectsInvalidOrOversizedSession(t *testing.T) {
 		{name: "oversized", content: bytes.Repeat([]byte("x"), (1<<20)+1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			wire := newAccountInfoWire(t)
 			path := filepath.Join(t.TempDir(), "private", "account.json")
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				t.Fatal(err)
@@ -264,14 +266,6 @@ func TestAccountInfoFileRejectsInvalidOrOversizedSession(t *testing.T) {
 			}
 			if tc.name == "oversized" && !strings.Contains(store.Err().Error(), "exceeds") {
 				t.Fatalf("oversized session error = %v, want size-limit rejection", store.Err())
-			}
-			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store)); err == nil || !strings.Contains(err.Error(), "account info") {
-				t.Fatalf("NewClient invalid session error = %v, want account info error", err)
-			}
-			wire.mu.Lock()
-			defer wire.mu.Unlock()
-			if wire.authCalls != 0 {
-				t.Fatalf("invalid session made %d authorize calls, want 0", wire.authCalls)
 			}
 		})
 	}
