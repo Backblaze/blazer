@@ -757,6 +757,18 @@ func (o *Object) NewReader(ctx context.Context, keys ...*SSECKey) *Reader {
 	return o.NewRangeReader(ctx, 0, -1, keys...)
 }
 
+// DownloadFileByID returns a reader for a file identified by its B2 file ID.
+// It makes one download request; use Object.NewReader for chunked downloads by
+// file name. Supply an SSE-C key for a customer-key-encrypted version; the key
+// is used only on this request and is not retained.
+func (b *Bucket) DownloadFileByID(ctx context.Context, id string, keys ...*SSECKey) (io.ReadCloser, error) {
+	key, err := optionalSSECKey(keys)
+	if err != nil {
+		return nil, err
+	}
+	return b.b.downloadFileByID(ctx, id, 0, 0, false, key)
+}
+
 func (o *Object) ensure(ctx context.Context, keys ...*SSECKey) error {
 	key, err := optionalSSECKey(keys)
 	if err != nil {
