@@ -68,7 +68,7 @@ func (w *lockWire) bucket(t *testing.T) *b2Bucket {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bb, err := account.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, true)
+	bb, err := account.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

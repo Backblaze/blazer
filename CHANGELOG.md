@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `x/b2sim` provides an in-process B2 wire simulator for offline tests through `b2.Transport`, including bucket operations, simple and multipart uploads, downloads and ranges, file listing, and deletion. Unsupported operations return an error; policy enforcement and download-authorization signature checks are not simulated.
+- `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
 
 ## [0.9.0] - 2026-10-22
 
