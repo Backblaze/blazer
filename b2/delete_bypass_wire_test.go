@@ -43,7 +43,7 @@ func TestObjectDeleteBypassGovernanceReachesTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := account.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false)
+	bucket, err := account.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
