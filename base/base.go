@@ -157,15 +157,22 @@ func mkErr(resp *http.Response) error {
 	if msgBody == "" {
 		msgBody = msg.Msg
 	}
+	if isDownloadByIDRequest(resp.Request) {
+		// Server error text may echo the file ID.
+		msgBody = redactDownloadIDText(resp.Request, msgBody)
+	}
 	var retryAfter int
 	retry := resp.Header.Get("Retry-After")
 	if retry != "" {
-		r, err := strconv.ParseInt(retry, 10, 64)
+		parsed, err := parseRetryAfterSeconds(retry)
 		if err != nil {
-			r = 0
-			blog.V(1).Infof("couldn't parse retry-after header %q: %v", retry, err)
+			if isDownloadByIDRequest(resp.Request) {
+				blog.V(1).Infof("couldn't parse retry-after header for b2_download_file_by_id")
+			} else {
+				blog.V(1).Infof("couldn't parse retry-after header %q: %v", retry, err)
+			}
 		}
-		retryAfter = int(r)
+		retryAfter = parsed
 	}
 	return b2err{
 		msg:     msgBody,
@@ -174,6 +181,21 @@ func mkErr(resp *http.Response) error {
 		msgCode: msg.Code,
 		method:  resp.Request.Header.Get("X-Blazer-Method"),
 	}
+}
+
+func parseRetryAfterSeconds(raw string) (int, error) {
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	// The backoff policy caps this value at 30 seconds. Clamp while it is
+	// still int64, before a 32-bit int conversion could overflow.
+	if seconds < 0 {
+		seconds = 0
+	} else if seconds > 30 {
+		seconds = 30
+	}
+	return int(seconds), nil
 }
 
 // MaxReuploads returns an appropriate amount of retries for reuploading,
@@ -226,6 +248,12 @@ func logRequest(req *http.Request, args []byte) {
 	if !blog.V(2) {
 		return
 	}
+	if isDownloadByIDRequest(req) {
+		// The file ID is in the query string. Do not log it or other query
+		// parameters that could have been appended to the download URL.
+		blog.V(2).Infof(">> b2_download_file_by_id %s [URL and headers redacted]", req.Method)
+		return
+	}
 	var headers []string
 	for k, v := range req.Header {
 		if k == "Authorization" || k == "X-Blazer-Method" {
@@ -248,6 +276,10 @@ func logResponse(resp *http.Response, reply []byte) {
 	if !blog.V(2) {
 		return
 	}
+	if isDownloadByIDRequest(resp.Request) {
+		blog.V(2).Infof("<< b2_download_file_by_id status=%d [headers and body redacted]", resp.StatusCode)
+		return
+	}
 	var headers []string
 	for k, v := range resp.Header {
 		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
@@ -261,6 +293,24 @@ func logResponse(resp *http.Response, reply []byte) {
 		return
 	}
 	blog.V(2).Infof("<< %s (%s) %s {%s} (no reply)", method, id, resp.Status, hstr)
+}
+
+func isDownloadByIDRequest(req *http.Request) bool {
+	return req != nil && req.Header.Get("X-Blazer-Method") == "b2_download_file_by_id"
+}
+
+func redactDownloadIDText(req *http.Request, value string) string {
+	if !isDownloadByIDRequest(req) {
+		return value
+	}
+	id := req.URL.Query().Get("fileId")
+	if id == "" {
+		return value
+	}
+	for _, secret := range []string{req.URL.String(), url.QueryEscape(id), url.PathEscape(id), id} {
+		value = strings.ReplaceAll(value, secret, "[REDACTED]")
+	}
+	return value
 }
 
 func millitime(t int64) time.Time {
@@ -350,7 +400,11 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		return nil, err
 	default:
 		method := req.Header.Get("X-Blazer-Method")
-		blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		if isDownloadByIDRequest(req) {
+			blog.V(2).Infof(">> %s transport error [URL and error redacted]", method)
+		} else {
+			blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
+		}
 		// Only an upload fault is classified by method (see Action). Other
 		// transport errors stay method-less so their retry budget and message
 		// do not change.
@@ -371,8 +425,11 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 			return nil, err
 		}
 
+		// A transport error may include the full URL. Preserve ordinary error
+		// details while removing the file ID before a caller can log it.
+		message := redactDownloadIDText(req, err.Error())
 		return nil, b2err{
-			msg:    err.Error(),
+			msg:    message,
 			method: method,
 			retry:  1,
 		}
@@ -1472,16 +1529,22 @@ func (b *Bucket) DownloadFileByID(ctx context.Context, id string, offset, size i
 }
 
 func newFileReader(resp *http.Response) (*FileReader, error) {
+	return newFileReaderWithMaxLength(resp, int64(^uint(0)>>1))
+}
+
+func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader, error) {
 	if resp.StatusCode != 200 && resp.StatusCode != 206 {
 		defer resp.Body.Close()
 		return nil, mkErr(resp)
 	}
 	clen, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
-	if err == nil && (clen < 0 || int64(int(clen)) != clen) {
-		err = fmt.Errorf("invalid download content length %d", clen)
-	}
 	if err != nil {
 		resp.Body.Close()
+		return nil, err
+	}
+	contentLength, err := checkedDownloadLength(clen, maxInt)
+	if err != nil {
+		_ = resp.Body.Close()
 		return nil, err
 	}
 	info := make(map[string]string)
@@ -1510,9 +1573,19 @@ func newFileReader(resp *http.Response) (*FileReader, error) {
 		SHA1:          sha1,
 		ID:            resp.Header.Get("X-Bz-File-Id"),
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: int(clen),
+		ContentLength: contentLength,
 		Info:          info,
 	}, nil
+}
+
+// checkedDownloadLength checks the bound before narrowing to the platform's
+// int width. This matters on 32-bit systems, where an HTTP Content-Length may
+// still be a valid int64 but cannot be represented by FileReader.ContentLength.
+func checkedDownloadLength(length, maxInt int64) (int, error) {
+	if length < 0 || length > maxInt {
+		return 0, fmt.Errorf("invalid download content length %d", length)
+	}
+	return int(length), nil
 }
 
 // HideFile wraps b2_hide_file.

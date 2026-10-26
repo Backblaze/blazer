@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `(*b2.Bucket).DownloadFileByID` downloads the exact file version identified by its B2 file ID, including historical versions; `(*base.Bucket).DownloadFileByID` provides low-level GET, HEAD, and range requests.
+
+### Fixed
+
+- Download response lengths that cannot fit in the platform's `int` are rejected before conversion, including on 32-bit systems. Download-by-ID logging and free-form error details redact file IDs; HTTP status and B2 error codes remain available.
+
 ## [0.9.0] - 2026-10-22
 
 ### Added
