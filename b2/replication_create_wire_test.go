@@ -39,13 +39,14 @@ type replicationCreateWire struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 
-	creates [][]byte
-	updates [][]byte
+	creates  [][]byte
+	updates  [][]byte
+	response string
 }
 
 func newReplicationCreateWire(t *testing.T) *replicationCreateWire {
 	t.Helper()
-	w := &replicationCreateWire{t: t}
+	w := &replicationCreateWire{t: t, response: replicationCreateResponse}
 	w.srv = httptest.NewServer(http.HandlerFunc(w.serveHTTP))
 	t.Cleanup(w.srv.Close)
 	return w
@@ -60,16 +61,16 @@ func (w *replicationCreateWire) serveHTTP(rw http.ResponseWriter, r *http.Reques
 		created := len(w.creates) > 0
 		w.mu.Unlock()
 		if created {
-			_, _ = fmt.Fprintf(rw, `{"buckets":[%s]}`, replicationCreateResponse)
+			_, _ = fmt.Fprintf(rw, `{"buckets":[%s]}`, w.response)
 		} else {
 			_, _ = fmt.Fprint(rw, `{"buckets":[]}`)
 		}
 	case strings.HasSuffix(r.URL.Path, "/b2_create_bucket"):
 		w.record(takeBody(w.t, r), true)
-		_, _ = fmt.Fprint(rw, replicationCreateResponse)
+		_, _ = fmt.Fprint(rw, w.response)
 	case strings.HasSuffix(r.URL.Path, "/b2_update_bucket"):
 		w.record(takeBody(w.t, r), false)
-		_, _ = fmt.Fprint(rw, replicationCreateResponse)
+		_, _ = fmt.Fprint(rw, w.response)
 	default:
 		w.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		http.NotFound(rw, r)
@@ -142,8 +143,19 @@ func TestNewBucketReplicationConfigurationWireRoundTrip(t *testing.T) {
 		t.Fatalf("create requests = %d, want 1", len(wire.creates))
 	}
 	created, ok := replicationField(t, wire.creates[0])
-	if !ok || len(created) == 0 || string(created) == "null" {
-		t.Fatalf("create replicationConfiguration = %s, want the configured source and destination", created)
+	if !ok {
+		t.Fatal("create omitted replicationConfiguration")
+	}
+	const wantWire = `{"asReplicationSource":{"sourceApplicationKeyId":"source-key","replicationRules":[{"replicationRuleName":"disabled-rule","destinationBucketId":"destination-bucket-id","fileNamePrefix":"prefix/","includeExistingFiles":true,"isEnabled":false,"priority":1}]},"asReplicationDestination":{"sourceToDestinationKeyMapping":{"source-key":"destination-key"}}}`
+	var gotValue, wantValue any
+	if err := json.Unmarshal(created, &gotValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(wantWire), &wantValue); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("create replicationConfiguration = %s, want %s", created, wantWire)
 	}
 	attrs, err := bucket.Attrs(context.Background())
 	if err != nil {
@@ -168,6 +180,36 @@ func TestNewBucketReplicationConfigurationWireRoundTrip(t *testing.T) {
 	}
 	if string(updated) != string(created) {
 		t.Errorf("update replicationConfiguration = %s, want byte-identical create shape %s", updated, created)
+	}
+}
+
+func TestNewBucketReplicationConfigurationUnreadable(t *testing.T) {
+	wire := newReplicationCreateWire(t)
+	wire.response = strings.Replace(replicationCreateResponse,
+		`"replicationConfiguration":{"isClientAuthorizedToRead":true`,
+		`"replicationConfiguration":{"isClientAuthorizedToRead":false`, 1)
+	if wire.response == replicationCreateResponse {
+		t.Fatal("fixture did not mark replication configuration unreadable")
+	}
+	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(context.Background(), "bucket", &BucketAttrs{
+		Type: Private, ReplicationConfig: replicationCreateConfig(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached := bucket.b.attrs().ReplicationConfig; cached != nil {
+		t.Fatalf("new bucket cached unreadable replication configuration = %#v, want nil", cached)
+	}
+	attrs, err := bucket.Attrs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.ReplicationConfig != nil {
+		t.Fatalf("unreadable replication configuration = %#v, want nil", attrs.ReplicationConfig)
 	}
 }
 

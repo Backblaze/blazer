@@ -179,8 +179,13 @@ func TestCreateBucketSendsAndReadsReplicationConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBucket: %v", err)
 	}
-	if got, ok := (*sent)["replicationConfiguration"]; !ok || got == nil {
-		t.Errorf("request replicationConfiguration = %v, want the caller's config", got)
+	const wantWire = `{"asReplicationSource":{"sourceApplicationKeyId":"source-key","replicationRules":[{"replicationRuleName":"rule","destinationBucketId":"destination-bucket-id","fileNamePrefix":"prefix/","includeExistingFiles":true,"isEnabled":true,"priority":1}]},"asReplicationDestination":{"sourceToDestinationKeyMapping":{"source-key":"destination-key"}}}`
+	var expected any
+	if err := json.Unmarshal([]byte(wantWire), &expected); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := (*sent)["replicationConfiguration"]; !ok || !reflect.DeepEqual(got, expected) {
+		t.Errorf("request replicationConfiguration = %#v, want %#v", got, expected)
 	}
 	if !reflect.DeepEqual(bucket.ReplicationConfiguration, want) {
 		t.Errorf("bucket.ReplicationConfiguration = %#v, want %#v", bucket.ReplicationConfiguration, want)
