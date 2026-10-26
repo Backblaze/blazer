@@ -52,6 +52,7 @@ type Reader struct {
 	cancel     context.CancelFunc // cancels ctx
 	o          *Object
 	name       string
+	ssec       *SSECKey
 	offset     int64 // the start of the file
 	length     int64 // the length to read, or -1
 	bounded    bool  // distinguishes an exhausted range from an unbounded read
@@ -144,7 +145,7 @@ func (r *Reader) thread() {
 			var b backoff
 			var attempts int
 		redo:
-			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false)
+			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false, r.ssec)
 			if err == errNoMoreContent {
 				// this read generated a 416 so we are entirely past the end of the object
 				r.rmux.Lock()
