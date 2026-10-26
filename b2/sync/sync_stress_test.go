@@ -52,7 +52,7 @@ func TestSyncRejectsInvalidInputs(t *testing.T) {
 	if _, err := Sync(context.Background(), nil, "", path+"-missing"); err == nil {
 		t.Fatal("missing root accepted")
 	}
-	if _, err := fileSHA1(path + "-missing"); err == nil {
+	if _, err := fileSHA1(context.Background(), path+"-missing"); err == nil {
 		t.Fatal("missing hash file accepted")
 	}
 }

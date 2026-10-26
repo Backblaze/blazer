@@ -58,7 +58,8 @@ func TestShouldTransfer(t *testing.T) {
 		{"none existing", CompareNone, &b2.Attrs{Size: 13}, false},
 		{"sha1 equal", CompareSHA1, &baseDest, false},
 		{"sha1 differs", CompareSHA1, &b2.Attrs{Size: 12, SHA1: "different"}, true},
-		{"sha1 none same size", CompareSHA1, &b2.Attrs{Size: 12, SHA1: "none"}, false},
+		{"sha1 none same size", CompareSHA1, &b2.Attrs{Size: 12, SHA1: "none"}, true},
+		{"sha1 empty same size", CompareSHA1, &b2.Attrs{Size: 12}, true},
 		{"sha1 none different size", CompareSHA1, &b2.Attrs{Size: 13, SHA1: "none"}, true},
 	}
 	for _, test := range tests {
@@ -578,6 +579,49 @@ func TestSyncSHA1LargeFileRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSyncSHA1TransfersLargeFileWithoutStoredChecksum(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "large.bin")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(100_000_001); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sync(context.Background(), bucket, "p", root); err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	stored := wire.files["p/large.bin"]
+	info, _ := stored["fileInfo"].(map[string]interface{})
+	wire.mu.Unlock()
+	if info["large_file_sha1"] != nil {
+		t.Fatalf("default upload unexpectedly stored large_file_sha1: %v", info)
+	}
+	file, err = os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("edited"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithCompare(CompareSHA1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != "[large.bin]" {
+		t.Fatalf("same-size edit with missing destination SHA1: uploaded=%s skipped=%v", got, result.Skipped)
+	}
+}
+
 func TestUploadFileRejectsGrowthBeforePublishing(t *testing.T) {
 	bucket, wire := newSyncWire(t)
 	root := t.TempDir()
@@ -596,5 +640,60 @@ func TestUploadFileRejectsGrowthBeforePublishing(t *testing.T) {
 	wire.mu.Unlock()
 	if published {
 		t.Fatal("changed file was published even though Sync reported failure")
+	}
+}
+
+func TestUploadFileRejectsStaleWalkSHA1(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	path := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(path, []byte("old-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldSHA1 := fmt.Sprintf("%x", sha1.Sum([]byte("old-bytes")))
+	if err := os.WriteFile(path, []byte("new-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := uploadFile(context.Background(), bucket, "p/changed.txt", localFile{path: path, rel: "changed.txt", size: 9, modTime: time.Now(), sha1: oldSHA1})
+	if err == nil {
+		t.Fatal("stale walk hash was uploaded")
+	}
+	wire.mu.Lock()
+	_, published := wire.files["p/changed.txt"]
+	wire.mu.Unlock()
+	if published {
+		t.Fatal("file published with stale SHA1")
+	}
+}
+
+type cancelHashReader struct {
+	started chan struct{}
+	release chan struct{}
+	once    stdsync.Once
+}
+
+func (r *cancelHashReader) Read(p []byte) (int, error) {
+	r.once.Do(func() { close(r.started) })
+	<-r.release
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+func TestHashReaderStopsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &cancelHashReader{started: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { _, err := hashReader(ctx, r); done <- err }()
+	<-r.started
+	cancel()
+	close(r.release)
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("hash error=%v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("hash did not stop after cancellation")
 	}
 }

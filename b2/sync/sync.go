@@ -117,8 +117,8 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 	case CompareSize:
 		return local.size != dest.Size
 	case CompareSHA1:
-		if dest.SHA1 == "none" {
-			return local.size != dest.Size
+		if dest.SHA1 == "none" || dest.SHA1 == "" {
+			return true
 		}
 		return local.sha1 != dest.SHA1
 	default:
@@ -211,8 +211,11 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 		}
 		local := localFile{path: path, rel: filepath.ToSlash(rel), size: info.Size(), modTime: info.ModTime()}
 		if settings.compare == CompareSHA1 {
-			local.sha1, err = fileSHA1(path)
+			local.sha1, err = fileSHA1(ctx, path)
 			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				recordFailure(path, err)
 				return nil
 			}
@@ -286,13 +289,12 @@ func resultError(result *Result) error {
 	return nil
 }
 
-func fileSHA1(path string) (string, error) {
+func fileSHA1(ctx context.Context, path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	hash := sha1.New()
-	_, readErr := io.Copy(hash, file)
+	digest, readErr := hashReader(ctx, file)
 	closeErr := file.Close()
 	if readErr != nil {
 		return "", readErr
@@ -300,13 +302,48 @@ func fileSHA1(path string) (string, error) {
 	if closeErr != nil {
 		return "", closeErr
 	}
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+	return digest, nil
+}
+
+func hashReader(ctx context.Context, reader io.Reader) (string, error) {
+	hash := sha1.New()
+	buf := make([]byte, 32*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		n, err := reader.Read(buf)
+		if n > 0 {
+			_, _ = hash.Write(buf[:n])
+		}
+		if err == io.EOF {
+			return fmt.Sprintf("%x", hash.Sum(nil)), nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
 }
 
 func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local localFile) (int64, error) {
 	file, err := os.Open(local.path)
 	if err != nil {
 		return 0, err
+	}
+	if local.sha1 != "" {
+		currentSHA1, err := hashReader(ctx, file)
+		if err != nil {
+			_ = file.Close()
+			return 0, err
+		}
+		if currentSHA1 != local.sha1 {
+			_ = file.Close()
+			return 0, fmt.Errorf("file changed after walk: SHA1 differs")
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			_ = file.Close()
+			return 0, err
+		}
 	}
 	uploadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

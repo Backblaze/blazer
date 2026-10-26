@@ -16,12 +16,14 @@ func FuzzShouldTransfer(f *testing.F) {
 			if !shouldTransfer(local, nil, mode) {
 				t.Fatal("missing file was skipped")
 			}
-			if shouldTransfer(local, dest, mode) {
-				t.Fatal("identical file was transferred")
+			wantTransfer := mode == CompareSHA1 && (sha == "" || sha == "none")
+			if got := shouldTransfer(local, dest, mode); got != wantTransfer {
+				t.Fatalf("mode %d: transfer=%t, want %t", mode, got, wantTransfer)
 			}
 		}
 		dest.SHA1 = other
-		if other != "none" && shouldTransfer(local, dest, CompareSHA1) != (sha != other) {
+		wantTransfer := other == "none" || other == "" || sha != other
+		if shouldTransfer(local, dest, CompareSHA1) != wantTransfer {
 			t.Fatal("hash difference not respected")
 		}
 		if shouldTransfer(local, dest, CompareNone) {
