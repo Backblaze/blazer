@@ -43,13 +43,29 @@ type Event struct {
 	ObjectVersionID string `json:"objectVersionId,omitempty"`
 }
 
+// MaxWebhookBodySize is the maximum body accepted by the webhook helpers.
+// HTTP handlers should also limit reads to this size before allocating body bytes.
+const MaxWebhookBodySize = 1 << 20
+
 // VerifySignature verifies a B2 webhook signature for the raw request body.
 // The v1= prefix is exact; hex digits in the signature may be either case.
+// Call this before ParseEvent, and cap HTTP reads at MaxWebhookBodySize.
+// B2 does not specify a timestamp freshness window; consumers should deduplicate
+// at-least-once deliveries by eventId after verification.
 func VerifySignature(body []byte, signatureHeader, signingSecret string) error {
+	if len(body) > MaxWebhookBodySize {
+		return fmt.Errorf("webhook body too large")
+	}
+	if signingSecret == "" {
+		return fmt.Errorf("webhook signing secret is empty")
+	}
 	if !strings.HasPrefix(signatureHeader, "v1=") {
 		return fmt.Errorf("webhook signature must start with v1=")
 	}
 	hexSignature := strings.TrimPrefix(signatureHeader, "v1=")
+	if len(hexSignature) != sha256.Size*2 {
+		return fmt.Errorf("webhook signature has invalid length")
+	}
 	signature, err := hex.DecodeString(hexSignature)
 	if err != nil {
 		return fmt.Errorf("decode webhook signature: %w", err)
@@ -65,10 +81,18 @@ func VerifySignature(body []byte, signatureHeader, signingSecret string) error {
 }
 
 // ParseEvent parses a B2 webhook event-notification payload.
+// Call VerifySignature on the same raw body first; a valid JSON payload alone
+// is not evidence that it came from B2.
 func ParseEvent(body []byte) (*EventNotification, error) {
+	if len(body) > MaxWebhookBodySize {
+		return nil, fmt.Errorf("webhook body too large")
+	}
 	var notification EventNotification
 	if err := json.Unmarshal(body, &notification); err != nil {
 		return nil, err
+	}
+	if notification.Events == nil {
+		return nil, fmt.Errorf("webhook payload has no events array")
 	}
 	return &notification, nil
 }

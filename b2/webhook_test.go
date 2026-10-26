@@ -84,7 +84,7 @@ func TestVerifySignatureKnownSHA256Vector(t *testing.T) {
 }
 
 func TestVerifySignatureUsesRawBodyAndSecret(t *testing.T) {
-	body := []byte("{\n  \"events\": []\n}")
+	body := []byte(" \r\n{\n  \"events\": []\n}\r\n")
 	secret := "c2VjcmV0" // Looks like base64 for "secret", but is the HMAC key verbatim.
 	header := webhookTestSignature(body, secret)
 	if err := VerifySignature(body, header, secret); err != nil {
@@ -124,20 +124,36 @@ func TestVerifySignatureRejectsMalformedHeader(t *testing.T) {
 		{name: "wrong version", header: "v2=" + valid[3:], want: "v1="},
 		{name: "wrong version case", header: "V1=" + valid[3:], want: "v1="},
 		{name: "leading whitespace", header: " " + valid, want: "v1="},
-		{name: "empty hex", header: "v1=", want: "does not match"},
-		{name: "nonhex", header: "v1=not-hex", want: "decode"},
-		{name: "odd hex length", header: "v1=abc", want: "decode"},
-		{name: "short digest", header: valid[:len(valid)-2], want: "does not match"},
-		{name: "long digest", header: valid + "00", want: "does not match"},
-		{name: "trailing whitespace", header: valid + " ", want: "decode"},
-		{name: "multiple signatures", header: valid + ", " + valid, want: "decode"},
+		{name: "empty hex", header: "v1=", want: "length"},
+		{name: "nonhex", header: "v1=" + strings.Repeat("g", 64), want: "decode"},
+		{name: "odd hex length", header: "v1=abc", want: "length"},
+		{name: "short digest", header: valid[:len(valid)-2], want: "length"},
+		{name: "long digest", header: valid + "00", want: "length"},
+		{name: "trailing whitespace", header: valid + " ", want: "length"},
+		{name: "multiple signatures", header: valid + ", " + valid, want: "length"},
+		{name: "oversized signature", header: "v1=" + strings.Repeat("a", 1<<20), want: "length"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := VerifySignature(body, tc.header, "secret")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("VerifySignature(%q) = %v, want error containing %q", tc.header, err, tc.want)
+				t.Fatalf("VerifySignature(%s) = %v, want error containing %q", tc.name, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestVerifySignatureRejectsEmptySecretAndOversizedBody(t *testing.T) {
+	body := []byte(`{"events":[]}`)
+	if err := VerifySignature(body, webhookTestSignature(body, ""), ""); err == nil {
+		t.Fatal("VerifySignature accepted an empty signing secret")
+	}
+	limit := bytes.Repeat([]byte("x"), MaxWebhookBodySize)
+	if err := VerifySignature(limit, webhookTestSignature(limit, "secret"), "secret"); err != nil {
+		t.Fatalf("VerifySignature rejected body at limit: %v", err)
+	}
+	tooLarge := append(limit, 'x')
+	if err := VerifySignature(tooLarge, webhookTestSignature(tooLarge, "secret"), "secret"); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("VerifySignature oversized body error = %v, want size rejection", err)
 	}
 }
 
@@ -270,6 +286,9 @@ func TestParseEventRejectsInvalidJSON(t *testing.T) {
 		{name: "trailing data", body: `{"events":[]} {}`},
 		{name: "wrong top-level type", body: `[]`},
 		{name: "wrong events type", body: `{"events":{}}`},
+		{name: "null payload", body: `null`},
+		{name: "missing events", body: `{}`},
+		{name: "null events", body: `{"events":null}`},
 		{name: "wrong timestamp type", body: `{"events":[{"eventTimestamp":"today"}]}`},
 		{name: "timestamp overflow", body: `{"events":[{"eventTimestamp":9223372036854775808}]}`},
 		{name: "wrong object size type", body: `{"events":[{"objectSize":"12"}]}`},
@@ -280,6 +299,19 @@ func TestParseEventRejectsInvalidJSON(t *testing.T) {
 				t.Fatalf("ParseEvent(%q) = %#v, %v; want nil result and error", tc.body, got, err)
 			}
 		})
+	}
+}
+
+func TestParseEventRejectsOversizedBody(t *testing.T) {
+	base := []byte(`{"events":[]}`)
+	atLimit := append(base, bytes.Repeat([]byte(" "), MaxWebhookBodySize-len(base))...)
+	if _, err := ParseEvent(atLimit); err != nil {
+		t.Fatalf("ParseEvent rejected body at limit: %v", err)
+	}
+	body := append(atLimit, ' ')
+	got, err := ParseEvent(body)
+	if err == nil || got != nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("ParseEvent oversized body = %#v, %v; want size rejection", got, err)
 	}
 }
 

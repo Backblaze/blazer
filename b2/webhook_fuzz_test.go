@@ -17,7 +17,11 @@ func FuzzVerifySignature(f *testing.F) {
 		_, _ = mac.Write(body)
 		signed := "v1=" + hex.EncodeToString(mac.Sum(nil))
 		if err := VerifySignature(body, signed, secret); err != nil {
-			t.Fatal(err)
+			if secret != "" && len(body) <= MaxWebhookBodySize {
+				t.Fatal(err)
+			}
+		} else if secret == "" || len(body) > MaxWebhookBodySize {
+			t.Fatal("accepted an empty secret or oversized body")
 		}
 		if VerifySignature(body, header, secret) == nil {
 			if len(header) != len(signed) {
