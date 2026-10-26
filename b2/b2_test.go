@@ -478,11 +478,12 @@ type testFile struct {
 	bypassGovernance bool
 }
 
-func (t *testFile) id() string           { return t.n }
-func (t *testFile) name() string         { return t.n }
-func (t *testFile) size() int64          { return t.s }
-func (t *testFile) timestamp() time.Time { return t.t }
-func (t *testFile) status() string       { return t.a }
+func (t *testFile) id() string                           { return t.n }
+func (t *testFile) name() string                         { return t.n }
+func (t *testFile) size() int64                          { return t.s }
+func (t *testFile) timestamp() time.Time                 { return t.t }
+func (t *testFile) status() string                       { return t.a }
+func (t *testFile) encryption() (string, string, string) { return "", "", "" }
 
 func (t *testFile) compileParts(int64, map[int]string, *uploadEncryption) b2LargeFileInterface {
 	panic("not implemented")

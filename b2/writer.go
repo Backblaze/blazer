@@ -63,11 +63,12 @@ type Writer struct {
 	// blank, os.TempDir() is used.
 	FileBufferDir string
 
-	contentType string
-	info        map[string]string
-	retention   *FileRetention
-	legalHold   LegalHold
-	encryption  *uploadEncryption
+	contentType   string
+	info          map[string]string
+	retention     *FileRetention
+	legalHold     LegalHold
+	encryption    *uploadEncryption
+	ssecRequested bool
 
 	csize       int
 	ctx         context.Context
@@ -284,6 +285,9 @@ func (w *Writer) checkObjectLock() error {
 	if err := w.legalHold.validate(true); err != nil {
 		return err
 	}
+	if w.ssecRequested && (w.encryption == nil || w.encryption.ssec == nil) {
+		return errors.New("b2: SSE-C key is nil")
+	}
 	return w.encryption.validate()
 }
 
@@ -437,6 +441,9 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	if err := w.checkResumedLock(fi); err != nil {
 		return nil, err
 	}
+	if err := w.checkResumedEncryption(fi); err != nil {
+		return nil, err
+	}
 
 	next := 1
 	seen := make(map[int]string)
@@ -482,6 +489,23 @@ func (w *Writer) checkResumedLock(fi beFileInterface) error {
 	}
 	if w.legalHold != "" && legalHold != w.legalHold {
 		return fmt.Errorf("b2: cannot resume %q: the unfinished upload does not have the requested legal hold", w.name)
+	}
+	return nil
+}
+
+// checkResumedEncryption refuses to reuse parts unless B2 has reported the
+// requested SSE-C mode and key digest. A missing digest is not proof of a match.
+func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
+	if w.encryption == nil || w.encryption.ssec == nil {
+		return nil
+	}
+	_, wantMD5, err := w.encryption.ssec.encoded()
+	if err != nil {
+		return err
+	}
+	mode, algorithm, gotMD5 := fi.encryption()
+	if mode != "SSE-C" || algorithm != "AES256" || gotMD5 == "" || gotMD5 != wantMD5 {
+		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest is missing or does not match", w.name)
 	}
 	return nil
 }
@@ -706,6 +730,7 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
 		w.encryption = &uploadEncryption{ssec: key}
+		w.ssecRequested = true
 	}
 }
 

@@ -23,6 +23,7 @@ package base
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -46,7 +47,7 @@ import (
 
 const (
 	APIBase          = "https://api.backblazeb2.com"
-	DefaultUserAgent = "blazer/0.8.0"
+	DefaultUserAgent = "blazer/0.9.0"
 )
 
 type b2err struct {
@@ -254,9 +255,6 @@ func redactSSECHeader(name, value string) string {
 }
 
 func redactSSECJSON(args []byte) []byte {
-	if !bytes.Contains(args, []byte("customerKey")) {
-		return args
-	}
 	var value any
 	if err := json.Unmarshal(args, &value); err != nil {
 		return []byte("[REDACTED]")
@@ -401,15 +399,17 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		if method != "b2_upload_file" && method != "b2_upload_part" {
 			method = ""
 		}
-		// The following code will work regardless of whether err is an x509.UnknownAuthorityError
-		// (Go 1.19 and earlier) or a tls.CertificateVerificationError that wraps an
-		// x509.UnknownAuthorityError (Go 1.20 and later).
-		// See https://go.dev/doc/go1.20#cryptotlspkgcryptotls
-		switch err.(type) {
-		case x509.UnknownAuthorityError:
-			return nil, err
-		}
-		if errors.As(err, &x509.UnknownAuthorityError{}) {
+		// Certificate verification failures are permanent, including distrust of
+		// compromised CAs. Preserve the original error instead of retrying or
+		// requesting a new upload URL.
+		var verificationErr *tls.CertificateVerificationError
+		var unknownAuthorityErr x509.UnknownAuthorityError
+		var invalidCertErr x509.CertificateInvalidError
+		var hostnameErr x509.HostnameError
+		if errors.As(err, &verificationErr) ||
+			errors.As(err, &unknownAuthorityErr) ||
+			errors.As(err, &invalidCertErr) ||
+			errors.As(err, &hostnameErr) {
 			return nil, err
 		}
 
@@ -1363,6 +1363,10 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 	var files []*File
 	for _, f := range b2resp.Files {
 		retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+		var mode, algorithm, keyMD5 string
+		if sse := f.ServerSideEncryption; sse != nil {
+			mode, algorithm, keyMD5 = sse.Mode, sse.Algorithm, sse.CustomerKeyMD5
+		}
 		files = append(files, &File{
 			Name:      f.Name,
 			Status:    f.Action,
@@ -1376,7 +1380,10 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 				Timestamp:            millitime(f.Timestamp),
 				Retention:            retention,
 				LegalHold:            legalHold,
-				ServerSideEncryption: f.ServerSideEncryption,
+				ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
+				EncryptionMode:       mode,
+				EncryptionAlgorithm:  algorithm,
+				SSECKeyMD5:           keyMD5,
 			},
 		})
 	}
@@ -1422,7 +1429,7 @@ func (b *Bucket) ListFileNames(ctx context.Context, count int, continuation, pre
 				Timestamp:            millitime(f.Timestamp),
 				Retention:            retention,
 				LegalHold:            legalHold,
-				ServerSideEncryption: f.ServerSideEncryption,
+				ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
 			},
 			ID: f.FileID,
 			b2: b.b2,
@@ -1470,7 +1477,7 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 				Timestamp:            millitime(f.Timestamp),
 				Retention:            retention,
 				LegalHold:            legalHold,
-				ServerSideEncryption: f.ServerSideEncryption,
+				ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
 			},
 			ID: f.FileID,
 			b2: b.b2,
@@ -1630,6 +1637,20 @@ type FileInfo struct {
 	Retention            *FileRetention
 	LegalHold            string
 	ServerSideEncryption *b2types.ServerSideEncryption
+	EncryptionMode       string
+	EncryptionAlgorithm  string
+	SSECKeyMD5           string
+}
+
+// fileEncryptionMetadata retains only non-secret response metadata. Never
+// cache a customer key even if a server unexpectedly echoes it.
+func fileEncryptionMetadata(sse *b2types.ServerSideEncryption) *b2types.ServerSideEncryption {
+	if sse == nil {
+		return nil
+	}
+	return &b2types.ServerSideEncryption{
+		Mode: sse.Mode, Algorithm: sse.Algorithm, CustomerKeyMD5: sse.CustomerKeyMD5,
+	}
 }
 
 // GetFileInfoByName returns metadata for the current visible file with name.
@@ -1666,7 +1687,7 @@ func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*FileInfo,
 		Timestamp:            millitime(f.Timestamp),
 		Retention:            retention,
 		LegalHold:            legalHold,
-		ServerSideEncryption: f.ServerSideEncryption,
+		ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
 	}, nil
 }
 
@@ -1709,7 +1730,7 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 		Timestamp:            millitime(b2resp.Timestamp),
 		Retention:            retention,
 		LegalHold:            legalHold,
-		ServerSideEncryption: b2resp.ServerSideEncryption,
+		ServerSideEncryption: fileEncryptionMetadata(b2resp.ServerSideEncryption),
 	}
 	return f.Info, nil
 }

@@ -1,3 +1,3 @@
 module github.com/Backblaze/blazer
 
-go 1.18
+go 1.26.10
