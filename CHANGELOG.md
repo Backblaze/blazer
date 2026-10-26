@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
+
 ### Fixed
 
 - Concurrent requests now use a consistent authorization snapshot while a 401 refreshes the account token. Simultaneous 401s share one reauthorization instead of racing to update shared account state.
