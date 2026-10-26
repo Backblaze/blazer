@@ -728,6 +728,10 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	for _, f := range o.b.c.opts.writerOpts {
 		f(w)
 	}
+	// Conflict flags describe explicit options on this writer, not inherited
+	// defaults. Keep the default encryption unless an option below replaces it.
+	w.ssecRequested = false
+	w.sseb2Requested = false
 	for _, f := range opts {
 		f(w)
 	}
