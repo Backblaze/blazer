@@ -4,6 +4,7 @@
 // application-key credentials or capabilities, retention, replication, encryption, lifecycle,
 // CORS, or download-authorization signatures. Unsupported endpoints fail with
 // a non-2xx response; they never silently succeed.
+// Multipart part-number and minimum-size limits are enforced like B2.
 package b2sim
 
 import (
@@ -23,6 +24,8 @@ import (
 )
 
 const origin = "http://b2sim.invalid"
+
+const absoluteMinimumPartSize = 5_000_000
 
 type bucket struct {
 	id, name, kind string
@@ -238,8 +241,23 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 	var data []byte
 	if req.Body != nil {
 		defer func() { _ = req.Body.Close() }()
+		readDone := make(chan struct{})
+		closerDone := make(chan struct{})
+		go func() {
+			defer close(closerDone)
+			select {
+			case <-req.Context().Done():
+				_ = req.Body.Close()
+			case <-readDone:
+			}
+		}()
 		var err error
 		data, err = io.ReadAll(req.Body)
+		close(readDone)
+		<-closerDone
+		if ctxErr := req.Context().Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -277,7 +295,7 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		return reply(req, http.StatusOK, map[string]any{
 			"accountId": "b2sim-account", "authorizationToken": "b2sim-token",
 			"apiInfo": map[string]any{"storageApi": map[string]any{
-				"absoluteMinimumPartSize": 5000000, "recommendedPartSize": 5000000,
+				"absoluteMinimumPartSize": absoluteMinimumPartSize, "recommendedPartSize": 100_000_000,
 				"apiUrl": origin, "downloadUrl": origin, "s3ApiUrl": origin, "storageApi": "storage",
 				"capabilities": []string{"listBuckets", "writeBuckets", "readBuckets", "writeFiles", "readFiles", "deleteFiles"},
 				"allowed":      map[string]any{"buckets": nil, "capabilities": []string{}, "namePrefix": nil},
@@ -534,7 +552,7 @@ func (s *Simulator) uploadPart(req *http.Request, id string, data []byte) (*http
 		return failure(req, 404, "not_found", "large file not found")
 	}
 	part, err := strconv.Atoi(req.Header.Get("X-Bz-Part-Number"))
-	if err != nil || part < 1 {
+	if err != nil || part < 1 || part > 10000 {
 		return failure(req, 400, "bad_request", "invalid part number")
 	}
 	data, sha, valid := verifiedUpload(data, req.Header.Get("X-Bz-Content-Sha1"))
@@ -553,7 +571,7 @@ func (s *Simulator) finish(req *http.Request, args map[string]any) (*http.Respon
 		return failure(req, 404, "not_found", "large file not found")
 	}
 	wants, _ := args["partSha1Array"].([]any)
-	if len(wants) != len(l.parts) || len(wants) == 0 {
+	if len(wants) != len(l.parts) || len(wants) < 2 {
 		return failure(req, 400, "bad_request", "incomplete part array")
 	}
 	var data []byte
@@ -562,6 +580,9 @@ func (s *Simulator) finish(req *http.Request, args map[string]any) (*http.Respon
 		piece, exists := l.parts[part]
 		if !exists || l.hashes[part] == "" || str(want) != l.hashes[part] {
 			return failure(req, 400, "bad_request", "part SHA1 mismatch")
+		}
+		if i < len(wants)-1 && len(piece) < absoluteMinimumPartSize {
+			return failure(req, 400, "bad_request", "non-final part is smaller than the absolute minimum part size")
 		}
 		data = append(data, piece...)
 	}

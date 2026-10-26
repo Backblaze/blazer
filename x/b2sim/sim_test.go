@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -518,6 +519,135 @@ func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
 	}
 }
 
+func TestMultipartLimitsLeaveUploadUnfinished(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		parts [][]byte
+	}{
+		{name: "one part", parts: [][]byte{bytes.Repeat([]byte("a"), 5_000_000)}},
+		{name: "short non-final part", parts: [][]byte{[]byte("short"), []byte("last")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sim := New()
+			bucketID := sim.Seed("multipart-limit")
+			start := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": bucketID, "fileName": "large", "contentType": "application/octet-stream"})
+			var started struct {
+				FileID string `json:"fileId"`
+			}
+			if err := json.NewDecoder(start.Body).Decode(&started); err != nil {
+				t.Fatal(err)
+			}
+			if err := start.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var hashes []string
+			for i, part := range tc.parts {
+				req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+started.FileID, bytes.NewReader(part))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "b2sim-token")
+				req.Header.Set("X-Bz-Part-Number", fmt.Sprint(i+1))
+				req.Header.Set("X-Bz-Content-Sha1", digest(part))
+				resp, err := sim.RoundTrip(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := resp.Body.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if resp.StatusCode != 200 {
+					t.Fatalf("upload part %d status = %d", i+1, resp.StatusCode)
+				}
+				hashes = append(hashes, digest(part))
+			}
+			finish := postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": started.FileID, "partSha1Array": hashes})
+			var failureBody struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(finish.Body).Decode(&failureBody); err != nil {
+				t.Fatal(err)
+			}
+			if err := finish.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if finish.StatusCode != 400 || failureBody.Code != "bad_request" || sim.large[started.FileID] == nil {
+				t.Fatalf("finish status=%d code=%q unfinished=%t, want 400 bad_request and retained upload", finish.StatusCode, failureBody.Code, sim.large[started.FileID] != nil)
+			}
+		})
+	}
+}
+
+func TestAuthorizeAdvertisesB2PartSizes(t *testing.T) {
+	sim := New()
+	req, err := http.NewRequest(http.MethodGet, origin+"/b2api/v4/b2_authorize_account", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("id", "key")
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		APIInfo struct {
+			StorageAPI struct {
+				AbsoluteMinimumPartSize int `json:"absoluteMinimumPartSize"`
+				RecommendedPartSize     int `json:"recommendedPartSize"`
+			} `json:"storageApi"`
+		} `json:"apiInfo"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	got := body.APIInfo.StorageAPI
+	if got.AbsoluteMinimumPartSize != 5_000_000 || got.RecommendedPartSize != 100_000_000 {
+		t.Fatalf("part sizes = minimum %d recommended %d, want 5000000 and 100000000", got.AbsoluteMinimumPartSize, got.RecommendedPartSize)
+	}
+}
+
+func TestUploadPartRejectsOutOfRangeNumbers(t *testing.T) {
+	sim := New()
+	bucketID := sim.Seed("part-number")
+	start := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": bucketID, "fileName": "large", "contentType": "application/octet-stream"})
+	var started struct {
+		FileID string `json:"fileId"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if err := start.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, number := range []int{0, 10001} {
+		part := []byte("part")
+		req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+started.FileID, bytes.NewReader(part))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "b2sim-token")
+		req.Header.Set("X-Bz-Part-Number", fmt.Sprint(number))
+		req.Header.Set("X-Bz-Content-Sha1", digest(part))
+		resp, err := sim.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var failureBody struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&failureBody); err != nil {
+			t.Fatal(err)
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != 400 || failureBody.Code != "bad_request" || len(sim.large[started.FileID].parts) != 0 {
+			t.Fatalf("part %d status=%d code=%q stored=%d, want 400 bad_request and no part", number, resp.StatusCode, failureBody.Code, len(sim.large[started.FileID].parts))
+		}
+	}
+}
+
 func TestDownloadFileNameHeaderIsEncoded(t *testing.T) {
 	ctx := context.Background()
 	sim := New()
@@ -817,6 +947,55 @@ type seekableSource struct {
 	io.ReaderAt
 }
 
+type blockingBody struct {
+	entered chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingBody) Read([]byte) (int, error) {
+	close(b.entered)
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+func (b *blockingBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+func TestRoundTripCancelsBlockedBodyRead(t *testing.T) {
+	sim := New()
+	body := &blockingBody{entered: make(chan struct{}), closed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, origin+"/b2api/v4/b2_create_bucket", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { _, err := sim.RoundTrip(req); result <- err }()
+	select {
+	case <-body.entered:
+	case <-time.After(time.Second):
+		t.Fatal("body read did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RoundTrip error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		_ = body.Close()
+		t.Fatal("RoundTrip remained blocked after cancellation")
+	}
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("body reader did not exit")
+	}
+}
+
 func TestReadFromMultipartTrailingSHA1(t *testing.T) {
 	ctx := context.Background()
 	sim := New()
@@ -1007,25 +1186,27 @@ func TestFinishOrderMatchesListingAndDownload(t *testing.T) {
 	if _, err := writeObject(ctx, bucket, "same", []byte("simple"), 0); err != nil {
 		t.Fatal(err)
 	}
-	part := []byte("large")
-	req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+started.FileID, bytes.NewReader(part))
-	if err != nil {
-		t.Fatal(err)
+	parts := [][]byte{bytes.Repeat([]byte("large"), 1_000_000), []byte("last")}
+	for i, part := range parts {
+		req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+started.FileID, bytes.NewReader(part))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "b2sim-token")
+		req.Header.Set("X-Bz-Part-Number", fmt.Sprint(i+1))
+		req.Header.Set("X-Bz-Content-Sha1", digest(part))
+		partResp, err := sim.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := partResp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if partResp.StatusCode != 200 {
+			t.Fatalf("part %d status = %d", i+1, partResp.StatusCode)
+		}
 	}
-	req.Header.Set("Authorization", "b2sim-token")
-	req.Header.Set("X-Bz-Part-Number", "1")
-	req.Header.Set("X-Bz-Content-Sha1", digest(part))
-	resp, err := sim.RoundTrip(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := resp.Body.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf("part status = %d", resp.StatusCode)
-	}
-	resp = postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": started.FileID, "partSha1Array": []string{digest(part)}})
+	resp := postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": started.FileID, "partSha1Array": []string{digest(parts[0]), digest(parts[1])}})
 	if err := resp.Body.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1040,8 +1221,8 @@ func TestFinishOrderMatchesListingAndDownload(t *testing.T) {
 		t.Fatalf("listed version = %s, want %s", iter.Object().ID(), started.FileID)
 	}
 	got, err := readObject(ctx, bucket.Object("same"), 0, -1)
-	if err != nil || string(got) != "large" {
-		t.Fatalf("downloaded %q, %v; want large", got, err)
+	if err != nil || !bytes.Equal(got, append(parts[0], parts[1]...)) {
+		t.Fatalf("downloaded %d bytes, %v; want %d", len(got), err, len(parts[0])+len(parts[1]))
 	}
 }
 
