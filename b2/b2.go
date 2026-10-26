@@ -76,7 +76,7 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 	for _, option := range c.opts.writerOpts {
 		option(probe)
 	}
-	if probe.ssecRequested || probe.ssec != nil {
+	if probe.ssecRequested || (probe.encryption != nil && probe.encryption.ssec != nil) {
 		return nil, errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
 	}
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
@@ -265,10 +265,11 @@ type BucketAttrs struct {
 // AES256 algorithm. It is the only supported bucket default; leaving
 // BucketAttrs.DefaultServerSideEncryption nil uses the service default.
 func SSEB2WithAES256() *ServerSideEncryption {
-	return &ServerSideEncryption{
-		Mode:      "SSE-B2",
-		Algorithm: "AES256",
-	}
+	return newServerSideEncryption("SSE-B2", "AES256")
+}
+
+func newServerSideEncryption(mode, algorithm string) *ServerSideEncryption {
+	return &ServerSideEncryption{Mode: mode, Algorithm: algorithm}
 }
 
 // DefaultServerSideEncryption returns the SSE-B2 setting.
@@ -559,16 +560,17 @@ type Object struct {
 
 // Attrs holds an object's metadata.
 type Attrs struct {
-	Name            string            // Not used on upload.
-	Size            int64             // Not used on upload.
-	ContentType     string            // Used on upload, default is "application/octet-stream".
-	Status          ObjectState       // Not used on upload.
-	UploadTimestamp time.Time         // Not used on upload.
-	SHA1            string            // Can be "none" for large files.  If set on upload, will be used for large files.
-	LastModified    time.Time         // If present, and there are fewer than 10 keys in the Info field, this is saved on upload.
-	Info            map[string]string // Save arbitrary metadata on upload, but limited to 10 keys.
-	Retention       *FileRetention    // Object Lock retention of this file, nil when it has none or the key may not read it.
-	LegalHold       LegalHold         // Object Lock legal hold of this file, empty when unset or the key may not read it.
+	Name                 string                // Not used on upload.
+	Size                 int64                 // Not used on upload.
+	ContentType          string                // Used on upload, default is "application/octet-stream".
+	Status               ObjectState           // Not used on upload.
+	UploadTimestamp      time.Time             // Not used on upload.
+	SHA1                 string                // Can be "none" for large files.  If set on upload, will be used for large files.
+	LastModified         time.Time             // If present, and there are fewer than 10 keys in the Info field, this is saved on upload.
+	Info                 map[string]string     // Save arbitrary metadata on upload, but limited to 10 keys.
+	Retention            *FileRetention        // Object Lock retention of this file, nil when it has none or the key may not read it.
+	LegalHold            LegalHold             // Object Lock legal hold of this file, empty when unset or the key may not read it.
+	ServerSideEncryption *ServerSideEncryption // Server-side encryption applied to this file, nil when none was reported.
 }
 
 // Name returns an object's name
@@ -591,10 +593,15 @@ func (o *Object) Attrs(ctx context.Context, keys ...*SSECKey) (*Attrs, error) {
 	if err != nil {
 		return nil, err
 	}
-	name, sha, size, ct, info, st, stamp := fi.stats()
+	return attrsFromFileInfo(fi)
+}
+
+func attrsFromFileInfo(fi beFileInfoInterface) (*Attrs, error) {
+	name, sha, size, contentType, info, status, timestamp := fi.stats()
 	retention, legalHold := fi.fileLock()
+	serverSideEncryption := fi.serverSideEncryption()
 	var state ObjectState
-	switch st {
+	switch status {
 	case "upload", "copy":
 		state = Uploaded
 	case "start":
@@ -604,29 +611,38 @@ func (o *Object) Attrs(ctx context.Context, keys ...*SSECKey) (*Attrs, error) {
 	case "folder":
 		state = Folder
 	}
-	var mtime time.Time
-	if v, ok := info["src_last_modified_millis"]; ok {
-		ms, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		mtime = time.Unix(ms/1e3, (ms%1e3)*1e6)
-		delete(info, "src_last_modified_millis")
+	var publicInfo map[string]string
+	if info != nil {
+		publicInfo = make(map[string]string, len(info))
 	}
-	if v, ok := info["large_file_sha1"]; ok {
-		sha = v
+	var lastModified time.Time
+	for key, value := range info {
+		switch key {
+		case "src_last_modified_millis":
+			millis, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			lastModified = time.Unix(millis/1e3, (millis%1e3)*1e6)
+		case "large_file_sha1":
+			sha = value
+			publicInfo[key] = value
+		default:
+			publicInfo[key] = value
+		}
 	}
 	return &Attrs{
-		Name:            name,
-		Size:            size,
-		ContentType:     ct,
-		UploadTimestamp: stamp,
-		SHA1:            sha,
-		Info:            info,
-		Status:          state,
-		LastModified:    mtime,
-		Retention:       retention,
-		LegalHold:       legalHold,
+		Name:                 name,
+		Size:                 size,
+		ContentType:          contentType,
+		UploadTimestamp:      timestamp,
+		SHA1:                 sha,
+		Info:                 publicInfo,
+		Status:               state,
+		LastModified:         lastModified,
+		Retention:            retention,
+		LegalHold:            legalHold,
+		ServerSideEncryption: serverSideEncryption,
 	}, nil
 }
 
@@ -640,37 +656,7 @@ func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*Attrs, er
 		}
 		return nil, err
 	}
-	fileName, sha, size, contentType, info, status, timestamp := fi.stats()
-	retention, legalHold := fi.fileLock()
-	var state ObjectState
-	switch status {
-	case "upload", "copy":
-		state = Uploaded
-	case "start":
-		state = Started
-	case "hide":
-		state = Hider
-	case "folder":
-		state = Folder
-	}
-	var lastModified time.Time
-	if value, ok := info["src_last_modified_millis"]; ok {
-		millis, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		lastModified = time.Unix(millis/1e3, (millis%1e3)*1e6)
-		delete(info, "src_last_modified_millis")
-	}
-	if value, ok := info["large_file_sha1"]; ok {
-		sha = value
-	}
-	return &Attrs{
-		Name: fileName, Size: size, ContentType: contentType,
-		UploadTimestamp: timestamp, SHA1: sha, Info: info,
-		Status: state, LastModified: lastModified,
-		Retention: retention, LegalHold: legalHold,
-	}, nil
+	return attrsFromFileInfo(fi)
 }
 
 // ObjectState represents the various states an object can be in.
@@ -714,14 +700,19 @@ func (o *Object) URL() string {
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	ctx, cancel := context.WithCancel(ctx)
 	w := &Writer{
-		o:      o,
-		name:   o.name,
-		ctx:    ctx,
-		cancel: cancel,
+		o:             o,
+		name:          o.name,
+		ctx:           ctx,
+		cancel:        cancel,
+		progressTotal: -1,
 	}
 	for _, f := range o.b.c.opts.writerOpts {
 		f(w)
 	}
+	// Conflict flags describe explicit options on this writer, not inherited
+	// defaults. Keep the default encryption unless an option below replaces it.
+	w.ssecRequested = false
+	w.sseb2Requested = false
 	for _, f := range opts {
 		f(w)
 	}
@@ -729,20 +720,23 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 }
 
 // NewRangeReader returns a reader for the given object, reading up to length
-// bytes.  If length is negative, the rest of the object is read.
+// bytes. If length is negative, the rest of the object is read. With a Progress
+// callback, a finite range reports the available byte count when a HEAD
+// request can determine it; otherwise the progress total is -1.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys ...*SSECKey) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	key, err := optionalSSECKey(keys)
 	r := &Reader{
-		ctx:     ctx,
-		cancel:  cancel,
-		o:       o,
-		name:    o.name,
-		ssec:    key,
-		chunks:  make(map[int]*rchunk),
-		length:  length,
-		bounded: length >= 0,
-		offset:  offset,
+		ctx:           ctx,
+		cancel:        cancel,
+		o:             o,
+		name:          o.name,
+		ssec:          key,
+		chunks:        make(map[int]*rchunk),
+		length:        length,
+		bounded:       length >= 0,
+		offset:        offset,
+		progressTotal: readerProgressTotal(length),
 	}
 	if err != nil {
 		r.err = err
@@ -750,11 +744,30 @@ func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys 
 	return r
 }
 
+func readerProgressTotal(length int64) int64 {
+	if length >= 0 {
+		return length
+	}
+	return -1
+}
+
 // NewReader returns a reader for the given object. Pass an SSE-C key when the
 // object was encrypted with a customer-managed key; the key is not retained by
 // the Object, Bucket or Client.
 func (o *Object) NewReader(ctx context.Context, keys ...*SSECKey) *Reader {
 	return o.NewRangeReader(ctx, 0, -1, keys...)
+}
+
+// DownloadFileByID returns a reader for a file identified by its B2 file ID.
+// It makes one download request; use Object.NewReader for chunked downloads by
+// file name. Supply an SSE-C key for a customer-key-encrypted version; the key
+// is used only on this request and is not retained.
+func (b *Bucket) DownloadFileByID(ctx context.Context, id string, keys ...*SSECKey) (io.ReadCloser, error) {
+	key, err := optionalSSECKey(keys)
+	if err != nil {
+		return nil, err
+	}
+	return b.b.downloadFileByID(ctx, id, 0, 0, false, key)
 }
 
 func (o *Object) ensure(ctx context.Context, keys ...*SSECKey) error {

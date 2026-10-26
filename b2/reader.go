@@ -48,6 +48,15 @@ type Reader struct {
 	// 10MB.
 	ChunkSize int
 
+	// Progress receives cumulative downloaded bytes. It runs on one owner
+	// goroutine, never under a transfer lock; values are monotonic non-decreasing
+	// and end with a final call at the bytes downloaded before Close returns.
+	// For a finite range, total is the actual available byte count (not the
+	// requested upper bound) when a HEAD request can determine it; otherwise
+	// total is -1. Set Progress before the first Read. Calling Close from this
+	// callback is unsupported because Close waits for the callback to finish.
+	Progress func(bytesComplete, bytesTotal int64)
+
 	ctx        context.Context
 	cancel     context.CancelFunc // cancels ctx
 	o          *Object
@@ -67,6 +76,10 @@ type Reader struct {
 	readOffEnd bool
 	sha1       string
 
+	progressTotal int64
+	reporter      *progressReporter
+	wg            sync.WaitGroup
+
 	rmux  sync.Mutex // guards rcond
 	rcond *sync.Cond
 
@@ -85,6 +98,9 @@ type rchunk struct {
 // Close frees resources associated with the download.
 func (r *Reader) Close() error {
 	r.cancel()
+	r.init.Do(r.initFunc) // wait for a concurrent first Read to finish initialization
+	r.wg.Wait()
+	r.reporter.finish()
 	r.o.b.c.removeReader(r)
 	return nil
 }
@@ -113,7 +129,9 @@ func (r *Reader) getErr() error {
 }
 
 func (r *Reader) thread() {
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		for {
 			var buf *rchunk
 			select {
@@ -144,6 +162,7 @@ func (r *Reader) thread() {
 			r.rmux.Unlock()
 			var b backoff
 			var attempts int
+			var reported int64
 		redo:
 			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false, r.ssec)
 			if err == errNoMoreContent {
@@ -167,12 +186,14 @@ func (r *Reader) thread() {
 				r.sha1 = sha1
 			}
 			r.rmux.Unlock()
-			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize)}
+			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize), progressSize: int64(rsize), progress: r.reporter}
+			mr.reported.Store(reported)
 			r.smux.Lock()
 			r.smap[chunkID] = mr
 			r.smux.Unlock()
-			i, err := copyContext(r.ctx, buf, mr)
-			fr.Close()
+			i, err := copyContextWithCloser(r.ctx, buf, mr, fr)
+			reported = mr.reported.Load()
+			_ = fr.Close()
 			r.smux.Lock()
 			r.smap[chunkID] = nil
 			r.smux.Unlock()
@@ -232,10 +253,34 @@ func (r *Reader) curChunk() (*rchunk, error) {
 }
 
 func (r *Reader) initFunc() {
+	r.vrfy = sha1.New()
+	if r.Progress != nil && r.length > 0 {
+		// A range length is only an upper bound: it may extend past EOF.
+		// HEAD uses the same download authorization as GET, and its content
+		// length lets progress report an exact total without listing files.
+		r.progressTotal = -1
+		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true, r.ssec); err == nil {
+			size, _, _, _ := fr.stats()
+			if err := fr.Close(); err == nil {
+				available := int64(size) - r.offset
+				if available < 0 {
+					available = 0
+				}
+				if available > r.length {
+					available = r.length
+				}
+				r.progressTotal = available
+			}
+		}
+	}
+	r.reporter = newProgressReporter(r.Progress, r.progressTotal)
 	r.smux.Lock()
 	r.smap = make(map[int]*meteredReader)
 	r.smux.Unlock()
 	r.o.b.c.addReader(r)
+	if r.progressTotal == 0 {
+		return // a zero-byte range needs no download workers
+	}
 	r.rcond = sync.NewCond(&r.rmux)
 	cr := r.ConcurrentDownloads
 	if cr < 1 {
@@ -250,7 +295,6 @@ func (r *Reader) initFunc() {
 		r.thread()
 		r.chbuf <- &rchunk{}
 	}
-	r.vrfy = sha1.New()
 }
 
 func (r *Reader) Read(p []byte) (int, error) {
@@ -261,6 +305,12 @@ func (r *Reader) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 	r.init.Do(r.initFunc)
+	if r.progressTotal == 0 {
+		// A zero-length range is finite, and needs no download worker.
+		r.setErrNoCancel(io.EOF)
+		r.reporter.finish()
+		return 0, io.EOF
+	}
 	chunk, err := r.curChunk()
 	if err != nil {
 		r.setErrNoCancel(err)
@@ -273,6 +323,9 @@ func (r *Reader) Read(p []byte) (int, error) {
 		if chunk.final {
 			close(r.chbuf)
 			r.setErrNoCancel(err)
+			r.cancel()
+			r.wg.Wait()
+			r.reporter.finish()
 			return n, err
 		}
 		r.chrid++
@@ -326,6 +379,12 @@ type onlyWriter struct{ w io.Writer }
 func (ow onlyWriter) Write(p []byte) (int, error) { return ow.w.Write(p) }
 
 func copyContext(ctx context.Context, w io.Writer, r io.Reader) (int64, error) {
+	return copyContextWithCloser(ctx, w, r, nil)
+}
+
+// copyContextWithCloser closes a download body on cancellation before waiting
+// for its copy goroutine. A blocked body Read must not outlive Reader.Close.
+func copyContextWithCloser(ctx context.Context, w io.Writer, r io.Reader, closer io.Closer) (int64, error) {
 	var n int64
 	var err error
 	done := make(chan struct{})
@@ -340,6 +399,10 @@ func copyContext(ctx context.Context, w io.Writer, r io.Reader) (int64, error) {
 	case <-done:
 		return n, err
 	case <-ctx.Done():
+		if closer != nil {
+			_ = closer.Close()
+			<-done
+		}
 		return 0, ctx.Err()
 	}
 }

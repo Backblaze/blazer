@@ -63,12 +63,16 @@ type Writer struct {
 	// blank, os.TempDir() is used.
 	FileBufferDir string
 
-	contentType   string
-	info          map[string]string
-	retention     *FileRetention
-	legalHold     LegalHold
-	ssec          *SSECKey
-	ssecRequested bool
+	contentType    string
+	info           map[string]string
+	retention      *FileRetention
+	legalHold      LegalHold
+	progress       func(bytesComplete, bytesTotal int64)
+	progressTotal  int64
+	reporter       *progressReporter
+	encryption     *uploadEncryption
+	ssecRequested  bool
+	sseb2Requested bool
 
 	csize       int
 	ctx         context.Context
@@ -101,6 +105,27 @@ type Writer struct {
 
 	smux sync.RWMutex
 	smap map[int]*meteredReader
+}
+
+// uploadEncryption is the single per-request encryption setting shared by
+// simple uploads and large-file starts. SSE-C carries key material for each
+// part; SSE-B2 applies only when the file is created.
+type uploadEncryption struct {
+	sse  *ServerSideEncryption
+	ssec *SSECKey
+}
+
+func (e *uploadEncryption) validate() error {
+	if e == nil {
+		return nil
+	}
+	if e.ssec != nil && e.sse != nil {
+		return errors.New("b2: SSE-B2 and SSE-C cannot be used on the same upload")
+	}
+	if e.ssec != nil {
+		return e.ssec.validate()
+	}
+	return nil
 }
 
 type chunk struct {
@@ -173,7 +198,9 @@ func (w *Writer) thread() {
 					w.setErr(errors.New("resumable upload was requested, but chunks don't match"))
 					return
 				}
+				skippedBytes := completedBytes(cnk.buf)
 				cnk.buf.Close()
+				w.reporter.add(skippedBytes)
 				w.completeChunk(cnk.id)
 				blog.V(2).Infof("skipping chunk %d", cnk.id)
 				continue
@@ -184,43 +211,9 @@ func (w *Writer) thread() {
 				w.setErr(err)
 				return
 			}
-			mr := &meteredReader{r: r, size: cnk.buf.Len()}
+			mr := newMeteredReader(r, cnk.buf, w.reporter)
 			w.registerChunk(cnk.id, mr)
-			err = retry.Do(
-				w.ctx,
-				func() error {
-					n, err := fc.uploadPart(w.ctx, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
-					if err != nil {
-						return err
-					}
-					if n != cnk.buf.Len() {
-						return fmt.Errorf("wrote %d of %d", n, cnk.buf.Len())
-					}
-					return nil
-				},
-				retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
-					if attempt == 1 {
-						return w.o.b.r.maxReuploads(err) + 1
-					}
-					return attempts
-				}),
-				retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
-					return retry.Backoff(delay)
-				}),
-				retry.RetryIf(func(attempt uint, err error) bool {
-					return w.o.b.r.reupload(err)
-				}),
-				retry.OnRetry(func(attempt uint, err error) error {
-					blog.V(1).Infof("b2 writer: error: %v; retrying", err)
-					f, err := w.file.getUploadPartURL(w.ctx)
-					if err != nil {
-						return err
-					}
-					fc = f
-					return nil
-				}),
-				retry.WithAfter(retryAfterFor(w.o.b.r)),
-			)
+			fc, err = uploadPartWithReupload(w.ctx, w.file, w.o.b.r, fc, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
 			if err != nil {
 				w.setErr(err)
 				w.completeChunk(cnk.id)
@@ -237,6 +230,7 @@ func (w *Writer) thread() {
 func (w *Writer) init() {
 	w.start.Do(func() {
 		w.everStarted = true
+		w.reporter = newProgressReporter(w.progress, w.progressTotal)
 		w.smux.Lock()
 		w.smap = make(map[int]*meteredReader)
 		w.smux.Unlock()
@@ -270,13 +264,13 @@ func (w *Writer) checkObjectLock() error {
 	if err := w.legalHold.validate(true); err != nil {
 		return err
 	}
-	if w.ssecRequested && w.ssec == nil {
+	if w.ssecRequested && w.sseb2Requested {
+		return errors.New("b2: SSE-B2 and SSE-C cannot be used on the same upload")
+	}
+	if w.ssecRequested && (w.encryption == nil || w.encryption.ssec == nil) {
 		return errors.New("b2: SSE-C key is nil")
 	}
-	if w.ssec != nil {
-		return w.ssec.validate()
-	}
-	return nil
+	return w.encryption.validate()
 }
 
 // Write satisfies the io.Writer interface.
@@ -356,14 +350,14 @@ func (w *Writer) simpleWriteFile() error {
 	if err != nil {
 		return err
 	}
-	mr := &meteredReader{r: r, size: w.w.Len()}
+	mr := newMeteredReader(r, w.w, w.reporter)
 	w.registerChunk(1, mr)
 	defer w.completeChunk(1)
 
 	err = retry.Do(
 		w.ctx,
 		func() error {
-			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.ssec)
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.encryption)
 			if err != nil {
 				return err
 			}
@@ -407,7 +401,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		if ctype == "" {
 			ctype = "application/octet-stream"
 		}
-		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold, w.ssec)
+		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold, w.encryption)
 	}
 	var got bool
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
@@ -457,7 +451,7 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	for id, sha := range seen {
 		w.seen[id] = sha
 	}
-	return fi.compileParts(size, seen, w.ssec), nil
+	return fi.compileParts(size, seen, w.encryption), nil
 }
 
 // checkResumedLock refuses to resume an unfinished upload whose Object Lock
@@ -481,19 +475,33 @@ func (w *Writer) checkResumedLock(fi beFileInterface) error {
 	return nil
 }
 
-// checkResumedEncryption refuses to reuse parts unless B2 has reported the
-// requested SSE-C mode and key digest. A missing digest is not proof of a match.
+// checkResumedEncryption refuses to reuse parts when B2 reports a different
+// encryption mode, or when a requested mode/key cannot be verified.
 func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
-	if w.ssec == nil {
+	mode, algorithm, gotMD5 := fi.encryption()
+	if w.encryption == nil || (w.encryption.ssec == nil && w.encryption.sse == nil) {
+		if mode == "SSE-C" {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload uses SSE-C but no key was supplied", w.name)
+		}
 		return nil
 	}
-	_, wantMD5, err := w.ssec.encoded()
-	if err != nil {
-		return err
+	if w.encryption.ssec != nil {
+		_, wantMD5, err := w.encryption.ssec.encoded()
+		if err != nil {
+			return err
+		}
+		if mode != "SSE-C" || algorithm != "AES256" || gotMD5 == "" || gotMD5 != wantMD5 {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest is missing or does not match", w.name)
+		}
+		return nil
 	}
-	mode, algorithm, gotMD5 := fi.encryption()
-	if mode != "SSE-C" || algorithm != "AES256" || gotMD5 == "" || gotMD5 != wantMD5 {
-		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest is missing or does not match", w.name)
+	if requested := w.encryption.sse; requested != nil {
+		if requested.Mode != "SSE-B2" || requested.Algorithm != "AES256" {
+			return fmt.Errorf("b2: cannot resume %q: requested SSE-B2 encryption algorithm must be AES256", w.name)
+		}
+		if mode != requested.Mode || algorithm != requested.Algorithm {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload encryption mode or algorithm is missing or does not match", w.name)
+		}
 	}
 	return nil
 }
@@ -562,18 +570,35 @@ func (w *Writer) sendChunk() error {
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
-// ReadFrom currently doesn't handle w.Resume; if w.Resume is true, ReadFrom
-// will act as if r is not an io.Seeker.
+// With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
+// its remaining length supplies the progress total.
 func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 	rs, ok := r.(io.ReadSeeker)
-	if !ok || w.Resume {
+	if !ok {
 		return copyContext(w.ctx, w, r)
+	}
+	if w.Resume {
+		if w.progress != nil {
+			if position, err := rs.Seek(0, io.SeekCurrent); err == nil {
+				if end, err := rs.Seek(0, io.SeekEnd); err == nil {
+					if _, err := rs.Seek(position, io.SeekStart); err != nil {
+						return 0, err
+					}
+					w.progressTotal = end - position
+					if w.progressTotal < 0 {
+						w.progressTotal = 0
+					}
+				}
+			}
+		}
+		return copyContext(w.ctx, w, rs)
 	}
 	blog.V(2).Info("streaming without buffer")
 	size, err := rs.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
+	w.progressTotal = size
 	var ra io.ReaderAt
 	if rat, ok := r.(io.ReaderAt); ok {
 		ra = rat
@@ -669,6 +694,7 @@ func (w *Writer) Close() error {
 		w.o.f = f
 		w.closed = true
 	})
+	w.reporter.finish()
 	return w.getErr()
 }
 
@@ -685,6 +711,13 @@ func (w *Writer) withAttrs(attrs *Attrs) *Writer {
 		w.info["src_last_modified_millis"] = fmt.Sprintf("%d", attrs.LastModified.UnixNano()/1e6)
 	}
 	return w
+}
+
+func completedBytes(buf writeBuffer) int64 {
+	if nb, ok := buf.(*nonBuffer); ok {
+		return int64(nb.size)
+	}
+	return int64(buf.Len())
 }
 
 // A WriterOption sets Writer-specific behavior.
@@ -712,13 +745,36 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 	}
 }
 
+// WithProgress sets a callback that receives cumulative uploaded bytes. It runs
+// on one owner goroutine, never under a transfer lock; values are monotonic
+// non-decreasing and end with a final call at the bytes uploaded before Close
+// returns. The total is known for ReadFrom readers that implement io.Seeker
+// (including resume), and is -1 otherwise. Calling Close from this callback
+// is unsupported because Close waits for the callback to finish.
+func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
+	return func(w *Writer) {
+		w.progress = cb
+	}
+}
+
 // WithSSECKey encrypts this upload with a caller-provided AES-256 key. The key
 // is used for the simple upload request or for the large-file start request and
 // every part upload; it is never retained by the Object, Bucket or Client.
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
-		w.ssec = key
+		w.encryption = &uploadEncryption{ssec: key}
 		w.ssecRequested = true
+	}
+}
+
+// WithSSEB2 encrypts this upload with a B2-managed key using algorithm. It
+// overrides the bucket's default for this upload only; the setting is used for
+// a simple upload request or the large-file start request. It carries no
+// customer-managed key material.
+func WithSSEB2(algorithm string) WriterOption {
+	return func(w *Writer) {
+		w.encryption = &uploadEncryption{sse: newServerSideEncryption("SSE-B2", algorithm)}
+		w.sseb2Requested = true
 	}
 }
 
@@ -758,25 +814,86 @@ func (w *Writer) status() *WriterStatus {
 	return ws
 }
 
+// uploadPartWithReupload is shared by Writer and Compose. The reader must be
+// resettable so a failed upload can be replayed with a fresh part URL.
+func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, root beRootInterface, chunk beFileChunkInterface, reader readResetter, sha1 string, size, number int) (beFileChunkInterface, error) {
+	err := retry.Do(
+		ctx,
+		func() error {
+			n, err := chunk.uploadPart(ctx, reader, sha1, size, number)
+			if err != nil {
+				return err
+			}
+			if n != size {
+				return fmt.Errorf("wrote %d of %d", n, size)
+			}
+			return nil
+		},
+		retry.DynamicAttempts(func(attempt uint, attempts uint, err error) uint {
+			if attempt == 1 {
+				return root.maxReuploads(err) + 1
+			}
+			return attempts
+		}),
+		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
+			return retry.Backoff(delay)
+		}),
+		retry.RetryIf(func(attempt uint, err error) bool {
+			return root.reupload(err)
+		}),
+		retry.OnRetry(func(attempt uint, err error) error {
+			blog.V(1).Infof("b2 upload part: error: %v; retrying", err)
+			fresh, err := large.getUploadPartURL(ctx)
+			if err != nil {
+				return err
+			}
+			chunk = fresh
+			return nil
+		}),
+		retry.WithAfter(retryAfterFor(root)),
+	)
+	return chunk, err
+}
+
 type meteredReader struct {
-	read int64
-	size int
-	r    readResetter
-	mux  sync.Mutex
+	read         atomic.Int64
+	reported     atomic.Int64 // high-water mark survives Reset and upload retries
+	size         int
+	progressSize int64 // excludes the 40-byte SHA1 trailer of nonBuffer
+	r            readResetter
+	progress     *progressReporter
+}
+
+func newMeteredReader(r readResetter, buf writeBuffer, progress *progressReporter) *meteredReader {
+	mr := &meteredReader{r: r, size: buf.Len(), progressSize: int64(buf.Len()), progress: progress}
+	if nb, ok := buf.(*nonBuffer); ok {
+		mr.progressSize = int64(nb.size)
+	}
+	return mr
 }
 
 func (mr *meteredReader) Read(p []byte) (int, error) {
-	mr.mux.Lock()
-	defer mr.mux.Unlock()
 	n, err := mr.r.Read(p)
-	mr.read += int64(n)
+	var delta int64
+	counted := mr.read.Add(int64(n))
+	if counted > mr.progressSize {
+		counted = mr.progressSize
+	}
+	for {
+		previous := mr.reported.Load()
+		if counted <= previous || mr.reported.CompareAndSwap(previous, counted) {
+			if counted > previous {
+				delta = counted - previous
+			}
+			break
+		}
+	}
+	mr.progress.add(delta)
 	return n, err
 }
 
 func (mr *meteredReader) Reset() error {
-	mr.mux.Lock()
-	defer mr.mux.Unlock()
-	mr.read = 0
+	mr.read.Store(0)
 	return mr.r.Reset()
 }
 
@@ -784,6 +901,6 @@ func (mr *meteredReader) done() float64 {
 	if mr == nil {
 		return 1
 	}
-	read := float64(atomic.LoadInt64(&mr.read))
+	read := float64(mr.read.Load())
 	return read / float64(mr.size)
 }
