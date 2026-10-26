@@ -94,17 +94,18 @@ func TestSyncRejectsConflictingOptions(t *testing.T) {
 }
 
 type syncWire struct {
-	server     *httptest.Server
-	mu         stdsync.Mutex
-	files      map[string]map[string]interface{}
-	pending    map[string]interface{}
-	parts      int64
-	failPart   bool
-	failCancel bool
-	cancels    int
-	onUpload   func(string)
-	requests   []syncRequest
-	uploads    []syncUpload
+	server      *httptest.Server
+	mu          stdsync.Mutex
+	files       map[string]map[string]interface{}
+	pending     map[string]interface{}
+	parts       int64
+	failPart    bool
+	failCancel  bool
+	cancels     int
+	onUpload    func(string)
+	onFirstPart func()
+	requests    []syncRequest
+	uploads     []syncUpload
 }
 
 type syncRequest struct{ method, path string }
@@ -113,7 +114,7 @@ type syncUpload struct {
 	body                                 []byte
 }
 
-func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
+func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) {
 	t.Helper()
 	w := &syncWire{files: make(map[string]map[string]interface{})}
 	w.server = httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
@@ -220,8 +221,13 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 				t.Errorf("part body: %v", err)
 			}
 			w.mu.Lock()
+			firstPart := w.parts == 0
 			w.parts += n
+			callback := w.onFirstPart
 			w.mu.Unlock()
+			if firstPart && callback != nil {
+				callback()
+			}
 			write(map[string]interface{}{"fileId": "large-id", "partNumber": req.Header.Get("X-Bz-Part-Number"), "contentLength": n, "contentSha1": req.Header.Get("X-Bz-Content-Sha1")})
 		case strings.HasSuffix(req.URL.Path, "/b2_finish_large_file"):
 			w.mu.Lock()
@@ -249,7 +255,8 @@ func newSyncWire(t *testing.T) (*b2.Bucket, *syncWire) {
 	}))
 	t.Cleanup(w.server.Close)
 	ctx := context.Background()
-	client, err := b2.NewClient(ctx, "a", "k", b2.APIBase(w.server.URL))
+	clientOpts := append([]b2.ClientOption{b2.APIBase(w.server.URL)}, opts...)
+	client, err := b2.NewClient(ctx, "a", "k", clientOpts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,6 +293,56 @@ func TestSyncContinuesAfterMissingFile(t *testing.T) {
 	}
 	if got := fmt.Sprint(result.Uploaded); got != "[a.txt c.txt]" {
 		t.Fatalf("uploaded = %s", got)
+	}
+}
+
+func TestSyncRejectsSymlinkSwapBeforeUpload(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := filepath.Join(root, "symlink-probe")
+	if err := os.Symlink(outside, probe); err != nil {
+		t.Skipf("filesystem cannot create symlinks: %v", err)
+	}
+	if err := os.Remove(probe); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wire.onUpload = func(name string) {
+		if name != "p/a.txt" {
+			return
+		}
+		path := filepath.Join(root, "b.txt")
+		if err := os.Remove(path); err != nil {
+			t.Errorf("remove queued file: %v", err)
+			return
+		}
+		if err := os.Symlink(outside, path); err != nil {
+			t.Errorf("replace queued file with symlink: %v", err)
+		}
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithConcurrency(1))
+	if err == nil {
+		t.Fatal("symlink swap did not report an aggregate error")
+	}
+	if len(result.Failed) != 1 || result.Failed[0].Rel != "b.txt" || result.Failed[0].Err == nil {
+		t.Fatalf("failures=%+v, want only b.txt", result.Failed)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != "[a.txt]" {
+		t.Fatalf("uploaded=%s, want only a.txt", got)
+	}
+	wire.mu.Lock()
+	_, leaked := wire.files["p/b.txt"]
+	wire.mu.Unlock()
+	if leaked {
+		t.Fatal("outside file was uploaded through swapped symlink")
 	}
 }
 
@@ -662,6 +719,59 @@ func TestUploadFileRejectsStaleWalkSHA1(t *testing.T) {
 	wire.mu.Unlock()
 	if published {
 		t.Fatal("file published with stale SHA1")
+	}
+}
+
+func TestUploadFileRejectsChangeDuringStream(t *testing.T) {
+	bucket, wire := newSyncWire(t, b2.DefaultWriterOptions(func(writer *b2.Writer) {
+		writer.ChunkSize = 5_000_000
+		writer.ConcurrentUploads = 1
+	}))
+	root := t.TempDir()
+	path := filepath.Join(root, "large.bin")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 15_000_001
+	if err := file.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "z-good.txt"), []byte("good"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wire.onFirstPart = func() {
+		file, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			t.Errorf("open changing file: %v", err)
+			return
+		}
+		if _, err := file.WriteAt([]byte("changed"), 12_000_000); err != nil {
+			t.Errorf("change during upload: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Errorf("close changing file: %v", err)
+		}
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithCompare(CompareSHA1), WithConcurrency(1))
+	if err == nil {
+		t.Fatal("changed bytes were uploaded with stale large_file_sha1")
+	}
+	if len(result.Failed) != 1 || result.Failed[0].Rel != "large.bin" || result.Failed[0].Err == nil {
+		t.Fatalf("failures=%+v, want large.bin", result.Failed)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != "[z-good.txt]" {
+		t.Fatalf("uploaded=%s, want only z-good.txt", got)
+	}
+	wire.mu.Lock()
+	_, published := wire.files["p/large.bin"]
+	cancels := wire.cancels
+	wire.mu.Unlock()
+	if published || cancels != 1 {
+		t.Fatalf("published=%t cancel calls=%d, want no object and one cancel", published, cancels)
 	}
 }
 

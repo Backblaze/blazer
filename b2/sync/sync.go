@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -104,6 +105,7 @@ type localFile struct {
 	size    int64
 	modTime time.Time
 	sha1    string
+	info    os.FileInfo
 }
 
 // shouldTransfer is the comparison policy; it does not perform I/O.
@@ -209,9 +211,9 @@ func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts
 		if err != nil {
 			return err
 		}
-		local := localFile{path: path, rel: filepath.ToSlash(rel), size: info.Size(), modTime: info.ModTime()}
+		local := localFile{path: path, rel: filepath.ToSlash(rel), size: info.Size(), modTime: info.ModTime(), info: info}
 		if settings.compare == CompareSHA1 {
-			local.sha1, err = fileSHA1(ctx, path)
+			local.sha1, err = fileSHA1(ctx, path, info)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -289,8 +291,8 @@ func resultError(result *Result) error {
 	return nil
 }
 
-func fileSHA1(ctx context.Context, path string) (string, error) {
-	file, err := os.Open(path)
+func fileSHA1(ctx context.Context, path string, walkInfo os.FileInfo) (string, error) {
+	file, err := openWalkedFile(path, walkInfo)
 	if err != nil {
 		return "", err
 	}
@@ -303,6 +305,21 @@ func fileSHA1(ctx context.Context, path string) (string, error) {
 		return "", closeErr
 	}
 	return digest, nil
+}
+
+func openWalkedFile(path string, walkInfo os.FileInfo) (*os.File, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	openedInfo, statErr := file.Stat()
+	currentInfo, lstatErr := os.Lstat(path)
+	if statErr != nil || lstatErr != nil || !currentInfo.Mode().IsRegular() ||
+		(walkInfo != nil && !os.SameFile(walkInfo, openedInfo)) || !os.SameFile(currentInfo, openedInfo) {
+		_ = file.Close()
+		return nil, fmt.Errorf("sync: file %q changed or became a symlink after walk", path)
+	}
+	return file, nil
 }
 
 func hashReader(ctx context.Context, reader io.Reader) (string, error) {
@@ -326,24 +343,9 @@ func hashReader(ctx context.Context, reader io.Reader) (string, error) {
 }
 
 func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local localFile) (int64, error) {
-	file, err := os.Open(local.path)
+	file, err := openWalkedFile(local.path, local.info)
 	if err != nil {
 		return 0, err
-	}
-	if local.sha1 != "" {
-		currentSHA1, err := hashReader(ctx, file)
-		if err != nil {
-			_ = file.Close()
-			return 0, err
-		}
-		if currentSHA1 != local.sha1 {
-			_ = file.Close()
-			return 0, fmt.Errorf("file changed after walk: SHA1 differs")
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			_ = file.Close()
-			return 0, err
-		}
 	}
 	uploadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -370,8 +372,20 @@ func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local local
 		}
 		return err
 	}
-	n, readErr := writer.ReadFrom(file)
-	if readErr != nil || n != local.size {
+	var reader io.Reader = file
+	var streamedSHA1 hash.Hash
+	if local.sha1 != "" {
+		streamedSHA1 = sha1.New()
+		reader = io.TeeReader(file, streamedSHA1)
+	}
+	n, readErr := writer.ReadFrom(reader)
+	var mismatchErr error
+	if readErr == nil && n == local.size && streamedSHA1 != nil {
+		if actual := fmt.Sprintf("%x", streamedSHA1.Sum(nil)); actual != local.sha1 {
+			mismatchErr = fmt.Errorf("file changed during upload: SHA1 differs")
+		}
+	}
+	if readErr != nil || n != local.size || mismatchErr != nil {
 		// Do not finish a file that changed during the walk. Closing a canceled
 		// writer also cancels an unfinished large upload. Keep the source file
 		// open until Close has drained any asynchronous part readers.
@@ -381,6 +395,8 @@ func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local local
 		switch {
 		case readErr != nil:
 			return 0, withCleanupError(readErr)
+		case mismatchErr != nil:
+			return 0, withCleanupError(mismatchErr)
 		default:
 			return 0, withCleanupError(fmt.Errorf("read %d bytes, expected %d", n, local.size))
 		}
