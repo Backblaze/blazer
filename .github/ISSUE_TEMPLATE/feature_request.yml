@@ -1,6 +1,7 @@
 name: Feature request
 description: A B2 capability or API improvement Blazer should support.
 labels: [enhancement]
+type: Feature
 body:
   - type: textarea
     id: problem
