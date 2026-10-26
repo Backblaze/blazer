@@ -1484,6 +1484,25 @@ func TestReadRangeReturnsRight(t *testing.T) {
 	if i != 1400 {
 		t.Errorf("NewRangeReader(_, 200, 1400): want 1400, got %d", i)
 	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
+
+	// Exact multiples of ChunkSize must still mark the final requested chunk.
+	// With more than one worker, the remaining-length calculation is shared.
+	r = obj.NewRangeReader(ctx, 200, 2000)
+	r.ChunkSize = 1000
+	r.ConcurrentDownloads = 2
+	i, err = io.Copy(ioutil.Discard, r)
+	if err != nil {
+		t.Error(err)
+	}
+	if i != 2000 {
+		t.Errorf("parallel NewRangeReader(_, 200, 2000): want 2000, got %d", i)
+	}
+	if err := r.Close(); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestWriterReturnsError(t *testing.T) {
