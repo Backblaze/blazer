@@ -77,7 +77,9 @@ func cloneAuthData(data AuthData) AuthData {
 // AccountInfoFile stores one authorized session in JSON. The file contains a
 // live authorization token, but never the application key secret. Keep the
 // file and its parent directory private. File I/O failures are available via
-// Err because AccountInfo's Set and Clear methods have no error result.
+// Err because AccountInfo's Set and Clear methods have no error result. On
+// Windows, privacy depends on the directory's ACLs rather than mode bits; put
+// the session file under the user's profile directory, such as os.UserConfigDir().
 type AccountInfoFile struct {
 	path string
 	mu   sync.Mutex
@@ -85,7 +87,9 @@ type AccountInfoFile struct {
 }
 
 // NewAccountInfoFile selects an opt-in session file. Its parent directory is
-// created with mode 0700; an existing parent must already be private.
+// created with mode 0700; an existing parent must already be private. On Windows,
+// these mode bits do not create a private ACL; use a directory under the user's
+// profile, such as os.UserConfigDir().
 func NewAccountInfoFile(path string) *AccountInfoFile {
 	return &AccountInfoFile{path: path}
 }

@@ -116,9 +116,17 @@ func WithAccountInfo(ai AccountInfo) ClientOption {
 			return
 		}
 		o.accountInfoSet = true
-		if ai == nil || (reflect.ValueOf(ai).Kind() == reflect.Pointer && reflect.ValueOf(ai).IsNil()) {
+		if ai == nil {
 			o.optionErr = fmt.Errorf("b2: account info store must not be nil")
 			return
+		}
+		value := reflect.ValueOf(ai)
+		switch value.Kind() {
+		case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+			if value.IsNil() {
+				o.optionErr = fmt.Errorf("b2: account info store must not be nil")
+				return
+			}
 		}
 		o.accountInfo = ai
 	}

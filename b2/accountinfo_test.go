@@ -584,6 +584,7 @@ func TestWithAccountInfoRejectsNilAndConflictingStores(t *testing.T) {
 	}{
 		{name: "nil", opts: []ClientOption{WithAccountInfo(nil)}},
 		{name: "typed nil", opts: []ClientOption{WithAccountInfo((*AccountInfoFile)(nil))}},
+		{name: "typed nil map", opts: []ClientOption{WithAccountInfo(nilMapAccountInfo(nil))}},
 		{name: "conflicting", opts: []ClientOption{WithAccountInfo(&InMemoryAccountInfo{}), WithAccountInfo(&InMemoryAccountInfo{})}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -599,6 +600,15 @@ func TestWithAccountInfoRejectsNilAndConflictingStores(t *testing.T) {
 		t.Fatalf("invalid options made %d authorize calls, want none", wire.authCalls)
 	}
 }
+
+type nilMapAccountInfo map[string]AuthData
+
+func (m nilMapAccountInfo) Set(data AuthData) { m["session"] = data }
+func (m nilMapAccountInfo) AuthData() (AuthData, bool) {
+	data, ok := m["session"]
+	return data, ok
+}
+func (m nilMapAccountInfo) Clear() { delete(m, "session") }
 
 func TestAccountInfoSharedClientConcurrency(t *testing.T) {
 	wire := newAccountInfoWire(t)
