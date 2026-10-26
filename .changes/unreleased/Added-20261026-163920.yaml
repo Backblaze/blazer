@@ -1,0 +1,3 @@
+kind: Added
+body: '`(*b2.Bucket).Compose` builds a large file from ordered uploaded and server-side copied parts, using `b2_copy_part`. It validates part sizes and copy ranges before starting, rejects overlapping ranges from the same source, and cancels an unfinished file if a part fails, even after caller cancellation.'
+time: 2026-10-26T16:39:20.636555-05:00
