@@ -591,10 +591,14 @@ func (o *Object) Attrs(ctx context.Context, keys ...*SSECKey) (*Attrs, error) {
 	if err != nil {
 		return nil, err
 	}
-	name, sha, size, ct, info, st, stamp := fi.stats()
+	return attrsFromFileInfo(fi)
+}
+
+func attrsFromFileInfo(fi beFileInfoInterface) (*Attrs, error) {
+	name, sha, size, contentType, info, status, timestamp := fi.stats()
 	retention, legalHold := fi.fileLock()
 	var state ObjectState
-	switch st {
+	switch status {
 	case "upload", "copy":
 		state = Uploaded
 	case "start":
@@ -604,27 +608,35 @@ func (o *Object) Attrs(ctx context.Context, keys ...*SSECKey) (*Attrs, error) {
 	case "folder":
 		state = Folder
 	}
-	var mtime time.Time
-	if v, ok := info["src_last_modified_millis"]; ok {
-		ms, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		mtime = time.Unix(ms/1e3, (ms%1e3)*1e6)
-		delete(info, "src_last_modified_millis")
+	var publicInfo map[string]string
+	if info != nil {
+		publicInfo = make(map[string]string, len(info))
 	}
-	if v, ok := info["large_file_sha1"]; ok {
-		sha = v
+	var lastModified time.Time
+	for key, value := range info {
+		switch key {
+		case "src_last_modified_millis":
+			millis, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			lastModified = time.Unix(millis/1e3, (millis%1e3)*1e6)
+		case "large_file_sha1":
+			sha = value
+			publicInfo[key] = value
+		default:
+			publicInfo[key] = value
+		}
 	}
 	return &Attrs{
 		Name:            name,
 		Size:            size,
-		ContentType:     ct,
-		UploadTimestamp: stamp,
+		ContentType:     contentType,
+		UploadTimestamp: timestamp,
 		SHA1:            sha,
-		Info:            info,
+		Info:            publicInfo,
 		Status:          state,
-		LastModified:    mtime,
+		LastModified:    lastModified,
 		Retention:       retention,
 		LegalHold:       legalHold,
 	}, nil
@@ -640,37 +652,7 @@ func (b *Bucket) GetFileInfoByName(ctx context.Context, name string) (*Attrs, er
 		}
 		return nil, err
 	}
-	fileName, sha, size, contentType, info, status, timestamp := fi.stats()
-	retention, legalHold := fi.fileLock()
-	var state ObjectState
-	switch status {
-	case "upload", "copy":
-		state = Uploaded
-	case "start":
-		state = Started
-	case "hide":
-		state = Hider
-	case "folder":
-		state = Folder
-	}
-	var lastModified time.Time
-	if value, ok := info["src_last_modified_millis"]; ok {
-		millis, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		lastModified = time.Unix(millis/1e3, (millis%1e3)*1e6)
-		delete(info, "src_last_modified_millis")
-	}
-	if value, ok := info["large_file_sha1"]; ok {
-		sha = value
-	}
-	return &Attrs{
-		Name: fileName, Size: size, ContentType: contentType,
-		UploadTimestamp: timestamp, SHA1: sha, Info: info,
-		Status: state, LastModified: lastModified,
-		Retention: retention, LegalHold: legalHold,
-	}, nil
+	return attrsFromFileInfo(fi)
 }
 
 // ObjectState represents the various states an object can be in.
