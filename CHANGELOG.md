@@ -11,11 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `(*b2.Bucket).Compose` builds a large file from ordered uploaded and server-side copied parts, using `b2_copy_part`. It validates part sizes and copy ranges before starting, rejects overlapping ranges from the same source, and cancels an unfinished file if a part fails, even after caller cancellation.
 - Per-request SSE-C keys for uploads, downloads, metadata lookup, and server-side copies. Large-file uploads send the key on the start request and every part; keys cannot be configured as client writer defaults. Keyed resume refuses an unfinished upload when its encryption mode or key digest cannot be verified.
+- `b2.WithSSEB2("AES256")` requests SSE-B2 for one upload without changing the bucket default. Resumed uploads validate the existing encryption mode and algorithm; SSE-B2 and SSE-C writer options cannot be combined.
 - `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
 
 ### Fixed
 
 - Large-file Writer uploads retain a replacement upload-part endpoint across later chunks; copied and uploaded part replacement safely retain the verified prior size across ambiguous responses. `File.AsLargeFile().CopyPart` no longer panics, and Compose stops buffering promptly when its context is canceled.
+- Repeated `(*b2.Object).Attrs` calls preserve cached file metadata, including `LastModified`, without mutating the cache. Each returned `Attrs.Info` is independent; `large_file_sha1` remains in the public map, while `src_last_modified_millis` remains excluded.
 - Exact-boundary ranged reads now mark a chunk whose size equals the remaining requested length as final. The shared remaining-length accounting is kept under the reader mutex.
 
 ## [0.9.0] - 2026-10-22

@@ -413,8 +413,8 @@ func TestOrdinaryWriterOptionRemainsDefaultable(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := bucket.Object("plain").NewWriter(context.Background())
-	if w.contentType != "text/plain" || w.ssec != nil {
-		t.Fatalf("ordinary writer defaults = content type %q, SSE-C key %v", w.contentType, w.ssec)
+	if w.contentType != "text/plain" || w.encryption != nil {
+		t.Fatalf("ordinary writer defaults = content type %q, encryption %v", w.contentType, w.encryption)
 	}
 }
 
