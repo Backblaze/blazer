@@ -343,7 +343,7 @@ func (t *testBucket) getUploadURL(context.Context) (b2URLInterface, error) {
 	}, nil
 }
 
-func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *SSECKey) (b2LargeFileInterface, error) {
+func (t *testBucket) startLargeFile(_ context.Context, name, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *uploadEncryption) (b2LargeFileInterface, error) {
 	return &testLargeFile{
 		name:  name,
 		parts: make(map[int][]byte),
@@ -433,7 +433,7 @@ type testURL struct {
 
 func (t *testURL) reload(context.Context) error { return nil }
 
-func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *SSECKey) (b2FileInterface, error) {
+func (t *testURL) uploadFile(_ context.Context, r io.Reader, _ int, name, _, _ string, _ map[string]string, _ *FileRetention, _ LegalHold, _ *uploadEncryption) (b2FileInterface, error) {
 	if err := t.errs.getError("uploadFile"); err != nil {
 		return nil, err
 	}
@@ -528,7 +528,7 @@ func (t *testFile) timestamp() time.Time                 { return t.t }
 func (t *testFile) status() string                       { return t.a }
 func (t *testFile) encryption() (string, string, string) { return "", "", "" }
 
-func (t *testFile) compileParts(int64, map[int]string, *SSECKey) b2LargeFileInterface {
+func (t *testFile) compileParts(int64, map[int]string, *uploadEncryption) b2LargeFileInterface {
 	panic("not implemented")
 }
 
@@ -602,7 +602,8 @@ func (t attrsTestFileInfo) stats() (string, string, int64, string, map[string]st
 	return t.file.n, "", t.file.s, "application/octet-stream", t.file.info, t.file.a, t.file.t
 }
 
-func (attrsTestFileInfo) fileLock() (*FileRetention, LegalHold) { return nil, "" }
+func (attrsTestFileInfo) fileLock() (*FileRetention, LegalHold)       { return nil, "" }
+func (attrsTestFileInfo) serverSideEncryption() *ServerSideEncryption { return nil }
 
 func TestObjectAttrsDoesNotMutateCachedFileInfo(t *testing.T) {
 	mtime := time.UnixMilli(1700000000000)

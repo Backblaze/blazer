@@ -33,6 +33,16 @@ type ssecWireRequest struct {
 	body    map[string]any
 }
 
+func TestFileEncryptionMetadataDoesNotCacheCustomerKey(t *testing.T) {
+	input := &b2types.ServerSideEncryption{
+		Mode: "SSE-C", Algorithm: "AES256", CustomerKey: "must-not-be-cached", CustomerKeyMD5: "digest",
+	}
+	got := fileEncryptionMetadata(input)
+	if got == nil || got.Mode != "SSE-C" || got.Algorithm != "AES256" || got.CustomerKeyMD5 != "digest" || got.CustomerKey != "" {
+		t.Fatalf("cached encryption metadata = %#v, want mode, algorithm and digest without customer key", got)
+	}
+}
+
 func newSSECWireFixture(t *testing.T) (*B2, *Bucket, *httptest.Server, *[]ssecWireRequest) {
 	t.Helper()
 	requests := []ssecWireRequest{}

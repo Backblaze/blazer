@@ -21,8 +21,8 @@ func (r *closeLeakRoot) createBucket(ctx context.Context, name, btype string, in
 
 type closeLeakBucket struct{ *testBucket }
 
-func (b *closeLeakBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, rt *FileRetention, lh LegalHold, ssec *SSECKey) (b2LargeFileInterface, error) {
-	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info, rt, lh, ssec)
+func (b *closeLeakBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, rt *FileRetention, lh LegalHold, encryption *uploadEncryption) (b2LargeFileInterface, error) {
+	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info, rt, lh, encryption)
 	if err != nil {
 		return nil, err
 	}
