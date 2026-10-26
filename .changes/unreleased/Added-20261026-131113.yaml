@@ -1,0 +1,3 @@
+kind: Added
+body: '`(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.'
+time: 2026-10-26T13:11:13.956845-05:00
