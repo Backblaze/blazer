@@ -22,9 +22,32 @@ Semantic versioning. Before 1.0, a breaking change bumps the minor version. chan
 the fragment kinds (`Added`, `Changed`, `Deprecated`, `Removed` → minor; `Fixed`, `Security` → patch);
 pass an explicit version to `changie batch` to override it.
 
+## Security and quality gate
+
+A release is held while any solvable security or quality finding is open on the
+[Security tab](https://github.com/Backblaze/blazer/security). `make release-check` runs the gate and exits
+non-zero to hold:
+
+| Source | Holds the release when | Clear it by |
+| --- | --- | --- |
+| Code scanning (CodeQL security and quality queries) | Any alert is open on the default branch | Fixing it, or a code owner dismissing it with a written reason |
+| Dependabot alerts | An open alert has a patched version | Upgrading the dependency |
+| `govulncheck` (both modules) | A reachable known vulnerability is reported | Upgrading the module or Go toolchain |
+| Repository security advisories | An advisory is in triage or draft | Fixing it and publishing the advisory with the release |
+| Secret scanning | Any alert is open | Revoking the secret, then closing the alert |
+
+Alerts with no patched version yet do not hold the release; the gate lists them as notes. A section the
+script cannot read (for example secret scanning without security access) is reported as UNVERIFIED and must
+be checked by hand on the Security tab; it never passes silently.
+
+Every release aims to clear the gate, not just pass it at the last minute. When a release is planned, open
+an issue for each finding the gate lists and add it to that release's milestone. A finding that cannot be
+fixed in time needs a code owner's written dismissal reason on the alert, linked from the release PR.
+
 ## Steps
 
-1. Make sure `main` is green and every PR meant for the release has merged.
+1. Make sure `main` is green and every PR meant for the release has merged. Run `make release-check`;
+   if it holds, fix or dismiss the findings first (see the gate above).
 2. Branch from `main`: `git switch -c release/vX.Y.Z origin/main`.
 3. Batch the fragments and rebuild the changelog and version strings:
 
@@ -36,7 +59,8 @@ pass an explicit version to `changie batch` to override it.
 
 4. Check the diff touches exactly the three files above plus `.changes/`. Edit `.changes/vX.Y.Z.md` for
    readability if needed and run `merge` again. Run `make ci`.
-5. Commit as `Version X.Y.Z` and open a PR with the changelog section as its body. A code owner approves.
+5. Commit as `Version X.Y.Z` and open a PR with the changelog section and the `make release-check` output as
+   its body. A code owner approves.
 6. After it merges (`main` requires linear history, so squash or rebase), tag the release PR's merge
    commit, not the tip of `main`, which may already include later PRs:
 
@@ -61,6 +85,8 @@ pass an explicit version to `changie batch` to override it.
    ```
 
 ## Never
+
+- Release while `make release-check` holds, or with an UNVERIFIED section nobody checked by hand.
 
 - Move or delete a published tag. The Go checksum database has already recorded it; release a new patch
   version instead.

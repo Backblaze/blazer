@@ -5,7 +5,7 @@ CHANGIE_VERSION := v1.24.0
 CHANGIE := go run github.com/miniscruff/changie@$(CHANGIE_VERSION)
 BASE_REF ?= origin/main
 
-.PHONY: ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new
+.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new
 
 ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check
 
@@ -55,3 +55,7 @@ changelog-check:
 
 changelog-new:
 	$(CHANGIE) new
+
+# Holds a release while solvable security or quality findings are open (see RELEASE.md).
+release-check:
+	scripts/release-check.sh

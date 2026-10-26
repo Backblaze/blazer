@@ -13,6 +13,8 @@ coding agents and new contributors; `CLAUDE.md` points here. Keep it under about
 - Module hygiene: `go mod tidy -diff` and `go mod verify` must be clean.
 - `bin/b2keys` is a separate module in the Go workspace (`go.work`): `make b2keys`.
 - Changelog entry: `make changelog-new` (changie). See [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries).
+- Release gate: `make release-check` (open code scanning, Dependabot, govulncheck, advisory and secret
+  findings hold a release). See [RELEASE.md](RELEASE.md#security-and-quality-gate).
 - Clean up live-test leftovers: `go run ./internal/bin/cleanup`.
 
 ## Architecture
