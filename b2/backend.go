@@ -94,6 +94,7 @@ type beFileInterface interface {
 	updateFileRetention(context.Context, *FileRetention, bool) error
 	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (beFileInfoInterface, error)
+	encryption() (mode, algorithm, keyMD5 string)
 	listParts(context.Context, int, int) ([]beFilePartInterface, int, error)
 	compileParts(int64, map[int]string, *SSECKey) beLargeFileInterface
 	AsLargeFile() beLargeFileInterface
@@ -720,6 +721,10 @@ func (b *beFile) getFileInfo(ctx context.Context) (beFileInfoInterface, error) {
 		return nil, err
 	}
 	return fileInfo, nil
+}
+
+func (b *beFile) encryption() (mode, algorithm, keyMD5 string) {
+	return b.b2file.encryption()
 }
 
 func (b *beFile) listParts(ctx context.Context, next, count int) ([]beFilePartInterface, int, error) {

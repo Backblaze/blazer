@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-request SSE-C keys for uploads, downloads, metadata lookup, and server-side copies. Large-file uploads send the key on the start request and every part; keys cannot be configured as client writer defaults. Keyed resume refuses an unfinished upload when its encryption mode or key digest cannot be verified.
+
 ## [0.9.0] - 2026-10-22
 
 ### Added

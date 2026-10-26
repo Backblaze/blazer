@@ -1363,6 +1363,10 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 	var files []*File
 	for _, f := range b2resp.Files {
 		retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+		var mode, algorithm, keyMD5 string
+		if sse := f.ServerSideEncryption; sse != nil {
+			mode, algorithm, keyMD5 = sse.Mode, sse.Algorithm, sse.CustomerKeyMD5
+		}
 		files = append(files, &File{
 			Name:      f.Name,
 			Status:    f.Action,
@@ -1370,12 +1374,15 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 			b2:        b.b2,
 			ID:        f.FileID,
 			Info: &FileInfo{
-				Name:        f.Name,
-				ContentType: f.ContentType,
-				Info:        f.Info,
-				Timestamp:   millitime(f.Timestamp),
-				Retention:   retention,
-				LegalHold:   legalHold,
+				Name:                f.Name,
+				ContentType:         f.ContentType,
+				Info:                f.Info,
+				EncryptionMode:      mode,
+				EncryptionAlgorithm: algorithm,
+				SSECKeyMD5:          keyMD5,
+				Timestamp:           millitime(f.Timestamp),
+				Retention:           retention,
+				LegalHold:           legalHold,
 			},
 		})
 	}
@@ -1616,16 +1623,19 @@ func (b *Bucket) HideFile(ctx context.Context, name string) (*File, error) {
 
 // FileInfo holds information about a specific file.
 type FileInfo struct {
-	Name        string
-	SHA1        string
-	MD5         string
-	Size        int64
-	ContentType string
-	Info        map[string]string
-	Status      string
-	Timestamp   time.Time
-	Retention   *FileRetention
-	LegalHold   string
+	Name                string
+	SHA1                string
+	MD5                 string
+	Size                int64
+	ContentType         string
+	Info                map[string]string
+	Status              string
+	Timestamp           time.Time
+	Retention           *FileRetention
+	LegalHold           string
+	EncryptionMode      string
+	EncryptionAlgorithm string
+	SSECKeyMD5          string
 }
 
 // GetFileInfoByName returns metadata for the current visible file with name.

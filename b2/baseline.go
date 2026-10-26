@@ -81,6 +81,7 @@ type b2FileInterface interface {
 	updateFileRetention(context.Context, *FileRetention, bool) error
 	updateFileLegalHold(context.Context, LegalHold) error
 	getFileInfo(context.Context) (b2FileInfoInterface, error)
+	encryption() (mode, algorithm, keyMD5 string)
 	listParts(context.Context, int, int) ([]b2FilePartInterface, int, error)
 	compileParts(int64, map[int]string, *SSECKey) b2LargeFileInterface
 }
@@ -688,6 +689,13 @@ func (b *b2File) getFileInfo(ctx context.Context) (b2FileInfoInterface, error) {
 		return nil, err
 	}
 	return &b2FileInfo{fi}, nil
+}
+
+func (b *b2File) encryption() (mode, algorithm, keyMD5 string) {
+	if b.b.Info == nil {
+		return "", "", ""
+	}
+	return b.b.Info.EncryptionMode, b.b.Info.EncryptionAlgorithm, b.b.Info.SSECKeyMD5
 }
 
 func (b *b2File) listParts(ctx context.Context, next, count int) ([]b2FilePartInterface, int, error) {

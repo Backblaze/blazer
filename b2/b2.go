@@ -70,6 +70,15 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 	for _, f := range opts {
 		f(&c.opts)
 	}
+	// Probe default writer options before authorization: SSE-C keys are strictly
+	// request-scoped and must not be retained by a Client.
+	probe := &Writer{}
+	for _, option := range c.opts.writerOpts {
+		option(probe)
+	}
+	if probe.ssecRequested || probe.ssec != nil {
+		return nil, errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
+	}
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
 		return nil, err
 	}
@@ -752,20 +761,13 @@ func (o *Object) ensure(ctx context.Context, keys ...*SSECKey) error {
 	if err != nil {
 		return err
 	}
-	if o.f == nil {
+	if o.f == nil || o.f.id() == "" {
 		f, err := o.b.getObject(ctx, o.name, key)
 		if err != nil {
 			return err
 		}
 		o.f = f.f
 		return nil
-	}
-	if key != nil {
-		fr, err := o.b.b.downloadFileByName(ctx, o.name, 0, 0, true, key)
-		if err != nil {
-			return err
-		}
-		return fr.Close()
 	}
 	return nil
 }
