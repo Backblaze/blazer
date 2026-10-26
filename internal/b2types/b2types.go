@@ -93,9 +93,10 @@ type CreateBucketRequest struct {
 	Info           map[string]string `json:"bucketInfo"`
 	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
 
-	CORSRules                   []CORSRule            `json:"corsRules,omitempty"`
-	FileLockEnabled             bool                  `json:"fileLockEnabled,omitempty"`
-	DefaultServerSideEncryption *ServerSideEncryption `json:"defaultServerSideEncryption,omitempty"`
+	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
+	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
+	ReplicationConfiguration    *ReplicationConfiguration `json:"replicationConfiguration,omitempty"`
 }
 
 type CreateBucketResponse struct {
