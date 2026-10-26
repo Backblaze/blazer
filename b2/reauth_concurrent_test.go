@@ -2,6 +2,7 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -162,5 +163,100 @@ func TestRefreshWaiterHonorsItsContext(t *testing.T) {
 	defer mu.Unlock()
 	if authCalls != 2 {
 		t.Errorf("authorization calls = %d, want initial plus one refresh", authCalls)
+	}
+}
+
+func TestCancelledRefreshLeaderHandsOff(t *testing.T) {
+	for _, waiters := range []int{1, 8} {
+		t.Run(fmt.Sprintf("waiters=%d", waiters), func(t *testing.T) {
+			entered := make(chan struct{})
+			var mu sync.Mutex
+			authCalls := 0
+			rt := stalledRefreshTransport(func(req *http.Request) (*http.Response, error) {
+				if strings.HasSuffix(req.URL.Path, "b2_authorize_account") {
+					mu.Lock()
+					authCalls++
+					call := authCalls
+					mu.Unlock()
+					if call == 2 {
+						close(entered)
+						<-req.Context().Done()
+						return nil, req.Context().Err()
+					}
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(fmt.Sprintf(updateAuthJSON, "https://example.invalid"))), Request: req}, nil
+				}
+				return nil, fmt.Errorf("unexpected request %s", req.URL)
+			})
+			client, err := NewClient(context.Background(), "id", "secret", APIBase("https://example.invalid"), Transport(rt))
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := client.backend.(*beRoot)
+			generation := root.authGeneration()
+			leaderCtx, cancel := context.WithCancel(context.Background())
+			leader := make(chan error, 1)
+			go func() { leader <- root.reauthorizeIfUnchanged(leaderCtx, generation) }()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("leader did not start refresh")
+			}
+			ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			results := make(chan error, waiters)
+			for i := 0; i < waiters; i++ {
+				go func() { results <- root.reauthorizeIfUnchanged(ctx, generation) }()
+			}
+			cancel()
+			if err := <-leader; !errors.Is(err, context.Canceled) {
+				t.Fatalf("leader error = %v, want cancellation", err)
+			}
+			for i := 0; i < waiters; i++ {
+				if err := <-results; err != nil {
+					t.Fatalf("waiter %d: %v", i, err)
+				}
+			}
+			mu.Lock()
+			got := authCalls
+			mu.Unlock()
+			if got != 3 {
+				t.Fatalf("authorization calls = %d, want initial + cancelled + one takeover", got)
+			}
+		})
+	}
+}
+
+func TestRefreshAuthorizationFailureReachesWaiters(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	rt := stalledRefreshTransport(func(req *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(req.URL.Path, "b2_authorize_account") {
+			return nil, fmt.Errorf("unexpected request %s", req.URL)
+		}
+		select {
+		case <-entered:
+			<-release
+			return &http.Response{StatusCode: 403, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":403,"code":"bad_auth_token","message":"denied"}`)), Request: req}, nil
+		default:
+			close(entered)
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(fmt.Sprintf(updateAuthJSON, "https://example.invalid"))), Request: req}, nil
+		}
+	})
+	client, err := NewClient(context.Background(), "id", "secret", APIBase("https://example.invalid"), Transport(rt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := client.backend.(*beRoot)
+	generation := root.authGeneration()
+	results := make(chan error, 9)
+	go func() { results <- root.reauthorizeIfUnchanged(context.Background(), generation) }()
+	for i := 0; i < 8; i++ {
+		go func() { results <- root.reauthorizeIfUnchanged(context.Background(), generation) }()
+	}
+	close(release)
+	for i := 0; i < 9; i++ {
+		if err := <-results; err == nil || !strings.Contains(err.Error(), "denied") {
+			t.Fatalf("refresh %d error = %v, want authorization failure", i, err)
+		}
 	}
 }

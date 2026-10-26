@@ -16,6 +16,7 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -51,8 +52,9 @@ type beRoot struct {
 }
 
 type authorizationRefresh struct {
-	done chan struct{}
-	err  error // set before done closes
+	done                 chan struct{}
+	err                  error // set before done closes
+	leaderContextExpired bool
 }
 
 func (r *beRoot) authGeneration() uint64 {
@@ -62,36 +64,48 @@ func (r *beRoot) authGeneration() uint64 {
 }
 
 func (r *beRoot) reauthorizeIfUnchanged(ctx context.Context, generation uint64) error {
-	r.refreshMu.Lock()
-	if r.refreshGeneration != generation {
-		r.refreshMu.Unlock()
-		return nil
-	}
-	if flight := r.refreshFlight; flight != nil {
-		r.refreshMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-flight.done:
-			return flight.err
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-	}
-	flight := &authorizationRefresh{done: make(chan struct{})}
-	r.refreshFlight = flight
-	r.refreshMu.Unlock()
+		r.refreshMu.Lock()
+		if r.refreshGeneration != generation {
+			r.refreshMu.Unlock()
+			return nil
+		}
+		if flight := r.refreshFlight; flight != nil {
+			r.refreshMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-flight.done:
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if flight.leaderContextExpired {
+					continue
+				}
+				return flight.err
+			}
+		}
+		flight := &authorizationRefresh{done: make(chan struct{})}
+		r.refreshFlight = flight
+		r.refreshMu.Unlock()
 
-	// Authorization and its retry backoff can block. Never hold refreshMu while
-	// doing either, so waiters can abandon their own request on cancellation.
-	err := r.reauthorizeAccount(ctx)
-	r.refreshMu.Lock()
-	if err == nil {
-		r.refreshGeneration++
+		// Authorization and its retry backoff can block. Never hold refreshMu while
+		// doing either, so waiters can abandon their own request on cancellation.
+		err := r.reauthorizeAccount(ctx)
+		r.refreshMu.Lock()
+		if err == nil {
+			r.refreshGeneration++
+		}
+		flight.err = err
+		flight.leaderContextExpired = ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
+		close(flight.done)
+		r.refreshFlight = nil
+		r.refreshMu.Unlock()
+		return err
 	}
-	flight.err = err
-	close(flight.done)
-	r.refreshFlight = nil
-	r.refreshMu.Unlock()
-	return err
 }
 
 type beBucketInterface interface {
