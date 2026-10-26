@@ -46,7 +46,7 @@ func TestUpdateBucketSendsCORSRuleName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bb, err := root.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false)
+	bb, err := root.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestReadModifyWriteKeepsCORSRuleName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bb, err := root.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false)
+	bb, err := root.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -445,7 +445,7 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if sse := attrs.DefaultServerSideEncryption; sse != nil && !sse.canBeUsedAsBucketDefault() {
 		return nil, fmt.Errorf("%s/%s cannot be used as default for a bucket", sse.Mode, sse.Algorithm)
 	}
-	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption, attrs.CORSRules, attrs.FileLockEnabled)
+	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption, attrs.CORSRules, attrs.FileLockEnabled, attrs.ReplicationConfig)
 	if err != nil {
 		return nil, err
 	}
