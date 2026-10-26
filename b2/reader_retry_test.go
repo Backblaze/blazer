@@ -20,8 +20,8 @@ type truncRoot struct {
 	calls    int32
 }
 
-func (r *truncRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (b2BucketInterface, error) {
-	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse, corsRules, fileLockEnabled)
+func (r *truncRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (b2BucketInterface, error) {
+	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse, corsRules, fileLockEnabled, replicationConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ type truncBucket struct {
 	r *truncRoot
 }
 
-func (b *truncBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool) (b2FileReaderInterface, error) {
+func (b *truncBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool, _ *SSECKey) (b2FileReaderInterface, error) {
 	gmux.Lock()
 	f := b.files[name]
 	gmux.Unlock()

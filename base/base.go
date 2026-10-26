@@ -235,15 +235,53 @@ func logRequest(req *http.Request, args []byte) {
 		if k == "Authorization" || k == "X-Blazer-Method" {
 			continue
 		}
-		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
+		value := redactSSECHeader(k, strings.Join(v, ","))
+		headers = append(headers, fmt.Sprintf("%s: %s", k, value))
 	}
 	hstr := strings.Join(headers, ";")
 	method := req.Header.Get("X-Blazer-Method")
 	if args != nil {
-		blog.V(2).Infof(">> %s %v: %v headers: {%s} args: (%s)", method, req.Method, req.URL, hstr, string(args))
+		blog.V(2).Infof(">> %s %v: %v headers: {%s} args: (%s)", method, req.Method, req.URL, hstr, string(redactSSECJSON(args)))
 		return
 	}
 	blog.V(2).Infof(">> %s %v: %v {%s} (no args)", method, req.Method, req.URL, hstr)
+}
+
+func redactSSECHeader(name, value string) string {
+	if strings.EqualFold(name, "X-Bz-Server-Side-Encryption-Customer-Key") || strings.EqualFold(name, "X-Bz-Server-Side-Encryption-Customer-Key-Md5") {
+		return "[REDACTED]"
+	}
+	return value
+}
+
+func redactSSECJSON(args []byte) []byte {
+	var value any
+	if err := json.Unmarshal(args, &value); err != nil {
+		return []byte("[REDACTED]")
+	}
+	redactSSECFields(value)
+	redacted, err := json.Marshal(value)
+	if err != nil {
+		return []byte("[REDACTED]")
+	}
+	return redacted
+}
+
+func redactSSECFields(value any) {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, nested := range value {
+			if strings.EqualFold(key, "customerKey") || strings.EqualFold(key, "customerKeyMd5") {
+				value[key] = "[REDACTED]"
+				continue
+			}
+			redactSSECFields(nested)
+		}
+	case []any:
+		for _, nested := range value {
+			redactSSECFields(nested)
+		}
+	}
 }
 
 var authRegexp = regexp.MustCompile(`"authorizationToken": ".[^"]*"`)
@@ -629,7 +667,7 @@ func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2
 
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
-func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool) (*Bucket, error) {
+func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool, replicationConfiguration *b2types.ReplicationConfiguration) (*Bucket, error) {
 	if btype != "allPublic" {
 		btype = "allPrivate"
 	}
@@ -651,6 +689,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(sse),
 		CORSRules:                   corsRules,
 		FileLockEnabled:             fileLockEnabled,
+		ReplicationConfiguration:    replicationConfiguration,
 	}
 	b2resp := &b2types.CreateBucketResponse{}
 	headers := map[string]string{
@@ -681,6 +720,10 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	bucket.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
+	if cfg := b2resp.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
+		(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
+		bucket.ReplicationConfiguration = cfg.Value
+	}
 	return bucket, nil
 }
 
@@ -974,6 +1017,34 @@ type FileLock struct {
 	LegalHold string // "on", "off" or "" for unset
 }
 
+func addServerSideEncryptionHeaders(headers map[string]string, sse *b2types.ServerSideEncryption) error {
+	if sse == nil {
+		return nil
+	}
+	hasSSEB2 := strings.EqualFold(sse.Mode, "SSE-B2") || headers["X-Bz-Server-Side-Encryption"] != ""
+	hasSSEC := strings.EqualFold(sse.Mode, "SSE-C") || sse.CustomerKey != "" || sse.CustomerKeyMD5 != ""
+	if hasSSEB2 && hasSSEC {
+		return errors.New("b2: SSE-B2 and SSE-C cannot be used on the same request")
+	}
+	if sse.Algorithm != "AES256" {
+		return errors.New("b2: server-side encryption algorithm must be AES256")
+	}
+	switch {
+	case hasSSEC:
+		if sse.CustomerKey == "" || sse.CustomerKeyMD5 == "" {
+			return errors.New("b2: SSE-C requires a customer key and its MD5 digest")
+		}
+		headers["X-Bz-Server-Side-Encryption-Customer-Algorithm"] = sse.Algorithm
+		headers["X-Bz-Server-Side-Encryption-Customer-Key"] = sse.CustomerKey
+		headers["X-Bz-Server-Side-Encryption-Customer-Key-Md5"] = sse.CustomerKeyMD5
+	case hasSSEB2:
+		headers["X-Bz-Server-Side-Encryption"] = sse.Algorithm
+	default:
+		return errors.New("b2: unknown server-side encryption mode")
+	}
+	return nil
+}
+
 func (l FileLock) retentionRequest() *b2types.FileRetention {
 	if l.Retention == nil {
 		return nil
@@ -984,6 +1055,13 @@ func (l FileLock) retentionRequest() *b2types.FileRetention {
 // UploadFile wraps b2_upload_file. At most one FileLock may be given; it sets
 // Object Lock retention and legal hold on the new file.
 func (url *URL) UploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, lock ...FileLock) (*File, error) {
+	return url.UploadFileWithSSEC(ctx, r, size, name, contentType, sha1, info, nil, lock...)
+}
+
+// UploadFileWithSSEC wraps b2_upload_file and sends per-request server-side
+// encryption settings. Callers normally use package b2 instead of this
+// low-level method.
+func (url *URL) UploadFileWithSSEC(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*File, error) {
 	headers := map[string]string{
 		"Authorization":     url.token,
 		"X-Bz-File-Name":    name,
@@ -1002,6 +1080,9 @@ func (url *URL) UploadFile(ctx context.Context, r io.Reader, size int, name, con
 		if lock[0].LegalHold != "" {
 			headers["X-Bz-File-Legal-Hold"] = lock[0].LegalHold
 		}
+	}
+	if err := addServerSideEncryptionHeaders(headers, sse); err != nil {
+		return nil, err
 	}
 	b2resp := &b2types.UploadFileResponse{}
 	if err := url.b2.opts.makeRequest(ctx, "b2_upload_file", "POST", url.uri, nil, b2resp, headers, &requestBody{body: r, size: int64(size)}); err != nil {
@@ -1066,11 +1147,21 @@ type LargeFile struct {
 // StartLargeFile wraps b2_start_large_file. At most one FileLock may be given;
 // it sets Object Lock retention and legal hold on the new file.
 func (b *Bucket) StartLargeFile(ctx context.Context, name, contentType string, info map[string]string, lock ...FileLock) (*LargeFile, error) {
+	return b.StartLargeFileWithSSEC(ctx, name, contentType, info, nil, lock...)
+}
+
+// StartLargeFileWithSSEC wraps b2_start_large_file and carries SSE-C settings
+// in the JSON request body.
+func (b *Bucket) StartLargeFileWithSSEC(ctx context.Context, name, contentType string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*LargeFile, error) {
+	if err := addServerSideEncryptionHeaders(map[string]string{}, sse); err != nil {
+		return nil, err
+	}
 	b2req := &b2types.StartLargeFileRequest{
-		BucketID:    b.ID,
-		Name:        name,
-		ContentType: contentType,
-		Info:        info,
+		BucketID:             b.ID,
+		Name:                 name,
+		ContentType:          contentType,
+		Info:                 info,
+		ServerSideEncryption: sse,
 	}
 	if len(lock) > 0 {
 		b2req.Retention = lock[0].retentionRequest()
@@ -1197,11 +1288,20 @@ func (fc *FileChunk) Reload(ctx context.Context) error {
 
 // UploadPart wraps b2_upload_part.
 func (fc *FileChunk) UploadPart(ctx context.Context, r io.Reader, sha1 string, size, index int) (int, error) {
+	return fc.UploadPartWithSSEC(ctx, r, sha1, size, index, nil)
+}
+
+// UploadPartWithSSEC wraps b2_upload_part and repeats the SSE-C headers selected
+// by b2_start_large_file.
+func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 string, size, index int, sse *b2types.ServerSideEncryption) (int, error) {
 	headers := map[string]string{
 		"Authorization":     fc.token,
 		"X-Bz-Part-Number":  fmt.Sprintf("%d", index),
 		"Content-Length":    fmt.Sprintf("%d", size),
 		"X-Bz-Content-Sha1": sha1,
+	}
+	if err := addServerSideEncryptionHeaders(headers, sse); err != nil {
+		return 0, err
 	}
 	if sha1 == "hex_digits_at_end" {
 		r = &keepFinalBytes{r: r, remain: size}
@@ -1268,6 +1368,10 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 	var files []*File
 	for _, f := range b2resp.Files {
 		retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+		var mode, algorithm, keyMD5 string
+		if sse := f.ServerSideEncryption; sse != nil {
+			mode, algorithm, keyMD5 = sse.Mode, sse.Algorithm, sse.CustomerKeyMD5
+		}
 		files = append(files, &File{
 			Name:      f.Name,
 			Status:    f.Action,
@@ -1275,12 +1379,15 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 			b2:        b.b2,
 			ID:        f.FileID,
 			Info: &FileInfo{
-				Name:        f.Name,
-				ContentType: f.ContentType,
-				Info:        f.Info,
-				Timestamp:   millitime(f.Timestamp),
-				Retention:   retention,
-				LegalHold:   legalHold,
+				Name:                f.Name,
+				ContentType:         f.ContentType,
+				Info:                f.Info,
+				EncryptionMode:      mode,
+				EncryptionAlgorithm: algorithm,
+				SSECKeyMD5:          keyMD5,
+				Timestamp:           millitime(f.Timestamp),
+				Retention:           retention,
+				LegalHold:           legalHold,
 			},
 		})
 	}
@@ -1421,6 +1528,12 @@ func mkRange(offset, size int64) string {
 
 // DownloadFileByName wraps b2_download_file_by_name.
 func (b *Bucket) DownloadFileByName(ctx context.Context, name string, offset, size int64, header bool) (*FileReader, error) {
+	return b.DownloadFileByNameWithSSEC(ctx, name, offset, size, header, nil)
+}
+
+// DownloadFileByNameWithSSEC wraps b2_download_file_by_name and sends the
+// customer-managed key on GET, HEAD and ranged requests.
+func (b *Bucket) DownloadFileByNameWithSSEC(ctx context.Context, name string, offset, size int64, header bool, sse *b2types.ServerSideEncryption) (*FileReader, error) {
 	uri := fmt.Sprintf("%s/file/%s/%s", b.b2.downloadURI, b.Name, escape(name))
 	method := "GET"
 	if header {
@@ -1433,6 +1546,13 @@ func (b *Bucket) DownloadFileByName(ctx context.Context, name string, offset, si
 	req.Header.Set("Authorization", b.b2.authToken)
 	req.Header.Set("X-Blazer-Request-ID", fmt.Sprintf("%d", atomic.AddInt64(&reqID, 1)))
 	req.Header.Set("X-Blazer-Method", "b2_download_file_by_name")
+	encryptionHeaders := map[string]string{}
+	if err := addServerSideEncryptionHeaders(encryptionHeaders, sse); err != nil {
+		return nil, err
+	}
+	for name, value := range encryptionHeaders {
+		req.Header.Set(name, value)
+	}
 	b.b2.opts.addHeaders(req)
 	rng := mkRange(offset, size)
 	if rng != "" {
@@ -1508,16 +1628,19 @@ func (b *Bucket) HideFile(ctx context.Context, name string) (*File, error) {
 
 // FileInfo holds information about a specific file.
 type FileInfo struct {
-	Name        string
-	SHA1        string
-	MD5         string
-	Size        int64
-	ContentType string
-	Info        map[string]string
-	Status      string
-	Timestamp   time.Time
-	Retention   *FileRetention
-	LegalHold   string
+	Name                string
+	SHA1                string
+	MD5                 string
+	Size                int64
+	ContentType         string
+	Info                map[string]string
+	Status              string
+	Timestamp           time.Time
+	Retention           *FileRetention
+	LegalHold           string
+	EncryptionMode      string
+	EncryptionAlgorithm string
+	SSECKeyMD5          string
 }
 
 // GetFileInfoByName returns metadata for the current visible file with name.
@@ -1707,12 +1830,26 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 // copy in the source file's bucket. contentType and info are sent only for the
 // REPLACE metadata directive.
 func (b *Bucket) CopyFile(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string) (*File, error) {
+	return b.CopyFileWithSSEC(ctx, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType, info, nil, nil)
+}
+
+// CopyFileWithSSEC wraps b2_copy_file and supplies independent source and
+// destination SSE-C settings in the JSON request body.
+func (b *Bucket) CopyFileWithSSEC(ctx context.Context, sourceFileID, name, destinationBucketID, byteRange, metadataDirective, contentType string, info map[string]string, sourceSSE, destinationSSE *b2types.ServerSideEncryption) (*File, error) {
+	if err := addServerSideEncryptionHeaders(map[string]string{}, sourceSSE); err != nil {
+		return nil, fmt.Errorf("source encryption: %w", err)
+	}
+	if err := addServerSideEncryptionHeaders(map[string]string{}, destinationSSE); err != nil {
+		return nil, fmt.Errorf("destination encryption: %w", err)
+	}
 	b2req := &b2types.CopyFileRequest{
-		SourceFileID:        sourceFileID,
-		FileName:            name,
-		DestinationBucketID: destinationBucketID,
-		Range:               byteRange,
-		MetadataDirective:   metadataDirective,
+		SourceFileID:                    sourceFileID,
+		FileName:                        name,
+		DestinationBucketID:             destinationBucketID,
+		Range:                           byteRange,
+		MetadataDirective:               metadataDirective,
+		SourceServerSideEncryption:      sourceSSE,
+		DestinationServerSideEncryption: destinationSSE,
 	}
 	if metadataDirective == "REPLACE" {
 		b2req.ContentType = &contentType

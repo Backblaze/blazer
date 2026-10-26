@@ -12,8 +12,8 @@ import (
 // chunk to the (single) worker in sendChunk.
 type deadlockRoot struct{ *testRoot }
 
-func (r *deadlockRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool) (b2BucketInterface, error) {
-	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse, corsRules, fileLockEnabled)
+func (r *deadlockRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (b2BucketInterface, error) {
+	b, err := r.testRoot.createBucket(ctx, name, btype, info, rules, sse, corsRules, fileLockEnabled, replicationConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -22,8 +22,8 @@ func (r *deadlockRoot) createBucket(ctx context.Context, name, btype string, inf
 
 type deadlockBucket struct{ *testBucket }
 
-func (b *deadlockBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, rt *FileRetention, lh LegalHold) (b2LargeFileInterface, error) {
-	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info, rt, lh)
+func (b *deadlockBucket) startLargeFile(ctx context.Context, name, ct string, info map[string]string, rt *FileRetention, lh LegalHold, ssec *SSECKey) (b2LargeFileInterface, error) {
+	lf, err := b.testBucket.startLargeFile(ctx, name, ct, info, rt, lh, ssec)
 	if err != nil {
 		return nil, err
 	}

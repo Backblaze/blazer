@@ -61,6 +61,7 @@ type Reader struct {
 	cancel     context.CancelFunc // cancels ctx
 	o          *Object
 	name       string
+	ssec       *SSECKey
 	offset     int64 // the start of the file
 	length     int64 // the length to read, or -1
 	csize      int   // chunk size
@@ -161,7 +162,7 @@ func (r *Reader) thread() {
 			var attempts int
 			var reported int64
 		redo:
-			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false)
+			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false, r.ssec)
 			if err == errNoMoreContent {
 				// this read generated a 416 so we are entirely past the end of the object
 				r.rmux.Lock()
@@ -256,7 +257,7 @@ func (r *Reader) initFunc() {
 		// HEAD uses the same download authorization as GET, and its content
 		// length lets progress report an exact total without listing files.
 		r.progressTotal = -1
-		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true); err == nil {
+		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true, r.ssec); err == nil {
 			size, _, _, _ := fr.stats()
 			if err := fr.Close(); err == nil {
 				available := int64(size) - r.offset

@@ -93,9 +93,10 @@ type CreateBucketRequest struct {
 	Info           map[string]string `json:"bucketInfo"`
 	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
 
-	CORSRules                   []CORSRule            `json:"corsRules,omitempty"`
-	FileLockEnabled             bool                  `json:"fileLockEnabled,omitempty"`
-	DefaultServerSideEncryption *ServerSideEncryption `json:"defaultServerSideEncryption,omitempty"`
+	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
+	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`
+	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
+	ReplicationConfiguration    *ReplicationConfiguration `json:"replicationConfiguration,omitempty"`
 }
 
 type CreateBucketResponse struct {
@@ -282,12 +283,13 @@ type DeleteFileVersionRequest struct {
 }
 
 type StartLargeFileRequest struct {
-	BucketID    string            `json:"bucketId"`
-	Name        string            `json:"fileName"`
-	ContentType string            `json:"contentType"`
-	Info        map[string]string `json:"fileInfo,omitempty"`
-	Retention   *FileRetention    `json:"fileRetention,omitempty"`
-	LegalHold   string            `json:"legalHold,omitempty"`
+	BucketID             string                `json:"bucketId"`
+	Name                 string                `json:"fileName"`
+	ContentType          string                `json:"contentType"`
+	Info                 map[string]string     `json:"fileInfo,omitempty"`
+	Retention            *FileRetention        `json:"fileRetention,omitempty"`
+	LegalHold            string                `json:"legalHold,omitempty"`
+	ServerSideEncryption *ServerSideEncryption `json:"serverSideEncryption,omitempty"`
 }
 
 type StartLargeFileResponse struct {
@@ -379,19 +381,20 @@ type GetFileInfoRequest struct {
 }
 
 type GetFileInfoResponse struct {
-	FileID      string                `json:"fileId,omitempty"`
-	Name        string                `json:"fileName,omitempty"`
-	AccountID   string                `json:"accountId,omitempty"`
-	BucketID    string                `json:"bucketId,omitempty"`
-	Size        int64                 `json:"contentLength,omitempty"`
-	SHA1        string                `json:"contentSha1,omitempty"`
-	MD5         string                `json:"contentMd5,omitempty"`
-	ContentType string                `json:"contentType,omitempty"`
-	Info        map[string]string     `json:"fileInfo,omitempty"`
-	Action      string                `json:"action,omitempty"`
-	Timestamp   int64                 `json:"uploadTimestamp,omitempty"`
-	Retention   FileRetentionResponse `json:"fileRetention,omitempty"`
-	LegalHold   LegalHoldResponse     `json:"legalHold,omitempty"`
+	FileID               string                `json:"fileId,omitempty"`
+	Name                 string                `json:"fileName,omitempty"`
+	AccountID            string                `json:"accountId,omitempty"`
+	BucketID             string                `json:"bucketId,omitempty"`
+	Size                 int64                 `json:"contentLength,omitempty"`
+	SHA1                 string                `json:"contentSha1,omitempty"`
+	MD5                  string                `json:"contentMd5,omitempty"`
+	ContentType          string                `json:"contentType,omitempty"`
+	Info                 map[string]string     `json:"fileInfo,omitempty"`
+	Action               string                `json:"action,omitempty"`
+	Timestamp            int64                 `json:"uploadTimestamp,omitempty"`
+	Retention            FileRetentionResponse `json:"fileRetention,omitempty"`
+	LegalHold            LegalHoldResponse     `json:"legalHold,omitempty"`
+	ServerSideEncryption *ServerSideEncryption `json:"serverSideEncryption,omitempty"`
 }
 
 type UpdateFileRetentionRequest struct {
@@ -490,8 +493,10 @@ type ListKeysResponse struct {
 }
 
 type ServerSideEncryption struct {
-	Mode      string `json:"mode"`
-	Algorithm string `json:"algorithm"`
+	Mode           string `json:"mode"`
+	Algorithm      string `json:"algorithm"`
+	CustomerKey    string `json:"customerKey,omitempty"`
+	CustomerKeyMD5 string `json:"customerKeyMd5,omitempty"`
 }
 
 // ServerSideEncryptionResponse is the shape in which bucket responses report
@@ -571,12 +576,14 @@ type ReplicationRules struct {
 }
 
 type CopyFileRequest struct {
-	SourceFileID        string  `json:"sourceFileId"`
-	FileName            string  `json:"fileName"`
-	DestinationBucketID string  `json:"destinationBucketId,omitempty"`
-	Range               string  `json:"range,omitempty"`
-	MetadataDirective   string  `json:"metadataDirective"`
-	ContentType         *string `json:"contentType,omitempty"`
+	SourceFileID                    string                `json:"sourceFileId"`
+	FileName                        string                `json:"fileName"`
+	DestinationBucketID             string                `json:"destinationBucketId,omitempty"`
+	Range                           string                `json:"range,omitempty"`
+	MetadataDirective               string                `json:"metadataDirective"`
+	ContentType                     *string               `json:"contentType,omitempty"`
+	SourceServerSideEncryption      *ServerSideEncryption `json:"sourceServerSideEncryption,omitempty"`
+	DestinationServerSideEncryption *ServerSideEncryption `json:"destinationServerSideEncryption,omitempty"`
 	// A nil pointer omits fileInfo (COPY); a pointer to an empty map sends {}.
 	FileInfo *map[string]string `json:"fileInfo,omitempty"`
 }

@@ -255,15 +255,15 @@ type slowProgressBucket struct{ beBucketInterface }
 
 type progressHeadFailureBucket struct{ beBucketInterface }
 
-func (b progressHeadFailureBucket) downloadFileByName(ctx context.Context, name string, offset, size int64, head bool) (beFileReaderInterface, error) {
+func (b progressHeadFailureBucket) downloadFileByName(ctx context.Context, name string, offset, size int64, head bool, key *SSECKey) (beFileReaderInterface, error) {
 	if head {
 		return nil, errors.New("HEAD unavailable")
 	}
-	return b.beBucketInterface.downloadFileByName(ctx, name, offset, size, false)
+	return b.beBucketInterface.downloadFileByName(ctx, name, offset, size, false, key)
 }
 
-func (b slowProgressBucket) downloadFileByName(ctx context.Context, name string, offset, size int64, head bool) (beFileReaderInterface, error) {
-	reader, err := b.beBucketInterface.downloadFileByName(ctx, name, offset, size, head)
+func (b slowProgressBucket) downloadFileByName(ctx context.Context, name string, offset, size int64, head bool, key *SSECKey) (beFileReaderInterface, error) {
+	reader, err := b.beBucketInterface.downloadFileByName(ctx, name, offset, size, head, key)
 	if err != nil {
 		return nil, err
 	}

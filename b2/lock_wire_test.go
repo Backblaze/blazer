@@ -68,7 +68,7 @@ func (w *lockWire) bucket(t *testing.T) *b2Bucket {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bb, err := account.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, true)
+	bb, err := account.CreateBucket(ctx, "n", "allPrivate", nil, nil, nil, nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestUploadAndStartLargeFileCarryObjectLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, rt, LegalHoldOn); err != nil {
+	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, rt, LegalHoldOn, nil); err != nil {
 		t.Fatal(err)
 	}
 	for k, want := range map[string]string{
@@ -105,14 +105,14 @@ func TestUploadAndStartLargeFileCarryObjectLock(t *testing.T) {
 		}
 	}
 
-	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, nil, ""); err != nil {
+	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := w.headers["X-Bz-File-Retention-Mode"]; ok {
 		t.Error("retention header sent without a retention")
 	}
 
-	if _, err := b.startLargeFile(ctx, "n", "text/plain", nil, rt, LegalHoldOff); err != nil {
+	if _, err := b.startLargeFile(ctx, "n", "text/plain", nil, rt, LegalHoldOff, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := w.body["fileRetention"].(map[string]any)

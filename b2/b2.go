@@ -70,6 +70,15 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 	for _, f := range opts {
 		f(&c.opts)
 	}
+	// Probe default writer options before authorization: SSE-C keys are strictly
+	// request-scoped and must not be retained by a Client.
+	probe := &Writer{}
+	for _, option := range c.opts.writerOpts {
+		option(probe)
+	}
+	if probe.ssecRequested || probe.ssec != nil {
+		return nil, errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
+	}
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
 		return nil, err
 	}
@@ -435,7 +444,7 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if sse := attrs.DefaultServerSideEncryption; sse != nil && !sse.canBeUsedAsBucketDefault() {
 		return nil, fmt.Errorf("%s/%s cannot be used as default for a bucket", sse.Mode, sse.Algorithm)
 	}
-	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption, attrs.CORSRules, attrs.FileLockEnabled)
+	b, err := c.backend.createBucket(ctx, name, string(attrs.Type), attrs.Info, attrs.LifecycleRules, attrs.DefaultServerSideEncryption, attrs.CORSRules, attrs.FileLockEnabled, attrs.ReplicationConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -572,9 +581,10 @@ func (o *Object) ID() string {
 	return o.f.id()
 }
 
-// Attrs returns an object's attributes.
-func (o *Object) Attrs(ctx context.Context) (*Attrs, error) {
-	if err := o.ensure(ctx); err != nil {
+// Attrs returns an object's attributes. Pass an SSE-C key to authorize the
+// HEAD request used for an SSE-C object; the key is not retained.
+func (o *Object) Attrs(ctx context.Context, keys ...*SSECKey) (*Attrs, error) {
+	if err := o.ensure(ctx, keys...); err != nil {
 		return nil, err
 	}
 	fi, err := o.f.getFileInfo(ctx)
@@ -723,18 +733,24 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 // bytes. If length is negative, the rest of the object is read. With a Progress
 // callback, a finite range reports the available byte count when a HEAD
 // request can determine it; otherwise the progress total is -1.
-func (o *Object) NewRangeReader(ctx context.Context, offset, length int64) *Reader {
+func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys ...*SSECKey) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Reader{
+	key, err := optionalSSECKey(keys)
+	r := &Reader{
 		ctx:           ctx,
 		cancel:        cancel,
 		o:             o,
 		name:          o.name,
+		ssec:          key,
 		chunks:        make(map[int]*rchunk),
 		length:        length,
 		offset:        offset,
 		progressTotal: readerProgressTotal(length),
 	}
+	if err != nil {
+		r.err = err
+	}
+	return r
 }
 
 func readerProgressTotal(length int64) int64 {
@@ -744,18 +760,25 @@ func readerProgressTotal(length int64) int64 {
 	return -1
 }
 
-// NewReader returns a reader for the given object.
-func (o *Object) NewReader(ctx context.Context) *Reader {
-	return o.NewRangeReader(ctx, 0, -1)
+// NewReader returns a reader for the given object. Pass an SSE-C key when the
+// object was encrypted with a customer-managed key; the key is not retained by
+// the Object, Bucket or Client.
+func (o *Object) NewReader(ctx context.Context, keys ...*SSECKey) *Reader {
+	return o.NewRangeReader(ctx, 0, -1, keys...)
 }
 
-func (o *Object) ensure(ctx context.Context) error {
-	if o.f == nil {
-		f, err := o.b.getObject(ctx, o.name)
+func (o *Object) ensure(ctx context.Context, keys ...*SSECKey) error {
+	key, err := optionalSSECKey(keys)
+	if err != nil {
+		return err
+	}
+	if o.f == nil || o.f.id() == "" {
+		f, err := o.b.getObject(ctx, o.name, key)
 		if err != nil {
 			return err
 		}
 		o.f = f.f
+		return nil
 	}
 	return nil
 }
@@ -849,8 +872,8 @@ func (discard) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (b *Bucket) getObject(ctx context.Context, name string) (*Object, error) {
-	fr, err := b.b.downloadFileByName(ctx, name, 0, 0, true)
+func (b *Bucket) getObject(ctx context.Context, name string, ssec *SSECKey) (*Object, error) {
+	fr, err := b.b.downloadFileByName(ctx, name, 0, 0, true, ssec)
 	if err != nil {
 		return nil, err
 	}
