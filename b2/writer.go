@@ -45,10 +45,10 @@ type Writer struct {
 	// Resume an upload.  If true, and the upload is a large file, and a file of
 	// the same name was started but not finished, then assume that we are
 	// resuming that file, and don't upload duplicate chunks. SSE-C resume
-	// requires the same key: large-file starts store its B2 customer-key MD5 as
-	// sse_c_key_id in file info, and an unfinished file without a matching ID
-	// is rejected. This is a stable key fingerprint visible in file metadata,
-	// not the key itself; callers needing to hide key reuse should not resume.
+	// requires a matching caller-supplied key ID (NewSSECKeyWithID) saved as
+	// sse_c_key_id in file info; missing or different IDs are rejected. The ID
+	// must uniquely identify the key: B2 rejects wrong keys on uploaded parts,
+	// but receives no key if every existing part is skipped.
 	Resume bool
 
 	// ChunkSize is the size, in bytes, of each individual part, when writing
@@ -470,27 +470,28 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 
 const ssecKeyIDFileInfo = "sse_c_key_id"
 
-// ssecFileInfo follows b2-sdk-python's file-info key name. Unlike Python's
-// caller-assigned key ID, blazer uses B2's existing customerKeyMd5 so a writer
-// can deterministically identify its key on a later process without another
-// public key-ID API. The digest reveals when the same key is reused; it is not
-// a secret and must never be treated as a substitute for the key.
+// ssecFileInfo follows b2-sdk-python's caller-assigned key-ID convention.
+// The helper adds no key-derived value to file info.
 func (w *Writer) ssecFileInfo() (map[string]string, error) {
 	if w.ssec == nil {
 		return w.info, nil
 	}
-	_, keyMD5, err := w.ssec.encoded()
-	if err != nil {
-		return nil, err
+	id := w.ssec.keyID
+	existing, present := w.info[ssecKeyIDFileInfo]
+	if id == "" {
+		if present {
+			return nil, fmt.Errorf("b2: SSE-C file info %q requires a caller-supplied key ID", ssecKeyIDFileInfo)
+		}
+		return w.info, nil
 	}
-	if existing := w.info[ssecKeyIDFileInfo]; existing != "" && existing != keyMD5 {
+	if present && existing != id {
 		return nil, fmt.Errorf("b2: SSE-C file info %q conflicts with the requested key", ssecKeyIDFileInfo)
 	}
 	info := make(map[string]string, len(w.info)+1)
 	for k, v := range w.info {
 		info[k] = v
 	}
-	info[ssecKeyIDFileInfo] = keyMD5
+	info[ssecKeyIDFileInfo] = id
 	return info, nil
 }
 
@@ -526,12 +527,15 @@ func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
 		}
 		return nil
 	}
+	if mode != "SSE-C" || algorithm != "AES256" {
+		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C mode or algorithm does not match", w.name)
+	}
+	if w.ssec.keyID == "" {
+		return fmt.Errorf("b2: cannot resume %q: SSE-C key identifier is required", w.name)
+	}
 	_, wantMD5, err := w.ssec.encoded()
 	if err != nil {
 		return err
-	}
-	if mode != "SSE-C" || algorithm != "AES256" {
-		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C mode or algorithm does not match", w.name)
 	}
 	if gotMD5 != "" && gotMD5 != wantMD5 {
 		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest does not match", w.name)
@@ -541,7 +545,7 @@ func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
 		return err
 	}
 	_, _, _, _, fileInfo, _, _ := info.stats()
-	if fileInfo[ssecKeyIDFileInfo] == "" || fileInfo[ssecKeyIDFileInfo] != wantMD5 {
+	if fileInfo[ssecKeyIDFileInfo] == "" || fileInfo[ssecKeyIDFileInfo] != w.ssec.keyID {
 		return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key identifier is missing or does not match", w.name)
 	}
 	return nil
@@ -764,8 +768,11 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 // WithSSECKey encrypts this upload with a caller-provided AES-256 key. The key
 // is used for the simple upload request or for the large-file start request and
 // every part upload; it is never retained by the Object, Bucket or Client.
-// For large files, its B2 customer-key MD5 is saved as sse_c_key_id in file
-// info to permit same-key resume; this visible fingerprint exposes key reuse.
+// For large files, a caller-supplied ID from NewSSECKeyWithID is saved as
+// sse_c_key_id in file info to permit resume. Without an ID, resume fails
+// closed. B2 rejects a wrong key on uploaded parts, but cannot check it when
+// all existing parts are skipped, so callers must not reuse an ID for another
+// key. This option adds neither the key nor a key-derived value to file info.
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
 		w.ssec = key

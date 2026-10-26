@@ -74,6 +74,15 @@ func newSSECPublicWire(t *testing.T) *ssecPublicWire {
 	return w
 }
 
+func (w *ssecPublicWire) keyWithID(t *testing.T, id string) *SSECKey {
+	t.Helper()
+	key, err := NewSSECKeyWithID(w.key.key[:], id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
 func (w *ssecPublicWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, "/b2_authorize_account") {
 		w.mu.Lock()
@@ -421,6 +430,7 @@ func TestOrdinaryWriterOptionRemainsDefaultable(t *testing.T) {
 }
 
 func TestSSECResumeChecksUnfinishedEncryption(t *testing.T) {
+	const keyID = "caller-owned-key-identifier"
 	for _, tc := range []struct {
 		name string
 		sse  string
@@ -433,7 +443,7 @@ func TestSSECResumeChecksUnfinishedEncryption(t *testing.T) {
 			wire := newSSECPublicWire(t)
 			wire.unfinishedEncryption = tc.sse
 			bucket := wire.newBucket(t)
-			w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+			w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, keyID)))
 			w.Resume = true
 			if _, err := w.getLargeFile(); err == nil || !strings.Contains(err.Error(), "SSE-C") {
 				t.Fatalf("resuming %s: error = %v, want SSE-C mismatch/unverifiable rejection", tc.name, err)
@@ -446,9 +456,9 @@ func TestSSECResumeChecksUnfinishedEncryption(t *testing.T) {
 	t.Run("matching identifier without server digest", func(t *testing.T) {
 		wire := newSSECPublicWire(t)
 		wire.unfinishedEncryption = `{"mode":"SSE-C","algorithm":"AES256"}`
-		wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, wire.keyMD5)
+		wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, keyID)
 		bucket := wire.newBucket(t)
-		w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+		w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, keyID)))
 		w.Resume = true
 		if _, err := w.getLargeFile(); err != nil {
 			t.Fatalf("matching SSE-C key identifier rejected: %v", err)
@@ -460,9 +470,10 @@ func TestSSECResumeChecksUnfinishedEncryption(t *testing.T) {
 }
 
 func TestSSECResumeRejectsDifferentOrMissingKeyIdentifier(t *testing.T) {
-	for _, tc := range []struct{ name, info string }{
-		{"missing", `{}`},
-		{"different", `{"sse_c_key_id":"other-key"}`},
+	for _, tc := range []struct{ name, callerID, info string }{
+		{"stored ID missing", "caller-id", `{}`},
+		{"caller ID missing", "", `{"sse_c_key_id":"stored-id"}`},
+		{"different IDs", "caller-id", `{"sse_c_key_id":"stored-id"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newSSECPublicWire(t)
@@ -470,7 +481,7 @@ func TestSSECResumeRejectsDifferentOrMissingKeyIdentifier(t *testing.T) {
 			// file-info identifier is absent or conflicts with this key.
 			wire.unfinishedEncryption = fmt.Sprintf(`{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":%q}`, wire.keyMD5)
 			wire.unfinishedInfo = tc.info
-			w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+			w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, tc.callerID)))
 			w.Resume = true
 			if _, err := w.getLargeFile(); err == nil || !strings.Contains(err.Error(), "SSE-C") {
 				t.Fatalf("resume with %s identifier: error = %v, want SSE-C rejection", tc.name, err)
@@ -483,10 +494,11 @@ func TestSSECResumeRejectsDifferentOrMissingKeyIdentifier(t *testing.T) {
 }
 
 func TestSSECResumeRejectsContradictoryServerDigest(t *testing.T) {
+	const keyID = "caller-owned-key-identifier"
 	wire := newSSECPublicWire(t)
 	wire.unfinishedEncryption = `{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":"different-digest"}`
-	wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, wire.keyMD5)
-	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+	wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, keyID)
+	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, keyID)))
 	w.Resume = true
 	if _, err := w.getLargeFile(); err == nil || !strings.Contains(err.Error(), "SSE-C") {
 		t.Fatalf("resume with contradictory server digest: error = %v, want SSE-C rejection", err)
@@ -498,7 +510,7 @@ func TestSSECResumeRejectsContradictoryServerDigest(t *testing.T) {
 
 func TestSSECStartRejectsConflictingFileInfoKeyIdentifier(t *testing.T) {
 	wire := newSSECPublicWire(t)
-	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithAttrsOption(&Attrs{Info: map[string]string{"sse_c_key_id": "other-key"}}), WithSSECKey(wire.key))
+	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithAttrsOption(&Attrs{Info: map[string]string{"sse_c_key_id": "other-key"}}), WithSSECKey(wire.keyWithID(t, "caller-id")))
 	if _, err := w.getLargeFile(); err == nil || !strings.Contains(err.Error(), "sse_c_key_id") {
 		t.Fatalf("start with conflicting key identifier: error = %v, want rejection", err)
 	}
@@ -507,10 +519,42 @@ func TestSSECStartRejectsConflictingFileInfoKeyIdentifier(t *testing.T) {
 	}
 }
 
+func TestSSECStartWithoutKeyIDDoesNotAddFingerprint(t *testing.T) {
+	wire := newSSECPublicWire(t)
+	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+	if _, err := w.getLargeFile(); err != nil {
+		t.Fatal(err)
+	}
+	starts := wire.requestsTo("/b2api/v4/b2_start_large_file")
+	if len(starts) != 1 {
+		t.Fatalf("start calls = %d, want 1", len(starts))
+	}
+	info, _ := starts[0].body["fileInfo"].(map[string]any)
+	if _, present := info[ssecKeyIDFileInfo]; present {
+		t.Fatal("start without a caller ID stored sse_c_key_id")
+	}
+	for _, value := range info {
+		if value == wire.keyMD5 || value == wire.keyValue {
+			t.Fatal("start file info contains a key-derived or secret value")
+		}
+	}
+}
+
+func TestSSECStartRejectsManualKeyIDWithoutKeyID(t *testing.T) {
+	wire := newSSECPublicWire(t)
+	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithAttrsOption(&Attrs{Info: map[string]string{ssecKeyIDFileInfo: "manual-id"}}), WithSSECKey(wire.key))
+	if _, err := w.getLargeFile(); err == nil || !strings.Contains(err.Error(), ssecKeyIDFileInfo) {
+		t.Fatalf("start with only a manual metadata ID: error = %v, want rejection", err)
+	}
+	if got := len(wire.requestsTo("/b2api/v4/b2_start_large_file")); got != 0 {
+		t.Fatalf("started %d large files without a key-bound caller ID", got)
+	}
+}
+
 func TestSSECResumeWithoutKeyRejectsEncryptedCandidate(t *testing.T) {
 	wire := newSSECPublicWire(t)
 	wire.unfinishedEncryption = `{"mode":"SSE-C","algorithm":"AES256"}`
-	wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, wire.keyMD5)
+	wire.unfinishedInfo = `{"sse_c_key_id":"caller-id"}`
 	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background())
 	w.Resume = true
 	if _, err := w.getLargeFile(); err == nil || !strings.Contains(err.Error(), "SSE-C") {
@@ -522,12 +566,13 @@ func TestSSECResumeWithoutKeyRejectsEncryptedCandidate(t *testing.T) {
 }
 
 func TestSSECResumeMatchingKeySkipsExistingParts(t *testing.T) {
+	const keyID = "caller-owned-key-identifier"
 	wire := newSSECPublicWire(t)
 	wire.unfinishedEncryption = `{"mode":"SSE-C","algorithm":"AES256"}`
-	wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, wire.keyMD5)
+	wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, keyID)
 	first, second := sha1.Sum([]byte("abcde")), sha1.Sum([]byte("fghij"))
 	wire.partsResponse = fmt.Sprintf(`{"parts":[{"partNumber":1,"contentSha1":"%x","contentLength":5},{"partNumber":2,"contentSha1":"%x","contentLength":5}],"nextPartNumber":null}`, first, second)
-	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, keyID)))
 	w.Resume = true
 	w.ChunkSize = 5
 	if _, err := w.Write([]byte("abcdefghij")); err != nil {
@@ -550,7 +595,7 @@ func TestSSECResumeWriterFailsClosedBeforePartReuse(t *testing.T) {
 	first, second := sha1.Sum([]byte("abcde")), sha1.Sum([]byte("fghij"))
 	wire.partsResponse = fmt.Sprintf(`{"parts":[{"partNumber":1,"contentSha1":"%x","contentLength":5},{"partNumber":2,"contentSha1":"%x","contentLength":5}],"nextPartNumber":null}`, first, second)
 	bucket := wire.newBucket(t)
-	w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+	w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, "caller-id")))
 	w.Resume = true
 	w.ChunkSize = 5
 	_, writeErr := w.Write([]byte("abcdefghij"))
@@ -570,9 +615,10 @@ func TestSSECResumeWriterFailsClosedBeforePartReuse(t *testing.T) {
 }
 
 func TestSSECMultipartSendsKeyOnStartAndEveryPart(t *testing.T) {
+	const keyID = "caller-owned-key-identifier"
 	wire := newSSECPublicWire(t)
 	bucket := wire.newBucket(t)
-	w := bucket.Object("multipart").NewWriter(context.Background(), WithSSECKey(wire.key))
+	w := bucket.Object("multipart").NewWriter(context.Background(), WithSSECKey(wire.keyWithID(t, keyID)))
 	w.ChunkSize = 5e6
 	w.ConcurrentUploads = 2
 	if _, err := w.Write(bytes.Repeat([]byte("x"), 10e6)); err != nil {
@@ -590,8 +636,8 @@ func TestSSECMultipartSendsKeyOnStartAndEveryPart(t *testing.T) {
 		t.Fatal("start encryption does not match the requested SSE-C key and digest")
 	}
 	startInfo, ok := starts[0].body["fileInfo"].(map[string]any)
-	if !ok || startInfo["sse_c_key_id"] != wire.keyMD5 {
-		t.Fatal("SSE-C large-file start did not record the key identifier in file info")
+	if !ok || len(startInfo) != 1 || startInfo["sse_c_key_id"] != keyID || startInfo["sse_c_key_id"] == wire.keyMD5 {
+		t.Fatal("SSE-C large-file start did not record only the caller's key identifier in file info")
 	}
 	parts := wire.requestsTo("/upload-part")
 	if len(parts) != 2 {
