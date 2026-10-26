@@ -598,7 +598,7 @@ func (t attrsTestFileInfo) stats() (string, string, int64, string, map[string]st
 	return t.file.n, "", t.file.s, "application/octet-stream", t.file.info, t.file.a, t.file.t
 }
 
-func (attrsTestFileInfo) fileLock() (*FileRetention, LegalHold) { return nil, "" }
+func (attrsTestFileInfo) fileLock() (*FileRetention, LegalHold)       { return nil, "" }
 func (attrsTestFileInfo) serverSideEncryption() *ServerSideEncryption { return nil }
 
 func TestObjectAttrsDoesNotMutateCachedFileInfo(t *testing.T) {
