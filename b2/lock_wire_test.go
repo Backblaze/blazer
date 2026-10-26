@@ -15,12 +15,14 @@ import (
 )
 
 type lockWire struct {
-	srv     *httptest.Server
-	path    string
-	headers http.Header
-	body    map[string]any
-	calls   int
-	info    string // response for b2_get_file_info
+	srv             *httptest.Server
+	path            string
+	headers         http.Header
+	body            map[string]any
+	calls           int
+	info            string // response for b2_get_file_info
+	startEncryption map[string]any
+	partEncryption  string
 }
 
 func newLockWire(t *testing.T) *lockWire {
@@ -48,11 +50,19 @@ func newLockWire(t *testing.T) *lockWire {
 		case strings.HasSuffix(r.URL.Path, "/b2_get_upload_url"):
 			_, _ = fmt.Fprintf(rw, `{"uploadUrl":"%s/upload","authorizationToken":"tok"}`, w.srv.URL)
 		case strings.HasSuffix(r.URL.Path, "/b2_start_large_file"):
+			w.startEncryption, _ = w.body["serverSideEncryption"].(map[string]any)
 			_, _ = fmt.Fprint(rw, `{"fileId":"large"}`)
+		case strings.HasSuffix(r.URL.Path, "/b2_get_upload_part_url"):
+			_, _ = fmt.Fprintf(rw, `{"uploadUrl":"%s/part","authorizationToken":"part-tok"}`, w.srv.URL)
+		case strings.HasSuffix(r.URL.Path, "/b2_finish_large_file"):
+			_, _ = fmt.Fprint(rw, `{"fileId":"large","fileName":"large","action":"upload"}`)
 		case strings.HasSuffix(r.URL.Path, "/b2_get_file_info"):
 			_, _ = fmt.Fprint(rw, w.info)
 		case r.URL.Path == "/upload":
 			_, _ = fmt.Fprint(rw, `{"fileId":"small","action":"upload"}`)
+		case r.URL.Path == "/part":
+			w.partEncryption = r.Header.Get("X-Bz-Server-Side-Encryption")
+			_, _ = fmt.Fprint(rw, `{}`)
 		default:
 			_, _ = fmt.Fprint(rw, `{}`)
 		}
@@ -81,6 +91,19 @@ func (w *lockWire) object(t *testing.T) *Object {
 	return &Object{name: "name", f: &beFile{b2file: &b2File{b: w.bucket(t).b.File("id", "name")}, ri: root}}
 }
 
+func (w *lockWire) publicBucket(t *testing.T) *Bucket {
+	t.Helper()
+	client, err := NewClient(context.Background(), "a", "k", APIBase(w.srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(context.Background(), "n", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bucket
+}
+
 var lockUntil = time.UnixMilli(1735689600000)
 
 func TestUploadAndStartLargeFileCarryObjectLock(t *testing.T) {
@@ -92,7 +115,7 @@ func TestUploadAndStartLargeFileCarryObjectLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, rt, LegalHoldOn); err != nil {
+	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, rt, LegalHoldOn, nil); err != nil {
 		t.Fatal(err)
 	}
 	for k, want := range map[string]string{
@@ -105,19 +128,84 @@ func TestUploadAndStartLargeFileCarryObjectLock(t *testing.T) {
 		}
 	}
 
-	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, nil, ""); err != nil {
+	if _, err := url.uploadFile(ctx, strings.NewReader("x"), 1, "n", "text/plain", "sha", nil, nil, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := w.headers["X-Bz-File-Retention-Mode"]; ok {
 		t.Error("retention header sent without a retention")
 	}
 
-	if _, err := b.startLargeFile(ctx, "n", "text/plain", nil, rt, LegalHoldOff); err != nil {
+	if _, err := b.startLargeFile(ctx, "n", "text/plain", nil, rt, LegalHoldOff, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := w.body["fileRetention"].(map[string]any)
 	if got["mode"] != "compliance" || got["retainUntilTimestamp"] != float64(1735689600000) || w.body["legalHold"] != "off" {
 		t.Errorf("start_large_file body = %v, want compliance through 1735689600000 and legalHold off", w.body)
+	}
+}
+
+func TestWriterSSEB2PerRequestWireAndMetadata(t *testing.T) {
+	w := newLockWire(t)
+	bucket := w.publicBucket(t)
+	ctx := context.Background()
+
+	object := bucket.Object("per-request")
+	writer := object.NewWriter(ctx, WithSSEB2("AES256"))
+	if _, err := writer.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.headers.Get("X-Bz-Server-Side-Encryption"); got != "AES256" {
+		t.Errorf("upload SSE-B2 header = %q, want AES256", got)
+	}
+
+	w.info = `{"fileId":"small","fileName":"per-request","action":"upload","serverSideEncryption":{"mode":"SSE-B2","algorithm":"AES256"}}`
+	attrs, err := object.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := attrs.ServerSideEncryption; got == nil || got.Mode != "SSE-B2" || got.Algorithm != "AES256" {
+		t.Errorf("Attrs().ServerSideEncryption = %#v, want SSE-B2/AES256", got)
+	}
+
+	withoutOption := bucket.Object("without-option").NewWriter(ctx)
+	if _, err := withoutOption.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := withoutOption.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.headers.Get("X-Bz-Server-Side-Encryption"); got != "" {
+		t.Errorf("upload without option sent SSE-B2 header %q", got)
+	}
+
+	large := bucket.Object("large").NewWriter(ctx, WithSSEB2("AES256"))
+	large.ChunkSize = 1
+	if _, err := large.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := large.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.startEncryption; got["mode"] != "SSE-B2" || got["algorithm"] != "AES256" {
+		t.Errorf("start_large_file serverSideEncryption = %#v, want SSE-B2/AES256", got)
+	}
+	if w.partEncryption != "" {
+		t.Errorf("upload_part sent SSE-B2 header %q, want none", w.partEncryption)
+	}
+
+	largeWithoutOption := bucket.Object("large-without-option").NewWriter(ctx)
+	largeWithoutOption.ChunkSize = 1
+	if _, err := largeWithoutOption.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := largeWithoutOption.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if w.startEncryption != nil {
+		t.Errorf("start_large_file without option sent serverSideEncryption %#v", w.startEncryption)
 	}
 }
 

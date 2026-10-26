@@ -31,11 +31,13 @@ const (
 )
 
 type copyOptions struct {
-	destinationBucket *Bucket
-	byteRange         string
-	metadataDirective MetadataDirective
-	contentType       string
-	info              map[string]string
+	destinationBucket  *Bucket
+	byteRange          string
+	metadataDirective  MetadataDirective
+	contentType        string
+	info               map[string]string
+	sourceSSECKey      *SSECKey
+	destinationSSECKey *SSECKey
 }
 
 // CopyOption configures a Copy operation.
@@ -67,20 +69,32 @@ func CopyWithMetadata(directive MetadataDirective, contentType string, info map[
 	}
 }
 
+// CopySourceSSECKey supplies the customer-managed key used to decrypt an
+// SSE-C source file during the server-side copy.
+func CopySourceSSECKey(key *SSECKey) CopyOption {
+	return func(o *copyOptions) { o.sourceSSECKey = key }
+}
+
+// CopyDestinationSSECKey encrypts the copied file with the supplied
+// customer-managed key. Without this option, the destination bucket's default
+// encryption applies.
+func CopyDestinationSSECKey(key *SSECKey) CopyOption {
+	return func(o *copyOptions) { o.destinationSSECKey = key }
+}
+
 // Copy creates destinationFileName from sourceFileID without transferring the
 // file's bytes through the caller. The copy is written to the receiver bucket
 // unless CopyToBucket is given, and the source file may be in any bucket of the
 // same account.
 //
 // The resulting file must be smaller than 5 GB; B2 rejects a larger source with
-// source_too_large unless CopyRange selects a smaller part of it. Copying a
-// larger file takes b2_copy_part, which blazer does not wrap.
+// source_too_large unless CopyRange selects a smaller part of it. Use Compose
+// to include a server-side copied range in a large file.
 //
-// Copy does not expose B2's per-copy Object Lock (fileRetention, legalHold) or
-// server-side encryption (sourceServerSideEncryption,
-// destinationServerSideEncryption) parameters. The copy takes the destination
-// bucket's defaults, and a source file encrypted with a customer-provided key
-// (SSE-C) cannot be copied.
+// Copy does not expose B2's per-copy Object Lock (fileRetention, legalHold)
+// parameters. Use CopySourceSSECKey for an SSE-C source and optionally
+// CopyDestinationSSECKey to encrypt the destination with SSE-C; otherwise the
+// destination bucket's default encryption applies.
 //
 // A copy that is retried after a lost response can leave an extra file version.
 func (b *Bucket) Copy(ctx context.Context, sourceFileID, destinationFileName string, opts ...CopyOption) (*Object, error) {
@@ -99,7 +113,7 @@ func (b *Bucket) Copy(ctx context.Context, sourceFileID, destinationFileName str
 		destination = o.destinationBucket
 	}
 
-	f, err := b.b.copyFile(ctx, sourceFileID, destinationFileName, destination.b.id(), o.byteRange, string(o.metadataDirective), o.contentType, o.info)
+	f, err := b.b.copyFile(ctx, sourceFileID, destinationFileName, destination.b.id(), o.byteRange, string(o.metadataDirective), o.contentType, o.info, o.sourceSSECKey, o.destinationSSECKey)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +121,16 @@ func (b *Bucket) Copy(ctx context.Context, sourceFileID, destinationFileName str
 }
 
 func (o *copyOptions) validate() error {
+	if o.sourceSSECKey != nil {
+		if err := o.sourceSSECKey.validate(); err != nil {
+			return err
+		}
+	}
+	if o.destinationSSECKey != nil {
+		if err := o.destinationSSECKey.validate(); err != nil {
+			return err
+		}
+	}
 	switch o.metadataDirective {
 	case CopyMetadata:
 		if o.contentType != "" || len(o.info) > 0 {
