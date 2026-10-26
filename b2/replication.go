@@ -24,6 +24,7 @@ const (
 	defaultReplicationPriority = 128
 	replicationPriorityOffset  = 5
 	maxReplicationPriority     = 1<<31 - 1
+	maxReplicationRules        = 2
 )
 
 type replicationOptions struct {
@@ -174,6 +175,9 @@ func SetupReplication(ctx context.Context, src, dst *Bucket, sourceKeyID, destin
 				return nil
 			}
 			return dst.Update(ctx, &BucketAttrs{ReplicationConfig: mergeReplicationDestination(dstAttrs.ReplicationConfig, sourceKeyID, destinationKeyID)})
+		}
+		if len(cfg.AsReplicationSource.ReplicationRules) >= maxReplicationRules {
+			return fmt.Errorf("setup replication: source bucket already has the maximum of two replication rules")
 		}
 	}
 	priority := nextReplicationPriority(srcAttrs.ReplicationConfig)

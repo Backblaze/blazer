@@ -270,6 +270,32 @@ func TestSetupReplicationIdempotency(t *testing.T) {
 	}
 }
 
+func TestSetupReplicationRejectsThirdSourceRuleWithoutWrites(t *testing.T) {
+	sourceConfig := &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{
+		SourceApplicationKeyID: "source-key",
+		ReplicationRules: []ReplicationRules{
+			{ReplicationRuleName: "first", DestinationBucketID: "dst-id", IsEnabled: true, Priority: 10},
+			{ReplicationRuleName: "second", DestinationBucketID: "other-id", IsEnabled: true, Priority: 20},
+		},
+	}}
+	destinationConfig := &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{
+		SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"},
+	}}
+	_, srcBackend, dstBackend, src, dst := replicationTestPair(t, sourceConfig, destinationConfig)
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRuleName("first"), WithRulePriority(10)); err != nil {
+		t.Fatalf("identical existing rule: %v", err)
+	}
+	if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+		t.Fatalf("identical rule wrote buckets: source=%d destination=%d", len(srcBackend.updates), len(dstBackend.updates))
+	}
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRuleName("third")); err == nil || !strings.Contains(err.Error(), "two replication rules") {
+		t.Fatalf("third rule error = %v, want two-rule limit", err)
+	}
+	if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+		t.Fatalf("third rule wrote buckets: source=%d destination=%d", len(srcBackend.updates), len(dstBackend.updates))
+	}
+}
+
 func TestSetupReplicationFailsClosedOnUnreadableConfig(t *testing.T) {
 	for _, hidden := range []string{"source", "destination"} {
 		t.Run(hidden, func(t *testing.T) {
