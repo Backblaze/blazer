@@ -40,13 +40,14 @@ type sseB2Wire struct {
 	srv *httptest.Server
 	mu  sync.Mutex
 
-	requests []sseB2WireRequest
-	objects  map[string][]byte
+	requests   []sseB2WireRequest
+	objects    map[string][]byte
+	encryption map[string]string
 }
 
 func newSSEB2Wire(t *testing.T) *sseB2Wire {
 	t.Helper()
-	w := &sseB2Wire{t: t, objects: make(map[string][]byte)}
+	w := &sseB2Wire{t: t, objects: make(map[string][]byte), encryption: make(map[string]string)}
 	w.srv = httptest.NewServer(http.HandlerFunc(w.serveHTTP))
 	t.Cleanup(w.srv.Close)
 	return w
@@ -75,6 +76,11 @@ func (w *sseB2Wire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(rw, noReplicationBucketJSON)
 	case strings.HasSuffix(r.URL.Path, "/b2_get_upload_url"):
 		_, _ = fmt.Fprintf(rw, `{"uploadUrl":%q,"authorizationToken":"upload-token"}`, w.srv.URL+"/upload")
+	case strings.HasSuffix(r.URL.Path, "/b2_list_file_names"):
+		w.mu.Lock()
+		algorithm := w.encryption["encrypted"]
+		w.mu.Unlock()
+		_, _ = fmt.Fprintf(rw, `{"files":[{"fileId":"id-encrypted","fileName":"encrypted","action":"upload","contentLength":22,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"serverSideEncryption":{"mode":"SSE-B2","algorithm":%q},"uploadTimestamp":1}],"nextFileName":null}`, algorithm)
 	case r.URL.Path == "/upload":
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -83,6 +89,7 @@ func (w *sseB2Wire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		name := r.Header.Get("X-Bz-File-Name")
 		w.mu.Lock()
 		w.objects[name] = data
+		w.encryption[name] = r.Header.Get("X-Bz-Server-Side-Encryption")
 		w.mu.Unlock()
 		_, _ = fmt.Fprintf(rw, `{"fileId":%q,"fileName":%q,"action":"upload","contentLength":%d,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"uploadTimestamp":1}`, "id-"+name, name, len(data))
 	case strings.HasSuffix(r.URL.Path, "/b2_start_large_file"):
@@ -218,6 +225,98 @@ func TestWithSSEB2WireAndRoundTrip(t *testing.T) {
 	parts := wire.requestsTo("/part")
 	if len(parts) != 1 || parts[0].headers.Get("X-Bz-Server-Side-Encryption") != "" {
 		t.Errorf("upload_part requests = %#v, want one request without a per-part SSE-B2 header", parts)
+	}
+}
+
+func TestSSEB2ListReadBackEncryption(t *testing.T) {
+	wire := newSSEB2Wire(t)
+	bucket := wire.bucket(t)
+	ctx := context.Background()
+	writer := bucket.Object("encrypted").NewWriter(ctx, WithSSEB2("AES256"))
+	if _, err := writer.Write([]byte("per-request encryption")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	iter := bucket.List(ctx, ListPrefix("encrypted"))
+	if !iter.Next() {
+		t.Fatalf("list: %v", iter.Err())
+	}
+	attrs, err := iter.Object().Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.ServerSideEncryption == nil || attrs.ServerSideEncryption.Mode != "SSE-B2" || attrs.ServerSideEncryption.Algorithm != "AES256" {
+		t.Fatalf("listed encryption = %#v, want SSE-B2/AES256", attrs.ServerSideEncryption)
+	}
+}
+
+func TestSSEB2ResumeRejectsWrongOrUnverifiableEncryption(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sse       string
+		options   []WriterOption
+		wantError bool
+	}{
+		{"SSE-B2 onto SSE-C", `{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":"digest"}`, []WriterOption{WithSSEB2("AES256")}, true},
+		{"no option onto SSE-C", `{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":"digest"}`, nil, true},
+		{"SSE-B2 with missing mode", `{"algorithm":"AES256"}`, []WriterOption{WithSSEB2("AES256")}, true},
+		{"SSE-B2 with wrong algorithm", `{"mode":"SSE-B2","algorithm":"other"}`, []WriterOption{WithSSEB2("AES256")}, true},
+		{"invalid requested algorithm cannot match", `{"mode":"SSE-B2","algorithm":"AES128"}`, []WriterOption{WithSSEB2("AES128")}, true},
+		{"matching SSE-B2", `{"mode":"SSE-B2","algorithm":"AES256"}`, []WriterOption{WithSSEB2("AES256")}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			wire.unfinishedEncryption = tc.sse
+			bucket := wire.newBucket(t)
+			w := bucket.Object("encrypted").NewWriter(context.Background(), tc.options...)
+			w.Resume = true
+			_, err := w.getLargeFile()
+			if tc.wantError && (err == nil || !strings.Contains(err.Error(), "cannot resume")) {
+				t.Fatalf("resume error = %v, want encryption rejection", err)
+			}
+			if !tc.wantError && err != nil {
+				t.Fatalf("matching encryption rejected: %v", err)
+			}
+			if tc.wantError && len(wire.requestsTo("/b2api/v4/b2_list_parts")) != 0 {
+				t.Fatal("listed parts before validating encryption")
+			}
+		})
+	}
+}
+
+func TestSSEB2AndSSECWriterOptionsAreMutuallyExclusive(t *testing.T) {
+	wire := newSSECPublicWire(t)
+	for _, tc := range []struct {
+		name    string
+		options []WriterOption
+	}{
+		{"SSE-B2 then SSE-C", []WriterOption{WithSSEB2("AES256"), WithSSECKey(wire.key)}},
+		{"SSE-C then SSE-B2", []WriterOption{WithSSECKey(wire.key), WithSSEB2("AES256")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bucket := wire.newBucket(t)
+			writer := bucket.Object("conflict").NewWriter(context.Background(), tc.options...)
+			if _, err := writer.Write([]byte("x")); err == nil || !strings.Contains(err.Error(), "SSE-B2 and SSE-C") {
+				t.Fatalf("Write error = %v, want mutual-exclusion rejection", err)
+			}
+			if err := writer.Close(); err == nil || !strings.Contains(err.Error(), "SSE-B2 and SSE-C") {
+				t.Fatalf("Close error = %v, want mutual-exclusion rejection", err)
+			}
+			empty := bucket.Object("empty-conflict").NewWriter(context.Background(), tc.options...)
+			if err := empty.Close(); err == nil || !strings.Contains(err.Error(), "SSE-B2 and SSE-C") {
+				t.Fatalf("empty Close error = %v, want mutual-exclusion rejection", err)
+			}
+			streamed := bucket.Object("streamed-conflict").NewWriter(context.Background(), tc.options...)
+			_, _ = io.Copy(streamed, bytes.NewReader([]byte("x")))
+			if err := streamed.Close(); err == nil || !strings.Contains(err.Error(), "SSE-B2 and SSE-C") {
+				t.Fatalf("ReadFrom Close error = %v, want mutual-exclusion rejection", err)
+			}
+		})
+	}
+	if got := len(wire.requestsTo("/upload")); got != 0 {
+		t.Fatalf("conflicting options made %d upload requests", got)
 	}
 }
 
