@@ -81,24 +81,25 @@ func TestAuthResponseLoggingRedactsSecrets(t *testing.T) {
 			check(tc.name, func() {
 				options := &b2Options{transport: logRoundTrip(func(req *http.Request) (*http.Response, error) {
 					return &http.Response{Request: req, StatusCode: 200, Status: "200 OK", Body: io.NopCloser(strings.NewReader(tc.body)), Header: http.Header{
-						"Authorization": {"response-header-secret"}, "Set-Cookie": {"cookie-secret"},
+						"Authorization": {"response-header-secret"}, "Set-Cookie": {"cookie-secret"}, "X-Unlabeled": {"unlabeled-response-secret"},
 					}}, nil
 				})}
 				var decoded map[string]interface{}
 				if err := options.makeRequest(context.Background(), tc.method, http.MethodPost, "https://example.invalid/b2api/v4/"+tc.method, nil, &decoded, map[string]string{"Authorization": "request-authorization-secret"}, nil); err != nil {
 					t.Fatal(err)
 				}
-			}, []string{tc.secret, "response-header-secret", "cookie-secret"}, "safe-marker")
+			}, []string{tc.secret, "response-header-secret", "cookie-secret", "unlabeled-response-secret"}, "safe-marker")
 		}
 		request.Header.Set("X-Blazer-Method", "b2_authorize_account")
 		request.Header.Set("Authorization", "request-authorization-secret")
 		request.Header.Set("X-Bz-Server-Side-Encryption-Customer-Key-Md5", "request-md5-secret")
 		request.Header.Set("X-Benign", "benign-header-marker")
+		request.Header.Set("X-Unlabeled", "unlabeled-request-secret")
 		request.URL.User = url.UserPassword("url-user-secret", "url-password-secret")
 		request.URL.RawQuery = "authorizationToken=query-secret"
 		check("request headers, URL and SSE-C JSON", func() {
 			logRequest(request, []byte(`{"customerKey":"request-json-key-secret","customerKeyMd5":"request-json-md5-secret","safe":"benign-json-marker"}`))
-		}, []string{"request-authorization-secret", "request-header-secret", "request-md5-secret", "request-json-key-secret", "request-json-md5-secret", "url-user-secret", "url-password-secret", "query-secret"}, "benign-json-marker")
+		}, []string{"request-authorization-secret", "request-header-secret", "request-md5-secret", "request-json-key-secret", "request-json-md5-secret", "unlabeled-request-secret", "url-user-secret", "url-password-secret", "query-secret"}, "benign-json-marker")
 		check("truncated response body", func() {
 			logResponse(&http.Response{Request: request, StatusCode: 200, Status: "200 OK", Header: make(http.Header)}, []byte(`{"authorizationToken":"truncated-secret","safe":"truncated-public-marker",`))
 		}, []string{"truncated-secret", "truncated-public-marker"}, "[unparseable JSON omitted]")

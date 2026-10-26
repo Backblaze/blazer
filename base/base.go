@@ -230,11 +230,11 @@ func logRequest(req *http.Request, args []byte) {
 		return
 	}
 	var headers []string
-	for k, v := range req.Header {
+	for k := range req.Header {
 		if sensitiveLogField(k) || k == "X-Blazer-Method" {
 			continue
 		}
-		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
+		headers = append(headers, k)
 	}
 	hstr := strings.Join(headers, ";")
 	method := req.Header.Get("X-Blazer-Method")
@@ -289,11 +289,11 @@ func logResponse(resp *http.Response, reply []byte) {
 		return
 	}
 	var headers []string
-	for k, v := range resp.Header {
+	for k := range resp.Header {
 		if resp.StatusCode >= 400 || sensitiveLogField(k) {
 			continue
 		}
-		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
+		headers = append(headers, k)
 	}
 	hstr := strings.Join(headers, "; ")
 	method := resp.Request.Header.Get("X-Blazer-Method")

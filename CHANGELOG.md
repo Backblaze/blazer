@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Verbose B2 wire logging redacts authorization tokens, newly created application keys, and SSE-C key fields; omits malformed or failed response bodies and untrusted transport error text. This fixes credential exposure in logs (#149).
+- Verbose B2 wire logging redacts authorization tokens, newly created application keys, and SSE-C key fields; logs header names without values and omits malformed or failed response bodies and untrusted transport error text. This fixes credential exposure in logs (#149).
 
 ## [0.9.0] - 2026-10-22
 
