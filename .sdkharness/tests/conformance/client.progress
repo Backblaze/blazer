@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CONFORMANCE blazer x client.progress -- the contract is bin/conformance/README.md.
 #
-# Scenario: polled upload progress; PARTIAL: pull model only, no callback
+# Scenario: byte-level upload and download progress callbacks
 #
 # NO DOCUMENTED CONTRACT FOUND -- this is SDK-side/ecosystem tooling, not a B2 API contract.
 # Progress reporting is client-side ergonomics; the B2 API has no progress
@@ -84,40 +84,30 @@ exit "$run_rc"
 : <<'__EOF_GO__'
 package main
 
-// blazer x client.progress -- a PARTIAL (⚠) cell.
+// blazer x client.progress -- a callback progress check.
 //
-// Setup   a large object
-// Action  upload it with a progress listener attached
-// Assert  callbacks fire, are monotonically non-decreasing, and the final
-//         value equals the total bytes
-// Go ⚠    PULL MODEL ONLY via Client.Status(); there is no callback interface
-//
-// There is no listener to attach, and that is the boundary this check asserts
-// rather than works around: blazer reports progress by polling
-// Client.Status(), and no exported field on b2.Writer takes a callback
-// (card.md, "Progress reporting -- yes (pull model)"; capabilities.tsv
-// client.progress = partial). The three properties the scenario asks for are
-// then checked against the polled series instead: it fires, it never goes
-// backwards, and it ends at the whole object.
+// Setup   a sub-chunk object
+// Action  upload and download it with progress listeners attached
+// Assert  callbacks include intermediate byte counts, never regress, and
+//         end at the payload size with known or unknown totals as appropriate
+// Go       b2.WithProgress and Reader.Progress report metered bytes.
 //
 // The API came from docs/sdks/blazer/card.md and godoc for
 // github.com/Backblaze/blazer/b2. Never from b2sdks/.
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Backblaze/blazer/b2"
 )
@@ -125,33 +115,12 @@ import (
 const capability = "client.progress"
 
 const (
-	progressChunkSize = 5000000
+	progressChunkSize = 20000000 // larger than the fixture: intermediate updates must be within one chunk
 	progressSize      = 15000000
 )
 
 func runCheck(ctx context.Context, target *string) error {
-	// --- the ⚠ boundary, before any network ------------------------------
-	// A callback interface would have to arrive through a field on the writer.
-	// Every exported field on b2.Writer is a plain value.
-	writerType := reflect.TypeOf((*b2.Writer)(nil)).Elem()
-	for i := 0; i < writerType.NumField(); i++ {
-		field := writerType.Field(i)
-		if field.PkgPath != "" {
-			continue
-		}
-		if field.Type.Kind() == reflect.Func {
-			return failf("callback boundary", "b2.Writer exposes the callback field %q, so the card's pull-model-only boundary no longer holds", field.Name)
-		}
-		if strings.Contains(strings.ToLower(field.Name), "progress") || strings.Contains(strings.ToLower(field.Name), "listener") {
-			return failf("callback boundary", "b2.Writer exposes %q, which the card does not record", field.Name)
-		}
-	}
-	if len(exportedFields((*b2.StatusInfo)(nil))) == 0 {
-		return failf("pull model", "b2.StatusInfo exposes no fields, so the pull model the card claims is not there")
-	}
-	note("boundary confirmed offline: b2.Writer exposes %v -- no callback field; progress is read from b2.StatusInfo %v", exportedFields((*b2.Writer)(nil)), exportedFields((*b2.StatusInfo)(nil)))
-
-	client, err := newObservableClient(ctx, *target)
+	client, err := newClient(ctx, *target)
 	if err != nil {
 		return err
 	}
@@ -165,41 +134,90 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 	defer cleanup()
 
-	sampler := sampleProgress(client, 50*time.Millisecond, writerRatios)
-	object, err := upload(ctx, bucket, name, payload, nil, func(w *b2.Writer) {
-		w.ChunkSize = progressChunkSize
-		w.ConcurrentUploads = 2
-	})
-	samples := sampler.stop()
-	if err != nil {
+	var mu sync.Mutex
+	var samples []progressSample
+	object := bucket.Object(name)
+	writer := object.NewWriter(ctx, b2.WithProgress(func(completed, total int64) {
+		mu.Lock()
+		samples = append(samples, progressSample{completed: completed, total: total})
+		mu.Unlock()
+	}))
+	writer.ChunkSize = progressChunkSize
+	writer.ConcurrentUploads = 2
+	if _, err := writer.ReadFrom(bytes.NewReader(payload)); err != nil {
+		if closeErr := writer.Close(); closeErr != nil {
+			return classify("upload", closeErr)
+		}
+		return classify("upload", err)
+	}
+	if err := writer.Close(); err != nil {
+		return classify("upload", err)
+	}
+	mu.Lock()
+	samples = append([]progressSample(nil), samples...)
+	mu.Unlock()
+
+	if err := checkProgress(samples, int64(len(payload)), int64(len(payload)), "known upload"); err != nil {
 		return err
 	}
+	knownCallbacks := len(samples)
 
-	// --- it fires ---------------------------------------------------------
-	if len(samples) == 0 {
-		return failf("progress", "Client.Status() reported no writer progress at any point during a %d-byte upload", len(payload))
+	// The same one-chunk payload written without a seeker has an unknown total.
+	var unknownSamples []progressSample
+	unknownObject := bucket.Object(objectName("progress-unknown.bin"))
+	unknownWriter := unknownObject.NewWriter(ctx, b2.WithProgress(func(completed, total int64) {
+		mu.Lock()
+		unknownSamples = append(unknownSamples, progressSample{completed: completed, total: total})
+		mu.Unlock()
+	}))
+	unknownWriter.ChunkSize = progressChunkSize
+	if _, err := io.Copy(unknownWriter, bytes.NewBuffer(payload)); err != nil {
+		_ = unknownWriter.Close()
+		return classify("unknown upload", err)
 	}
+	if err := unknownWriter.Close(); err != nil { return classify("unknown upload", err) }
+	mu.Lock()
+	unknownSamples = append([]progressSample(nil), unknownSamples...)
+	mu.Unlock()
+	if err := checkProgress(unknownSamples, int64(len(payload)), -1, "unknown upload"); err != nil { return err }
 
-	// --- it never goes backwards -------------------------------------------
-	if at := firstRegression(samples); at >= 0 {
-		return failf("progress", "the reported progress went backwards at sample %d of %d", at, len(samples))
+	var fullSamples []progressSample
+	fullReader := object.NewReader(ctx)
+	fullReader.ChunkSize = progressChunkSize
+	fullReader.Progress = func(completed, total int64) {
+		mu.Lock()
+		fullSamples = append(fullSamples, progressSample{completed: completed, total: total})
+		mu.Unlock()
 	}
+	fullBytes, readErr := io.ReadAll(fullReader)
+	closeErr := fullReader.Close()
+	if readErr != nil { return classify("full download", readErr) }
+	if closeErr != nil { return classify("full download", closeErr) }
+	if !bytes.Equal(fullBytes, payload) { return failf("full download", "bytes differ") }
+	mu.Lock()
+	fullSamples = append([]progressSample(nil), fullSamples...)
+	mu.Unlock()
+	if err := checkProgress(fullSamples, int64(len(payload)), -1, "full download"); err != nil { return err }
 
-	// --- it ends at the whole object ---------------------------------------
-	chunks := maxChunks(samples)
-	best := 0.0
-	for _, ratios := range samples {
-		if total := sumRatios(ratios); total > best {
-			best = total
-		}
+	const offset = 1
+	length := int64(len(payload) / 2)
+	var rangeSamples []progressSample
+	rangeReader := object.NewRangeReader(ctx, offset, length)
+	rangeReader.ChunkSize = progressChunkSize
+	rangeReader.Progress = func(completed, total int64) {
+		mu.Lock()
+		rangeSamples = append(rangeSamples, progressSample{completed: completed, total: total})
+		mu.Unlock()
 	}
-	if chunks == 0 {
-		return failf("progress", "the reported progress carried no chunks")
-	}
-	completion := best / float64(chunks)
-	if completion < 0.5 {
-		return failf("progress", "the reported progress never passed %.0f%% of the %d chunks it was tracking", completion*100, chunks)
-	}
+	rangeBytes, readErr := io.ReadAll(rangeReader)
+	closeErr = rangeReader.Close()
+	if readErr != nil { return classify("ranged download", readErr) }
+	if closeErr != nil { return classify("ranged download", closeErr) }
+	if !bytes.Equal(rangeBytes, payload[offset:offset+int(length)]) { return failf("ranged download", "bytes differ") }
+	mu.Lock()
+	rangeSamples = append([]progressSample(nil), rangeSamples...)
+	mu.Unlock()
+	if err := checkProgress(rangeSamples, length, length, "ranged download"); err != nil { return err }
 
 	attrs, err := object.Attrs(ctx)
 	if err != nil {
@@ -208,193 +226,28 @@ func runCheck(ctx context.Context, target *string) error {
 	if attrs.Size != int64(len(payload)) {
 		return failf("progress", "the finished object is %d bytes, expected %d", attrs.Size, len(payload))
 	}
-	note("%d progress samples over %d chunks, peaking at %.0f%% complete; the FINAL value is taken from the stored object's size (%d bytes) because the pull model has no terminal event to observe", len(samples), chunks, completion*100, attrs.Size)
+	note("byte-level callbacks: known-upload=%d unknown-upload=%d full-download=%d ranged-download=%d final=%d bytes", knownCallbacks, len(unknownSamples), len(fullSamples), len(rangeSamples), attrs.Size)
 	return nil
 }
 
-// --- pull-model progress sampling ------------------------------------------
-// blazer reports transfer progress by POLLING only: Client.Status() returns
-// per-writer and per-reader chunk ratios and there is no callback interface
-// (docs/sdks/blazer/capabilities.tsv: client.progress = partial). Sampling it
-// is therefore the only observation of in-flight parts the published package
-// offers, and it is a real one: a chunk whose ratio is strictly between 0 and 1
-// is a part in flight at that instant.
-
-type progressSampler struct {
-	mu      sync.Mutex
-	samples [][]float64
-	done    chan struct{}
-	stopped chan struct{}
+type progressSample struct {
+	completed int64
+	total     int64
 }
 
-func sampleProgress(client *b2.Client, every time.Duration, pick func(*b2.StatusInfo) [][]float64) *progressSampler {
-	s := &progressSampler{done: make(chan struct{}), stopped: make(chan struct{})}
-	go func() {
-		defer close(s.stopped)
-		ticker := time.NewTicker(every)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-s.done:
-				return
-			case <-ticker.C:
-				info := client.Status()
-				if info == nil {
-					continue
-				}
-				for _, ratios := range pick(info) {
-					if len(ratios) == 0 {
-						continue
-					}
-					snapshot := append([]float64(nil), ratios...)
-					s.mu.Lock()
-					s.samples = append(s.samples, snapshot)
-					s.mu.Unlock()
-				}
-			}
-		}
-	}()
-	return s
-}
-
-func (s *progressSampler) stop() [][]float64 {
-	close(s.done)
-	<-s.stopped
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.samples
-}
-
-func writerRatios(info *b2.StatusInfo) [][]float64 {
-	var out [][]float64
-	for _, w := range info.Writers {
-		if w != nil {
-			out = append(out, w.Progress)
-		}
+func checkProgress(samples []progressSample, wantCompleted, wantTotal int64, label string) error {
+	if len(samples) == 0 { return failf("progress", "%s callback did not fire", label) }
+	var previous int64
+	var intermediate bool
+	for i, sample := range samples {
+		if sample.completed < previous { return failf("progress", "%s callback %d went backwards: %d after %d", label, i, sample.completed, previous) }
+		if sample.total != wantTotal { return failf("progress", "%s callback %d total=%d, want %d", label, i, sample.total, wantTotal) }
+		if sample.completed > 0 && sample.completed < wantCompleted { intermediate = true }
+		previous = sample.completed
 	}
-	return out
-}
-
-func readerRatios(info *b2.StatusInfo) [][]float64 {
-	var out [][]float64
-	for _, r := range info.Readers {
-		if r != nil {
-			out = append(out, r.Progress)
-		}
-	}
-	return out
-}
-
-// maxInFlight is the largest number of chunks seen strictly in progress in a
-// single sample: the direct observation of concurrency.
-func maxInFlight(samples [][]float64) int {
-	best := 0
-	for _, ratios := range samples {
-		inFlight := 0
-		for _, ratio := range ratios {
-			if ratio > 0 && ratio < 1 {
-				inFlight++
-			}
-		}
-		if inFlight > best {
-			best = inFlight
-		}
-	}
-	return best
-}
-
-// maxChunks is the largest chunk count seen, i.e. how many parts the transfer
-// was split into.
-func maxChunks(samples [][]float64) int {
-	best := 0
-	for _, ratios := range samples {
-		if len(ratios) > best {
-			best = len(ratios)
-		}
-	}
-	return best
-}
-
-func sumRatios(ratios []float64) float64 {
-	total := 0.0
-	for _, ratio := range ratios {
-		total += ratio
-	}
-	return total
-}
-
-// firstRegression returns the index of the first sample whose completed work
-// went BACKWARDS, or -1. Progress that decreases is a defect in the one
-// reporting model blazer offers.
-func firstRegression(samples [][]float64) int {
-	previous := -1.0
-	for i, ratios := range samples {
-		total := sumRatios(ratios)
-		if previous >= 0 && total < previous-1e-9 {
-			return i
-		}
-		previous = total
-	}
-	return -1
-}
-
-// --- loopback throttle -----------------------------------------------------
-// At @simulator the server is on loopback, where a 5 MB part crosses in a few
-// milliseconds, inside a single 50-100ms sampling window, so the pull-model
-// observation above saw nothing and the FAIL described the measurement, not
-// blazer. throttledTransport paces request and response bodies on the CLIENT
-// side, through the published b2.Transport option (godoc), to
-// throttleBytesPerSec: a 5 MB part then takes ~0.5s, 5-10 sampling windows.
-// It injects no fault, leaves the server untouched, and is off at every other
-// target, whose real network already paces the transfer.
-const throttleBytesPerSec = 10 << 20
-
-type throttledTransport struct{ next http.RoundTripper }
-
-func (t throttledTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Body != nil {
-		r = r.Clone(r.Context())
-		r.Body = &throttledBody{rc: r.Body}
-	}
-	resp, err := t.next.RoundTrip(r)
-	if err == nil && resp.Body != nil {
-		resp.Body = &throttledBody{rc: resp.Body}
-	}
-	return resp, err
-}
-
-type throttledBody struct{ rc io.ReadCloser }
-
-func (b *throttledBody) Read(p []byte) (int, error) {
-	if len(p) > 32<<10 {
-		p = p[:32<<10]
-	}
-	n, err := b.rc.Read(p)
-	time.Sleep(time.Duration(n) * time.Second / throttleBytesPerSec)
-	return n, err
-}
-
-func (b *throttledBody) Close() error { return b.rc.Close() }
-
-// newObservableClient is newClient with the throttle at @simulator only.
-func newObservableClient(ctx context.Context, target string) (*b2.Client, error) {
-	if target != "simulator" {
-		return newClient(ctx, target)
-	}
-	base, err := apiBase(target)
-	if err != nil {
-		return nil, err
-	}
-	id, key, err := credentials(target)
-	if err != nil {
-		return nil, err
-	}
-	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"), b2.Transport(throttledTransport{next: http.DefaultTransport}))
-	if err != nil {
-		return nil, classify("authenticate", err)
-	}
-	note("loopback throttle on: bodies paced to %d bytes/s client-side so a transfer spans several sampling windows", throttleBytesPerSec)
-	return client, nil
+	if !intermediate { return failf("progress", "%s has no intermediate byte-level callback", label) }
+	if previous != wantCompleted { return failf("progress", "%s final=%d, want %d", label, previous, wantCompleted) }
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -702,26 +555,6 @@ func anyContains(values []string, substr string) bool {
 		}
 	}
 	return false
-}
-
-// exportedFields names a struct's exported fields, which is how the ⚠ boundary
-// assertions interrogate the PUBLISHED package rather than trusting the card.
-func exportedFields(v interface{}) []string {
-	var names []string
-	t := reflect.TypeOf(v)
-	for t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return names
-	}
-	for i := 0; i < t.NumField(); i++ {
-		if field := t.Field(i); field.PkgPath == "" {
-			names = append(names, field.Name)
-		}
-	}
-	sort.Strings(names)
-	return names
 }
 
 func infoValue(info map[string]string, key string) (string, bool) {

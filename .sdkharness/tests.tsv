@@ -8,7 +8,9 @@ conformance	client.progress	simulator	./.sdkharness/tests/run-conformance
 conformance	client.sync	simulator	./.sdkharness/tests/run-conformance
 conformance	client.simulator	simulator	./.sdkharness/tests/run-conformance
 conformance	enc.sse_b2	simulator	./.sdkharness/tests/run-conformance
+conformance	enc.sse_c	simulator	./.sdkharness/tests/run-conformance
 conformance	files.delete_version	simulator	./.sdkharness/tests/run-conformance
+conformance	files.download_by_id	simulator	./.sdkharness/tests/run-conformance
 conformance	files.download_content	simulator	./.sdkharness/tests/run-conformance
 conformance	files.hide	simulator	./.sdkharness/tests/run-conformance
 conformance	files.list	simulator	./.sdkharness/tests/run-conformance
@@ -18,6 +20,7 @@ conformance	files.upload	simulator	./.sdkharness/tests/run-conformance
 conformance	keys.crud	simulator	./.sdkharness/tests/run-conformance
 conformance	keys.multi_bucket	simulator	./.sdkharness/tests/run-conformance
 conformance	large.concurrent_parts	simulator	./.sdkharness/tests/run-conformance
+conformance	large.compose_mixed	simulator	./.sdkharness/tests/run-conformance
 conformance	large.multipart	simulator	./.sdkharness/tests/run-conformance
 conformance	large.parallel_download	simulator	./.sdkharness/tests/run-conformance
 conformance	large.resume	simulator	./.sdkharness/tests/run-conformance
