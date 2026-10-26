@@ -487,6 +487,10 @@ func (t *testLargeFile) getUploadPartURL(context.Context) (b2FileChunkInterface,
 	}, nil
 }
 
+func (t *testLargeFile) copyPart(context.Context, string, int, string) (b2FilePartInterface, error) {
+	return nil, fmt.Errorf("testLargeFile.copyPart: not implemented")
+}
+
 func (t *testLargeFile) cancel(ctx context.Context) error { return ctx.Err() }
 
 type testFileChunk struct {
