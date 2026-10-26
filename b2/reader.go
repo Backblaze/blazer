@@ -52,6 +52,7 @@ type Reader struct {
 	cancel     context.CancelFunc // cancels ctx
 	o          *Object
 	name       string
+	ssec       *SSECKey
 	offset     int64 // the start of the file
 	length     int64 // the length to read, or -1
 	csize      int   // chunk size
@@ -126,20 +127,20 @@ func (r *Reader) thread() {
 			r.rmux.Lock()
 			chunkID := r.chwid
 			r.chwid++
-			r.rmux.Unlock()
 			offset := int64(chunkID*r.csize) + r.offset
 			size := int64(r.csize)
 			if r.length > 0 {
-				if size > r.length {
+				if size >= r.length {
 					buf.final = true
 					size = r.length
 				}
 				r.length -= size
 			}
+			r.rmux.Unlock()
 			var b backoff
 			var attempts int
 		redo:
-			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false)
+			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false, r.ssec)
 			if err == errNoMoreContent {
 				// this read generated a 416 so we are entirely past the end of the object
 				r.rmux.Lock()
