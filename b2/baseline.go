@@ -58,6 +58,7 @@ type b2BucketInterface interface {
 	listFileVersions(context.Context, int, string, string, string, string) ([]b2FileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
+	downloadFileByID(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
 	hideFile(context.Context, string) (b2FileInterface, error)
 	copyFile(context.Context, string, string, string, string, string, string, map[string]string, *SSECKey, *SSECKey) (b2FileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
@@ -89,6 +90,7 @@ type b2FileInterface interface {
 type b2LargeFileInterface interface {
 	finishLargeFile(context.Context) (b2FileInterface, error)
 	getUploadPartURL(context.Context) (b2FileChunkInterface, error)
+	copyPart(context.Context, string, int, string) (b2FilePartInterface, error)
 	cancel(context.Context) error
 }
 
@@ -633,6 +635,21 @@ func (b *b2Bucket) downloadFileByName(ctx context.Context, name string, offset, 
 	return &b2FileReader{fr}, nil
 }
 
+func (b *b2Bucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool, ssec *SSECKey) (b2FileReaderInterface, error) {
+	fr, err := b.b.DownloadFileByIDWithSSEC(ctx, id, offset, size, header, ssecToBase(ssec))
+	if err != nil {
+		code, _ := base.Code(err)
+		switch code {
+		case http.StatusRequestedRangeNotSatisfiable:
+			return nil, errNoMoreContent
+		case http.StatusNotFound:
+			return nil, b2err{err: err, notFoundErr: true}
+		}
+		return nil, err
+	}
+	return &b2FileReader{fr}, nil
+}
+
 func (b *b2Bucket) hideFile(ctx context.Context, name string) (b2FileInterface, error) {
 	f, err := b.b.HideFile(ctx, name)
 	if err != nil {
@@ -763,6 +780,14 @@ func (b *b2LargeFile) getUploadPartURL(ctx context.Context) (b2FileChunkInterfac
 		return nil, err
 	}
 	return &b2FileChunk{b: c, encryption: b.encryption}, nil
+}
+
+func (b *b2LargeFile) copyPart(ctx context.Context, sourceFileID string, partNumber int, byteRange string) (b2FilePartInterface, error) {
+	part, err := b.b.CopyPart(ctx, sourceFileID, partNumber, byteRange, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &b2FilePart{part}, nil
 }
 
 func (b *b2LargeFile) cancel(ctx context.Context) error {

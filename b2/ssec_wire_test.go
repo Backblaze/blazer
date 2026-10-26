@@ -92,7 +92,7 @@ func (w *ssecPublicWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	recorded := ssecPublicRequest{method: r.Method, path: r.URL.Path, headers: r.Header.Clone()}
-	if strings.HasPrefix(r.URL.Path, "/b2api/") {
+	if strings.HasPrefix(r.URL.Path, "/b2api/") && r.Method != http.MethodGet {
 		recorded.body = map[string]any{}
 		if err := json.NewDecoder(r.Body).Decode(&recorded.body); err != nil {
 			w.t.Errorf("decode %s: %v", r.URL.Path, err)
@@ -120,6 +120,11 @@ func (w *ssecPublicWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(rw, `{}`)
 	case strings.HasSuffix(r.URL.Path, "/b2_finish_large_file"):
 		_, _ = fmt.Fprint(rw, `{"fileId":"large-id","fileName":"multipart","action":"upload","uploadTimestamp":1}`)
+	case strings.HasSuffix(r.URL.Path, "/b2_download_file_by_id"):
+		if r.URL.Query().Get("fileId") != "id-encrypted" {
+			w.t.Errorf("by-ID download requested %q, want id-encrypted", r.URL.Query().Get("fileId"))
+		}
+		w.serveDownload(rw, r, "encrypted")
 	case r.URL.Path == "/upload":
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -131,7 +136,7 @@ func (w *ssecPublicWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.mu.Unlock()
 		_, _ = fmt.Fprintf(rw, `{"fileId":%q,"fileName":%q,"action":"upload","contentLength":%d,"contentSha1":"%040d","contentType":"application/octet-stream","fileInfo":{},"uploadTimestamp":1}`, "id-"+name, name, len(data), 0)
 	case strings.HasPrefix(r.URL.Path, "/file/bucket/"):
-		w.serveDownload(rw, r)
+		w.serveDownload(rw, r, strings.TrimPrefix(r.URL.Path, "/file/bucket/"))
 	case strings.HasSuffix(r.URL.Path, "/b2_get_file_info"):
 		if recorded.body["fileId"] == "historical-id" {
 			_, _ = fmt.Fprint(rw, `{"fileId":"historical-id","fileName":"encrypted","action":"upload","contentLength":13,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{"version":"historical"},"uploadTimestamp":1}`)
@@ -154,8 +159,7 @@ func (w *ssecPublicWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (w *ssecPublicWire) serveDownload(rw http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/file/bucket/")
+func (w *ssecPublicWire) serveDownload(rw http.ResponseWriter, r *http.Request, name string) {
 	if name == "encrypted" && !w.hasKey(r.Header) {
 		rw.WriteHeader(http.StatusBadRequest)
 		_, _ = fmt.Fprint(rw, `{"status":400,"code":"access_denied","message":"SSE-C key required"}`)
@@ -348,6 +352,50 @@ func TestSSECWriterDownloadAttrsAndCopyWire(t *testing.T) {
 			t.Errorf("plain copy unexpectedly sent %s", field)
 		}
 	}
+}
+
+func TestDownloadFileByIDWithSSECWire(t *testing.T) {
+	wire := newSSECPublicWire(t)
+	bucket := wire.newBucket(t)
+	ctx := context.Background()
+	payload := []byte("encrypted by-id payload")
+	object := bucket.Object("encrypted")
+	writer := object.NewWriter(ctx, WithSSECKey(wire.key))
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := bucket.DownloadFileByID(ctx, object.ID(), wire.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := io.ReadAll(reader)
+	if closeErr := reader.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if readErr != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("by-ID download = %q, error %v; want %q", got, readErr, payload)
+	}
+	requests := wire.requestsTo("/b2api/v4/b2_download_file_by_id")
+	if len(requests) != 1 || requests[0].method != http.MethodGet {
+		t.Fatalf("by-ID requests = %#v, want one GET", requests)
+	}
+	assertSSECWireHeaders(t, requests[0].headers, wire.keyValue, wire.keyMD5)
+	if _, err := bucket.DownloadFileByID(ctx, object.ID()); err == nil {
+		t.Fatal("by-ID download without SSE-C key succeeded")
+	} else if strings.Contains(err.Error(), wire.keyValue) || strings.Contains(err.Error(), wire.keyMD5) {
+		t.Fatalf("by-ID error disclosed key material: %v", err)
+	}
+	if _, err := bucket.DownloadFileByID(ctx, object.ID(), nil); err == nil {
+		t.Fatal("explicit nil SSE-C key was accepted")
+	}
+	requests = wire.requestsTo("/b2api/v4/b2_download_file_by_id")
+	if len(requests) != 2 {
+		t.Fatalf("by-ID requests = %d, want keyed and missing-key requests only", len(requests))
+	}
+	assertNoSSECWireHeaders(t, requests[1].headers)
 }
 
 func TestSSECReadRejectsMissingAndWrongKeys(t *testing.T) {

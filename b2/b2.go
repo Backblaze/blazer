@@ -700,10 +700,11 @@ func (o *Object) URL() string {
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	ctx, cancel := context.WithCancel(ctx)
 	w := &Writer{
-		o:      o,
-		name:   o.name,
-		ctx:    ctx,
-		cancel: cancel,
+		o:             o,
+		name:          o.name,
+		ctx:           ctx,
+		cancel:        cancel,
+		progressTotal: -1,
 	}
 	for _, f := range o.b.c.opts.writerOpts {
 		f(w)
@@ -719,19 +720,22 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 }
 
 // NewRangeReader returns a reader for the given object, reading up to length
-// bytes.  If length is negative, the rest of the object is read.
+// bytes. If length is negative, the rest of the object is read. With a Progress
+// callback, a finite range reports the available byte count when a HEAD
+// request can determine it; otherwise the progress total is -1.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys ...*SSECKey) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	key, err := optionalSSECKey(keys)
 	r := &Reader{
-		ctx:    ctx,
-		cancel: cancel,
-		o:      o,
-		name:   o.name,
-		ssec:   key,
-		chunks: make(map[int]*rchunk),
-		length: length,
-		offset: offset,
+		ctx:           ctx,
+		cancel:        cancel,
+		o:             o,
+		name:          o.name,
+		ssec:          key,
+		chunks:        make(map[int]*rchunk),
+		length:        length,
+		offset:        offset,
+		progressTotal: readerProgressTotal(length),
 	}
 	if err != nil {
 		r.err = err
@@ -739,11 +743,30 @@ func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys 
 	return r
 }
 
+func readerProgressTotal(length int64) int64 {
+	if length >= 0 {
+		return length
+	}
+	return -1
+}
+
 // NewReader returns a reader for the given object. Pass an SSE-C key when the
 // object was encrypted with a customer-managed key; the key is not retained by
 // the Object, Bucket or Client.
 func (o *Object) NewReader(ctx context.Context, keys ...*SSECKey) *Reader {
 	return o.NewRangeReader(ctx, 0, -1, keys...)
+}
+
+// DownloadFileByID returns a reader for a file identified by its B2 file ID.
+// It makes one download request; use Object.NewReader for chunked downloads by
+// file name. Supply an SSE-C key for a customer-key-encrypted version; the key
+// is used only on this request and is not retained.
+func (b *Bucket) DownloadFileByID(ctx context.Context, id string, keys ...*SSECKey) (io.ReadCloser, error) {
+	key, err := optionalSSECKey(keys)
+	if err != nil {
+		return nil, err
+	}
+	return b.b.downloadFileByID(ctx, id, 0, 0, false, key)
 }
 
 func (o *Object) ensure(ctx context.Context, keys ...*SSECKey) error {

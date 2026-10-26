@@ -393,10 +393,13 @@ func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, co
 	return nil, "", fmt.Errorf("testBucket.listUnfinishedLargeFiles(ctx, %d, %q): not implemented", count, cont)
 }
 
-func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, _ bool, _ *SSECKey) (b2FileReaderInterface, error) {
+func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, size int64, head bool, _ *SSECKey) (b2FileReaderInterface, error) {
 	gmux.Lock()
 	defer gmux.Unlock()
 	f := t.files[name]
+	if head {
+		return &testFileReader{s: len(f), n: name}, nil
+	}
 	end := int(offset + size)
 	if end >= len(f) {
 		end = len(f)
@@ -409,6 +412,10 @@ func (t *testBucket) downloadFileByName(_ context.Context, name string, offset, 
 		s: end - int(offset),
 		n: name,
 	}, nil
+}
+
+func (t *testBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool, ssec *SSECKey) (b2FileReaderInterface, error) {
+	return t.downloadFileByName(ctx, id, offset, size, header, ssec)
 }
 
 func (t *testBucket) hideFile(context.Context, string) (b2FileInterface, error) { return nil, nil }
@@ -478,6 +485,10 @@ func (t *testLargeFile) getUploadPartURL(context.Context) (b2FileChunkInterface,
 		parts: t.parts,
 		errs:  t.errs,
 	}, nil
+}
+
+func (t *testLargeFile) copyPart(context.Context, string, int, string) (b2FilePartInterface, error) {
+	return nil, fmt.Errorf("testLargeFile.copyPart: not implemented")
 }
 
 func (t *testLargeFile) cancel(ctx context.Context) error { return ctx.Err() }

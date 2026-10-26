@@ -62,6 +62,7 @@ type beBucketInterface interface {
 	listFileVersions(context.Context, int, string, string, string, string) ([]beFileInterface, string, string, error)
 	listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool, *SSECKey) (beFileReaderInterface, error)
+	downloadFileByID(context.Context, string, int64, int64, bool, *SSECKey) (beFileReaderInterface, error)
 	hideFile(context.Context, string) (beFileInterface, error)
 	copyFile(context.Context, string, string, string, string, string, string, map[string]string, *SSECKey, *SSECKey) (beFileInterface, error)
 	getDownloadAuthorization(context.Context, string, time.Duration, string) (string, error)
@@ -109,6 +110,7 @@ type beFile struct {
 type beLargeFileInterface interface {
 	finishLargeFile(context.Context) (beFileInterface, error)
 	getUploadPartURL(context.Context) (beFileChunkInterface, error)
+	copyPart(context.Context, string, int, string) (beFilePartInterface, error)
 	cancel(context.Context) error
 }
 
@@ -551,6 +553,28 @@ func (b *beBucket) downloadFileByName(ctx context.Context, name string, offset, 
 	return reader, nil
 }
 
+func (b *beBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, header bool, ssec *SSECKey) (beFileReaderInterface, error) {
+	var reader beFileReaderInterface
+	f := func() error {
+		g := func() error {
+			fr, err := b.b2bucket.downloadFileByID(ctx, id, offset, size, header, ssec)
+			if err != nil {
+				return err
+			}
+			reader = &beFileReader{
+				b2fileReader: fr,
+				ri:           b.ri,
+			}
+			return nil
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return reader, nil
+}
+
 func (b *beBucket) hideFile(ctx context.Context, name string) (beFileInterface, error) {
 	var file beFileInterface
 	f := func() error {
@@ -796,6 +820,25 @@ func (b *beLargeFile) getUploadPartURL(ctx context.Context) (beFileChunkInterfac
 		return nil, err
 	}
 	return chunk, nil
+}
+
+func (b *beLargeFile) copyPart(ctx context.Context, sourceFileID string, partNumber int, byteRange string) (beFilePartInterface, error) {
+	var part beFilePartInterface
+	f := func() error {
+		g := func() error {
+			copied, err := b.b2largeFile.copyPart(ctx, sourceFileID, partNumber, byteRange)
+			if err != nil {
+				return err
+			}
+			part = &beFilePart{b2filePart: copied, ri: b.ri}
+			return nil
+		}
+		return withReauth(ctx, b.ri, g)
+	}
+	if err := withBackoff(ctx, b.ri, f); err != nil {
+		return nil, err
+	}
+	return part, nil
 }
 
 func (b *beLargeFile) finishLargeFile(ctx context.Context) (beFileInterface, error) {
