@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Concurrent requests now use a consistent authorization snapshot while a 401 refreshes the account token. Simultaneous 401s share one reauthorization instead of racing to update shared account state.
+
 ## [0.9.0] - 2026-10-22
 
 ### Added

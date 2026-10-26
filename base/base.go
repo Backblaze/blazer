@@ -246,7 +246,16 @@ func logRequest(req *http.Request, args []byte) {
 	blog.V(2).Infof(">> %s %v: %v {%s} (no args)", method, req.Method, req.URL, hstr)
 }
 
-var authRegexp = regexp.MustCompile(`"authorizationToken": ".[^"]*"`)
+var authRegexp = regexp.MustCompile(`"authorizationToken"[[:space:]]*:[[:space:]]*"[^"]*"`)
+
+func redactResponse(method string, reply []byte) string {
+	if method == "b2_authorize_account" {
+		// Never log authorization responses, even if a field is escaped or
+		// the service changes its JSON formatting.
+		return "[redacted]"
+	}
+	return string(authRegexp.ReplaceAll(reply, []byte(`"authorizationToken": "[redacted]"`)))
+}
 
 func logResponse(resp *http.Response, reply []byte) {
 	if !blog.V(2) {
@@ -260,7 +269,7 @@ func logResponse(resp *http.Response, reply []byte) {
 	method := resp.Request.Header.Get("X-Blazer-Method")
 	id := resp.Request.Header.Get("X-Blazer-Request-ID")
 	if reply != nil {
-		safe := string(authRegexp.ReplaceAll(reply, []byte(`"authorizationToken": "[redacted]"`)))
+		safe := redactResponse(method, reply)
 		blog.V(2).Infof("<< %s (%s) %s {%s} (%s)", method, id, resp.Status, hstr, safe)
 		return
 	}
