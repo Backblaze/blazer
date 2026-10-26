@@ -49,13 +49,13 @@ If artifacts live in `intent/`, add a line saying `intent/` holds `intent.md`, `
 ## Audit an existing file
 
 - Remove anything stale, obvious from the code, or already enforced by CI or a hook.
-- Move multi-step procedures into a skill (`sdlc-policy-skill`); move must-always-hold rules behind a hook (`sdlc-hook-gate`).
+- Move multi-step procedures into a skill (`sdlc-policy-skill`); move must-always-hold rules behind a hook (`.claude/settings.json`) or a CI check.
 - Flag missing sections, unverifiable commands, and contradictions with `README` or CI.
 - Report the diff and why; do not silently drop lines someone may rely on.
 
 ## Maintenance rule
 
-When Claude makes the same mistake twice, the correction goes into `CLAUDE.md` in the same PR. PR review should also flag changes that make `CLAUDE.md` outdated (`sdlc-pr-review`). Trimming changes agent behavior, so run the evals when you have them (`sdlc-evals`).
+When Claude makes the same mistake twice, the correction goes into `CLAUDE.md` in the same PR. PR review should also flag changes that make `CLAUDE.md` outdated (`sdlc-pr-review`). Trimming changes agent behavior, so watch the next few PRs for regressions.
 
 ## Measure
 

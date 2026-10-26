@@ -44,7 +44,7 @@ Run <script> and include its output in your summary.
 
 - **Hook at the edit**: a `PostToolUse` hook (matcher `Edit|Write`) that runs the same script the skill names, only for the files that changed. Exit code 2 feeds the script's message back to Claude so it fixes the line. Keep build-phase hooks fast and scoped; heavy checks belong at commit or PR.
 - **Required check at the PR**: run the same script in CI as a required status check. It also catches changes that bypassed the hook (a shell command rewriting a file, a different tool).
-- A hook that asks a human for approval is a gate, not a guardrail: see `sdlc-hook-gate`.
+- A hook that asks a human for approval is a gate, not a guardrail; keep those at release, not mid-build.
 
 ## Measure
 

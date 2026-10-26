@@ -30,7 +30,7 @@ Report at most five nits per review; summarize the rest as a count.
 Generated files and anything CI already enforces.
 ```
 
-Hosting options: the managed Code Review service (admin enables it per repository) or the `claude-code-action` in your own CI when you need control of the pipeline or model access through your own cloud agreement (`sdlc-cicd`).
+Hosting options: the managed Code Review service (admin enables it per repository) or the `claude-code-action` in your own CI when you need control of the pipeline or model access through your own cloud agreement.
 
 ## Mode B: review a diff or PR
 

@@ -15,7 +15,7 @@ Work starts with a written, reviewable plan. Plan mode lets Claude read the code
 4. Let the engineer interrogate it. Be ready to answer: what could this break, which step is riskiest, which alternatives were rejected and why.
 5. Iterate until someone who never saw the conversation could implement the change from the plan alone.
 6. Commit the approved plan as `intent/<slug>/plan.md`. Then implement; with a solid plan this is often one pass.
-7. If implementation departs from the plan, update `plan.md` in the same commit. Consider a hook that flags source changes with no matching plan update (`sdlc-hook-gate`).
+7. If implementation departs from the plan, update `plan.md` in the same commit. Consider a hook that flags source changes with no matching plan update.
 
 ## Template
 
