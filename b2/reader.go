@@ -301,9 +301,6 @@ func (r *Reader) Read(p []byte) (int, error) {
 	if err := r.getErr(); err != nil {
 		return 0, err
 	}
-	if r.bounded && r.length == 0 && r.chbuf == nil {
-		return 0, io.EOF
-	}
 	r.init.Do(r.initFunc)
 	if r.progressTotal == 0 {
 		// A zero-length range is finite, and needs no download worker.
