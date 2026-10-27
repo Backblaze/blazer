@@ -1,0 +1,3 @@
+kind: Added
+body: "`b2/sync.Sync` pushes a local directory tree into a B2 prefix with configurable comparison, concurrency, dry-run reporting, and per-file failure results. It follows a symlinked root but not symlinks below it; changed large files are re-uploaded rather than resumed."
+time: 2026-10-26T13:00:02.000000-05:00

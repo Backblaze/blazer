@@ -1,0 +1,3 @@
+kind: Fixed
+body: Large-file Writer uploads retain a replacement upload-part endpoint across later chunks; copied and uploaded part replacement safely retain the verified prior size across ambiguous responses. `File.AsLargeFile().CopyPart` no longer panics, and Compose stops buffering promptly when its context is canceled.
+time: 2026-10-26T16:39:22.868426-05:00

@@ -1,0 +1,3 @@
+kind: Fixed
+body: "`b2/sync` treats an unavailable destination SHA1 as changed, stops hashing after context cancellation, rejects files swapped for symlinks after walking, cancels an upload if the streamed bytes differ from the walk-time SHA1, and reports a destination object whose attributes cannot be read only as a failure of the local file that maps to it."
+time: 2026-10-26T13:00:02.000000-05:00

@@ -1,0 +1,3 @@
+kind: Added
+body: '`(*b2.Bucket).DownloadFileByID` downloads the exact file version identified by its B2 file ID, including historical versions and optional per-request SSE-C keys; `(*base.Bucket).DownloadFileByID` provides low-level GET, HEAD, and range requests.'
+time: 2026-10-26T16:39:21.752386-05:00

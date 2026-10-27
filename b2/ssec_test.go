@@ -147,19 +147,32 @@ func TestSSECKeyEveryFormatRedactsMaterial(t *testing.T) {
 }
 
 func TestSSECReaderMethodTypeChangeDocumented(t *testing.T) {
-	changelog, err := os.ReadFile(filepath.Join("..", "CHANGELOG.md"))
+	// The note lives in a changie fragment until a release batches it into CHANGELOG.md, so
+	// look in both: one line must carry the Breaking marker and every detail.
+	files, err := filepath.Glob(filepath.Join("..", ".changes", "*", "*.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	unreleased := strings.SplitN(string(changelog), "## [0.9.0]", 2)[0]
-	_, breaking, found := strings.Cut(unreleased, "### Breaking")
-	if !found {
-		t.Fatal("Unreleased changelog has no Breaking section")
+	versions, err := filepath.Glob(filepath.Join("..", ".changes", "*.md"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	breaking = strings.SplitN(breaking, "\n### ", 2)[0]
-	for _, want := range []string{"NewReader", "NewRangeReader", "Attrs", "keys ...*SSECKey", "function values"} {
-		if !strings.Contains(breaking, want) {
-			t.Errorf("Unreleased changelog missing %q for the SSE-C method-type change", want)
+	files = append(append(files, versions...), filepath.Join("..", "CHANGELOG.md"))
+	want := []string{"Breaking", "NewReader", "NewRangeReader", "Attrs", "keys ...*SSECKey", "function values"}
+	for _, name := range files {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+	lines:
+		for _, line := range strings.Split(string(data), "\n") {
+			for _, w := range want {
+				if !strings.Contains(line, w) {
+					continue lines
+				}
+			}
+			return
 		}
 	}
+	t.Errorf("no changelog entry or fragment documents the SSE-C method-type change as Breaking (want %q)", want)
 }

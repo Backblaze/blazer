@@ -1,0 +1,3 @@
+kind: Fixed
+body: Repeated `(*b2.Object).Attrs` calls preserve cached file metadata, including `LastModified`, without mutating the cache. Each returned `Attrs.Info` is independent; `large_file_sha1` remains in the public map, while `src_last_modified_millis` remains excluded.
+time: 2026-10-26T14:16:55.980742-05:00
