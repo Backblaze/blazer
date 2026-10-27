@@ -35,6 +35,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"sync"
@@ -70,6 +71,13 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 	for _, f := range opts {
 		f(&c.opts)
 	}
+	if c.opts.optionErr != nil {
+		return nil, c.opts.optionErr
+	}
+	if c.opts.accountInfo == nil {
+		c.opts.accountInfo = &InMemoryAccountInfo{}
+	}
+	c.backend.(*beRoot).accountInfo = c.opts.accountInfo
 	// Probe default writer options before authorization: SSE-C keys are strictly
 	// request-scoped and must not be retained by a Client.
 	probe := &Writer{}
@@ -94,6 +102,34 @@ type clientOptions struct {
 	apiBase         string
 	userAgents      []string
 	writerOpts      []WriterOption
+	accountInfo     AccountInfo
+	accountInfoSet  bool
+	optionErr       error
+}
+
+// WithAccountInfo uses the given session store. By default NewClient uses an
+// InMemoryAccountInfo; NewAccountInfoFile opts in to persistence.
+func WithAccountInfo(ai AccountInfo) ClientOption {
+	return func(o *clientOptions) {
+		if o.accountInfoSet {
+			o.optionErr = fmt.Errorf("b2: conflicting account info options")
+			return
+		}
+		o.accountInfoSet = true
+		if ai == nil {
+			o.optionErr = fmt.Errorf("b2: account info store must not be nil")
+			return
+		}
+		value := reflect.ValueOf(ai)
+		switch value.Kind() {
+		case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+			if value.IsNil() {
+				o.optionErr = fmt.Errorf("b2: account info store must not be nil")
+				return
+			}
+		}
+		o.accountInfo = ai
+	}
 }
 
 // A ClientOption allows callers to adjust various per-client settings.

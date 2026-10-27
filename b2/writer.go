@@ -146,7 +146,7 @@ func (w *Writer) setErr(err error) {
 	if w.err != nil {
 		return
 	}
-	blog.V(1).Infof("error writing %s: %v", w.name, err)
+	blog.V(1).Infof("error writing object: %T", err)
 	w.err = err
 	w.cancel()
 	if w.ctxf == nil || w.file == nil {
@@ -381,7 +381,7 @@ func (w *Writer) simpleWriteFile() error {
 			return w.o.b.r.reupload(err)
 		}),
 		retry.OnRetry(func(attempt uint, err error) error {
-			blog.V(2).Infof("b2 writer: %v; retrying", err)
+			blog.V(2).Infof("b2 writer: request failed (%T); retrying", err)
 			u, err := w.o.b.b.getUploadURL(w.ctx)
 			if err != nil {
 				return err
@@ -712,7 +712,7 @@ func (w *Writer) Close() error {
 			defer w.wmux.Unlock()
 			if err := w.w.Close(); err != nil {
 				// this is non-fatal, but alarming
-				blog.V(1).Infof("close %s: %v", w.name, err)
+				blog.V(1).Infof("b2 writer: buffer close failed (%T)", err)
 			}
 		}()
 		// We need the lock to dereference w.cidx and w.w.Len()
