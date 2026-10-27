@@ -221,7 +221,10 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 			}
 			n, err := io.Copy(io.Discard, req.Body)
 			if err != nil {
-				t.Errorf("part body: %v", err)
+				// The client may abort an in-flight part, for example when it detects a
+				// change to the source file. The test asserts that outcome through
+				// Sync's result, so a truncated body here is not a failure.
+				return
 			}
 			w.mu.Lock()
 			firstPart := w.parts == 0
