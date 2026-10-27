@@ -294,7 +294,8 @@ type BucketAttrs struct {
 	// NOTE: The first time that you configure Cloud Replication, complete the following tasks to ensure that you have the correct permission:
 	// 1. Verify your email address.
 	// 2. Have a payment history on file or make a payment.
-	ReplicationConfig *ReplicationConfiguration
+	ReplicationConfig           *ReplicationConfiguration
+	replicationConfigUnreadable bool
 }
 
 // SSEB2WithAES256 returns the SSE-B2 server-side encryption setting with the

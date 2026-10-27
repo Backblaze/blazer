@@ -903,6 +903,9 @@ type Bucket struct {
 	DefaultServerSideEncryption *b2types.ServerSideEncryption
 	FileLockEnabled             bool
 	ReplicationConfiguration    *b2types.ReplicationConfiguration
+	// ReplicationConfigurationUnreadable records a list response that withheld
+	// replication settings. Callers must not replace a config they cannot read.
+	ReplicationConfigurationUnreadable bool
 }
 
 // Update wraps b2_update_bucket.
@@ -1078,6 +1081,9 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
 		}
 		listed.DefaultRetention = decodeDefaultRetention(bucket.FileLockConfig)
+		if cfg := bucket.ReplicationConfiguration; cfg != nil && !cfg.IsClientAuthorizedToRead {
+			listed.ReplicationConfigurationUnreadable = true
+		}
 		if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
 			(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
 			listed.ReplicationConfiguration = cfg.Value
