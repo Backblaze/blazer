@@ -43,7 +43,7 @@ uses Go 1.25.x). Nothing else is installed or downloaded (`curl` and `python3` o
 
 ## Run one check by hand
 
-Start the B2 simulator from [`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator), the one simulator blazer is tested against. From a checkout of
+Start the B2 simulator from [`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator), the simulator the harness pins for blazer. From a checkout of
 that repository (resilience needs `--control`):
 
 ```bash

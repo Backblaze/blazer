@@ -56,13 +56,6 @@ PRs that each add a row will conflict on those counts; the second to merge sets 
 GitHub CI does not run the simulator contract, so a change can be green in CI and still fail a scenario.
 Run the scenarios for the area you changed before asking for review.
 
-## One simulator
-
-blazer does not keep its own B2 simulator. The B2 simulator for every Backblaze SDK lives in one repository,
-[`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator), so its behavior is defined once and every SDK is tested against the same server. Tests that need a
-B2-shaped server use it; tests that only need a canned response use a wire test. Do not add an in-package
-simulator or a second copy of B2 behavior to this repository.
-
 ## Live integration tests
 
 `b2/integration_test.go` skips unless `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` are set. Use a
