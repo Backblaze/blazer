@@ -1,0 +1,3 @@
+kind: Changed
+body: '**Breaking:** `(*b2.Client).NewBucket` now applies `attrs.ReplicationConfig` when it creates a bucket, as its documentation states; callers that create buckets from another bucket''s `Attrs()` should clear `ReplicationConfig` if they do not want its replication rules. `(*base.B2).CreateBucket` takes the replication configuration as a new parameter; pass `nil` to keep the previous behavior.'
+time: 2026-10-26T13:11:13.956845-05:00

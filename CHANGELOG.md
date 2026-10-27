@@ -7,41 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Breaking
-
-- `(*b2.Object).NewReader`, `NewRangeReader`, and `Attrs` gained variadic `keys ...*SSECKey` parameters. Existing calls are unchanged, but uses as function values with their old method signatures no longer compile.
-
-### Added
-
-- `x/b2sim` provides an in-process B2 wire simulator for offline tests through `b2.Transport`, including bucket operations, simple and multipart uploads, downloads and ranges, file listing, and deletion. Unsupported operations return an error; policy enforcement and download-authorization signature checks are not simulated.
-- `b2.SetupReplication` merges caller-owned source and destination key IDs into bucket replication configurations, and `b2.ReplicationStatus` reads configured rules. Both reject unreadable existing configuration; setup rejects conflicting options and key mappings.
-- `b2/sync.Sync` pushes a local directory tree into a B2 prefix with configurable comparison, concurrency, dry-run reporting, and per-file failure results. It follows a symlinked root but not symlinks below it; changed large files are re-uploaded rather than resumed.
-- `b2.WithAccountInfo` allows a client to reuse an authorized session through the default in-memory store or an opt-in `AccountInfoFile`. The file backend stores tokens and endpoints atomically with private POSIX permissions and never stores the application key. On Windows, session privacy depends on the directory ACLs; place the file under the user's profile directory, such as `os.UserConfigDir()`. A missing, corrupt or oversized cached session triggers normal authorization and replacement; oversized reads remain bounded.
-- Per-request SSE-C keys for uploads, downloads, metadata lookup, and server-side copies. Large-file uploads send the key on the start request and every part; keys cannot be configured as client writer defaults. `NewSSECKeyWithID` accepts an optional caller-chosen key identifier, stored as `sse_c_key_id` in large-file info for resume. Blazer adds no key-derived fingerprint to metadata. Resume rejects missing or different IDs, and an unkeyed writer cannot resume an SSE-C upload. Callers must not reuse an ID for another key: B2 rejects wrong keys on uploaded parts, but cannot check a key when every part is skipped.
-- `b2.VerifySignature` checks the HMAC-SHA256 signature of a raw B2 event-notification body, and `b2.ParseEvent` decodes its events. The helpers reject missing or malformed signatures, empty signing secrets, and bodies larger than 1 MiB; callers must cap HTTP reads before passing a body to them and deduplicate at-least-once deliveries by event ID.
-- `b2.WithProgress` reports byte-level upload progress, and `b2.Reader.Progress` reports byte-level download progress. Callbacks are serialized off transfer locks and finish with a terminal value; known upload sizes and finite download ranges report their actual totals.
-- `(*b2.Bucket).Compose` builds a large file from ordered uploaded and server-side copied parts, using `b2_copy_part`. It accepts content type, file info, SHA1, last-modified time, and Object Lock options; defaults its content type to `application/octet-stream`; validates part sizes, copy ranges, and known totals up to 10 TB (10,000,000,000,000 bytes) before starting; permits overlapping copied ranges; and cancels an unfinished file if a part fails, even after caller cancellation.
-- `(*b2.Bucket).DownloadFileByID` downloads the exact file version identified by its B2 file ID, including historical versions and optional per-request SSE-C keys; `(*base.Bucket).DownloadFileByID` provides low-level GET, HEAD, and range requests.
-- `b2.WithSSEB2("AES256")` requests SSE-B2 for one upload without changing the bucket default. Resumed uploads validate the existing encryption mode and algorithm; SSE-B2 and SSE-C writer options cannot be combined.
-- `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
-
-### Fixed
-
-- `x/b2sim` now accepts seekable multipart uploads with trailing part SHA1 digests, filters bucket types, protects unfinished uploads during bucket deletion, preserves upload metadata casing, groups delimiter listings, uses finish order for version precedence, and escapes download metadata headers.
-- Concurrent requests now use a consistent authorization snapshot while a 401 refreshes the account token. Simultaneous 401s share one reauthorization instead of racing to update shared account state.
-- SSE-C server-side copies store the destination key's caller-supplied `sse_c_key_id` instead of retaining the source ID; copying to a key without an ID removes the old ID from file info.
-- A rejected bucket replication update no longer leaves the attempted configuration in the local bucket cache, where a later unrelated update could resend it.
-- `b2/sync` treats an unavailable destination SHA1 as changed, stops hashing after context cancellation, rejects files swapped for symlinks after walking, cancels an upload if the streamed bytes differ from the walk-time SHA1, and reports a destination object whose attributes cannot be read only as a failure of the local file that maps to it.
-- `AccountInfoFile` rejects cached sessions read from non-private POSIX paths, incomplete sessions reauthorize and refresh the cache, and verbose authorization-response logging omits the response body entirely.
-- Verbose B2 wire logging redacts authorization tokens, newly created application keys, and SSE-C key fields; logs header names without values and omits malformed or failed response bodies and untrusted transport error text. This fixes credential exposure in logs (#149).
-- SSE-C large-file starts reject a caller key ID that would exceed B2's 10-entry file-info limit before sending the request.
-- Concurrent bounded reads stop allocating download chunks when the requested range is exhausted, rather than requesting data past its end. `NewRangeReader(ctx, offset, 0)` now returns zero bytes instead of reading the rest of the object.
-- Large-file Writer uploads retain a replacement upload-part endpoint across later chunks; copied and uploaded part replacement safely retain the verified prior size across ambiguous responses. `File.AsLargeFile().CopyPart` no longer panics, and Compose stops buffering promptly when its context is canceled.
-- Download response lengths that cannot fit in the platform's `int` are rejected before conversion, including on 32-bit systems. Download-by-ID logging and free-form error details redact file IDs; HTTP status and B2 error codes remain available.
-- Downloads by ID and by name request stored bytes without HTTP gzip decompression, preserving the file's content length and SHA1 for gzip-encoded objects.
-- Repeated `(*b2.Object).Attrs` calls preserve cached file metadata, including `LastModified`, without mutating the cache. Each returned `Attrs.Info` is independent; `large_file_sha1` remains in the public map, while `src_last_modified_millis` remains excluded.
-- Progress status no longer waits on stalled transfer reads; cancellation closes a blocked download body before waiting for its copy. Reader shutdown now waits for initialization, zero-length ranges can be verified, and resumed uploads tolerate non-seekable inputs while clamping known totals to zero.
-- Exact-boundary ranged reads now mark a chunk whose size equals the remaining requested length as final. The shared remaining-length accounting is kept under the reader mutex.
+Unreleased entries live in [`.changes/unreleased/`](.changes/unreleased/) until the next release. Add one with `changie new` (see [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries)).
 
 ## [0.9.0] - 2026-10-22
 
@@ -85,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uploads fetch a new upload URL after a connection-level failure (a reset or a stall), as B2's Integration Checklist asks, instead of retrying the broken one. An HTTP response such as 429 or 503 with `Retry-After` still waits as told and retries the same URL.
 - A `Reader` gives up on a chunk that keeps arriving truncated after 21 attempts (the first plus the 20 retries allowed for any download), with an error that wraps `io.ErrUnexpectedEOF`. It used to retry forever, until the caller's context ended. The wait between attempts grows from 1 ms to a cap of about 16 s, so an interruption of around two minutes is still survived.
 
+[0.9.0]: https://github.com/Backblaze/blazer/compare/v0.8.0...v0.9.0
+
 ## [0.8.0] - 2026-09-15
 
 ### Changed
@@ -100,12 +68,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `b2.DefaultServerSideEncryption()`, use `b2.SSEB2WithAES256()` instead.
 
+[0.8.0]: https://github.com/Backblaze/blazer/compare/v0.7.2...v0.8.0
+
 ## [0.7.2] - 2025-01-23
 
 ### Changed
 
 - Removed unused `bonfire` and `pyre` code, greatly reducing the number of dependencies and the amount of work required to keep them up to date.
 - Restructured the repository as a [Go workspace](https://go.dev/ref/mod#workspaces) and moved the sole remaining third-party dependency into `bin/b2keys`.
+
+[0.7.2]: https://github.com/Backblaze/blazer/compare/v0.7.1...v0.7.2
 
 ## [0.7.1] - 2024-10-07
 
@@ -116,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Bumped dependencies in response to dependabot alerts
+
+[0.7.1]: https://github.com/Backblaze/blazer/compare/v0.7.0...v0.7.1
 
 ## [0.7.0] - 2024-10-04
 
@@ -133,6 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Migrated to Backblaze B2 Native API v3 
 
+[0.7.0]: https://github.com/Backblaze/blazer/compare/v0.6.1...v0.7.0
+
 ## [0.6.1] - 2023-10-16
 
 ### Added
@@ -147,11 +123,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reference license report from README ([tzeejay](https://github.com/tzeejay))
 
+[0.6.1]: https://github.com/Backblaze/blazer/compare/v0.6.0...v0.6.1
+
 ## [0.6.0] - 2023-09-26
 
 Tagged initial version at https://github.com/Backblaze/blazer
 
-[unreleased]: https://github.com/Backblaze/blazer/compare/v0.9.0...HEAD
-[0.9.0]: https://github.com/Backblaze/blazer/compare/v0.8.0...v0.9.0
-[0.6.1]: https://github.com/Backblaze/blazer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Backblaze/blazer/compare/v0.5.3...v0.6.0

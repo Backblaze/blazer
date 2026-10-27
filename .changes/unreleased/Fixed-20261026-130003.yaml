@@ -1,0 +1,3 @@
+kind: Fixed
+body: "`AccountInfoFile` rejects cached sessions read from non-private POSIX paths, incomplete sessions reauthorize and refresh the cache, and verbose authorization-response logging omits the response body entirely."
+time: 2026-10-26T13:00:03.000000-05:00

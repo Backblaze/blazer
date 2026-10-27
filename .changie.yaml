@@ -1,0 +1,40 @@
+changesDir: .changes
+unreleasedDir: unreleased
+headerPath: header.tpl.md
+changelogPath: CHANGELOG.md
+versionExt: md
+versionFormat: '## [{{.VersionNoPrefix}}] - {{.Time.Format "2006-01-02"}}'
+kindFormat: '### {{.Kind}}'
+changeFormat: '- {{.Body}}'
+footerFormat: |-
+  [{{.VersionNoPrefix}}]: https://github.com/Backblaze/blazer/compare/{{.PreviousVersion}}...{{.Version}}
+# Breaking kinds stay `minor`: pre-1.0 semver bumps the minor, and a Go v2+ needs a /v2 module path,
+# so a major release is always an explicit `changie batch vN.0.0`, never `auto`.
+kinds:
+  - label: Added
+    auto: minor
+  - label: Changed
+    auto: minor
+  - label: Deprecated
+    auto: minor
+  - label: Removed
+    auto: minor
+  - label: Fixed
+    auto: patch
+  - label: Security
+    auto: patch
+newlines:
+  afterChangelogHeader: 0
+  beforeChangelogVersion: 1
+  endOfVersion: 1
+  afterKind: 1
+  beforeKind: 1
+  beforeFooterTemplate: 1
+envPrefix: CHANGIE_
+replacements:
+  - path: base/base.go
+    find: 'DefaultUserAgent = "blazer/.*"'
+    replace: 'DefaultUserAgent = "blazer/{{.VersionNoPrefix}}"'
+  - path: bin/b2keys/go.mod
+    find: 'github.com/Backblaze/blazer v.*'
+    replace: 'github.com/Backblaze/blazer {{.Version}}'
