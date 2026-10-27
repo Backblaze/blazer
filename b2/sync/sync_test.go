@@ -222,8 +222,10 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 			n, err := io.Copy(io.Discard, req.Body)
 			if err != nil {
 				// The client may abort an in-flight part, for example when it detects a
-				// change to the source file. The test asserts that outcome through
-				// Sync's result, so a truncated body here is not a failure.
+				// change to the source file; it no longer reads this response. Any other
+				// truncated body must still fail the upload, so answer with an error.
+				out.WriteHeader(http.StatusBadRequest)
+				write(map[string]interface{}{"status": 400, "code": "bad_request", "message": "truncated part body"})
 				return
 			}
 			w.mu.Lock()
