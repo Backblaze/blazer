@@ -155,6 +155,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    concurrency:
+      group: coverage-badge
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -170,6 +173,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          tip=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "main is at ${tip::7}, not ${GITHUB_SHA::7}; leaving the badge to the newer run."
+            exit 0
+          fi
           pct=$(go tool cover -func=cover.out | awk '/^total:/ {sub("%", "", $3); print $3}')
           color=$(awk -v p="$pct" 'BEGIN { print (p >= 80 ? "brightgreen" : p >= 60 ? "yellow" : "red") }')
           dir=$(mktemp -d)
