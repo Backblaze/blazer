@@ -4,6 +4,7 @@
 [![CodeQL](https://github.com/Backblaze/blazer/actions/workflows/codeql.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/codeql.yml)
 [![Security checks](https://github.com/Backblaze/blazer/actions/workflows/security.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/security.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Backblaze/blazer/b2.svg)](https://pkg.go.dev/github.com/Backblaze/blazer/b2)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FBackblaze%2Fblazer%2Fbadges%2Fcoverage.json)](https://github.com/Backblaze/blazer/actions/workflows/ci.yml?query=branch%3Amain)
 [![Latest release](https://img.shields.io/github/v/release/Backblaze/blazer?sort=semver&display_name=tag&color=blue)](https://github.com/Backblaze/blazer/releases/latest)
 [![Go version](https://img.shields.io/github/go-mod/go-version/Backblaze/blazer?logo=go&logoColor=white)](go.mod)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
