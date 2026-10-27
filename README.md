@@ -286,6 +286,12 @@ are in [`docs/`](docs). Coding agents start from [AGENTS.md](AGENTS.md). Release
 
 Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
+### Contributors
+
+Thanks to everyone who has contributed to Blazer.
+
+[![Contributors](https://contrib.rocks/image?repo=Backblaze/blazer)](https://github.com/Backblaze/blazer/graphs/contributors)
+
 ## Security
 
 Do not open public issues for vulnerabilities. See [SECURITY.md](SECURITY.md) for how to report one.
