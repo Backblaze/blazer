@@ -52,10 +52,11 @@ func PartFromCopy(sourceFileID, byteRange string) ComposePart {
 type ComposeOption func(*composeOptions)
 
 type composeOptions struct {
-	attrs     *Attrs
-	attrsSet  bool
-	retention *FileRetention
-	legalHold LegalHold
+	attrs        *Attrs
+	attrsSet     bool
+	retention    *FileRetention
+	retentionSet bool
+	legalHold    LegalHold
 }
 
 // ComposeWithAttrs sets the composed file's content type, file info, SHA1 and
@@ -72,10 +73,12 @@ func ComposeWithAttrs(attrs *Attrs) ComposeOption {
 	}
 }
 
-// ComposeFileRetention sets Object Lock retention on the composed file.
+// ComposeFileRetention sets Object Lock retention on the composed file. A nil
+// retention returns an error before a request is made.
 func ComposeFileRetention(retention *FileRetention) ComposeOption {
 	return func(options *composeOptions) {
 		options.retention = retention
+		options.retentionSet = true
 	}
 }
 
@@ -96,6 +99,9 @@ func (options *composeOptions) validate() (contentType string, info map[string]s
 			contentType = options.attrs.ContentType
 		}
 		info = fileInfoFromAttrs(options.attrs, 0)
+	}
+	if options.retentionSet && options.retention == nil {
+		return "", nil, errors.New("b2: Compose retention must not be nil")
 	}
 	if err := options.retention.validate(); err != nil {
 		return "", nil, err

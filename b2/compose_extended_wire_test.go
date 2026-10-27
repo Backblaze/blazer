@@ -459,6 +459,7 @@ func TestComposeRejectsInvalidOptionsBeforeStarting(t *testing.T) {
 		want    string
 	}{
 		{"nil attrs", []ComposeOption{ComposeWithAttrs(nil)}, "attrs must not be nil"},
+		{"nil retention", []ComposeOption{ComposeFileRetention(nil)}, "retention must not be nil"},
 		{"invalid retention", []ComposeOption{ComposeFileRetention(&FileRetention{})}, "invalid retention mode"},
 		{"invalid legal hold", []ComposeOption{ComposeLegalHold("invalid")}, "invalid legal hold"},
 	}
