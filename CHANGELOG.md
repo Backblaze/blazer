@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- `(*b2.Object).NewReader`, `NewRangeReader`, and `Attrs` gained variadic `keys ...*SSECKey` parameters. Existing calls are unchanged, but uses as function values with their old method signatures no longer compile.
+
 ### Added
 
+- `x/b2sim` provides an in-process B2 wire simulator for offline tests through `b2.Transport`, including bucket operations, simple and multipart uploads, downloads and ranges, file listing, and deletion. Unsupported operations return an error; policy enforcement and download-authorization signature checks are not simulated.
 - `b2.SetupReplication` merges caller-owned source and destination key IDs into bucket replication configurations, and `b2.ReplicationStatus` reads configured rules. Both reject unreadable existing configuration; setup rejects conflicting options and key mappings.
 - `b2/sync.Sync` pushes a local directory tree into a B2 prefix with configurable comparison, concurrency, dry-run reporting, and per-file failure results. It follows a symlinked root but not symlinks below it; changed large files are re-uploaded rather than resumed.
 - `b2.WithAccountInfo` allows a client to reuse an authorized session through the default in-memory store or an opt-in `AccountInfoFile`. The file backend stores tokens and endpoints atomically with private POSIX permissions and never stores the application key. On Windows, session privacy depends on the directory ACLs; place the file under the user's profile directory, such as `os.UserConfigDir()`. A missing, corrupt or oversized cached session triggers normal authorization and replacement; oversized reads remain bounded.
@@ -23,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Server-side copy and other non-upload calls now retry HTTP 408, 502 and 504 responses. Upload calls continue to obtain a new upload URL for those responses.
+- `x/b2sim` now accepts seekable multipart uploads with trailing part SHA1 digests, filters bucket types, protects unfinished uploads during bucket deletion, preserves upload metadata casing, groups delimiter listings, uses finish order for version precedence, and escapes download metadata headers.
+- Concurrent requests now use a consistent authorization snapshot while a 401 refreshes the account token. Simultaneous 401s share one reauthorization instead of racing to update shared account state.
+- SSE-C server-side copies store the destination key's caller-supplied `sse_c_key_id` instead of retaining the source ID; copying to a key without an ID removes the old ID from file info.
 - A rejected bucket replication update no longer leaves the attempted configuration in the local bucket cache, where a later unrelated update could resend it.
 - `b2/sync` treats an unavailable destination SHA1 as changed, stops hashing after context cancellation, rejects files swapped for symlinks after walking, cancels an upload if the streamed bytes differ from the walk-time SHA1, and reports a destination object whose attributes cannot be read only as a failure of the local file that maps to it.
 - `AccountInfoFile` rejects cached sessions read from non-private POSIX paths, incomplete sessions reauthorize and refresh the cache, and verbose authorization-response logging omits the response body entirely.

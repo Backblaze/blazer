@@ -173,7 +173,8 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 
 	beforeAttrs := rpcCounts(client)
-	attrs, err := object.Attrs(ctx, key)
+	// A fresh handle has no cached version, so Attrs resolves the SSE-C object by name with a keyed HEAD.
+	attrs, err := bucket.Object(name).Attrs(ctx, key)
 	if err != nil {
 		return classify("keyed HEAD", err)
 	}
@@ -182,6 +183,18 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 	if !anyContains(rpcDelta(beforeAttrs, rpcCounts(client)), "download_file_by_name") {
 		return failf("keyed HEAD", "Object.Attrs with an SSE-C key did not issue the required HEAD request")
+	}
+	// This handle already identifies the version, so Attrs reads its metadata by ID.
+	beforeResolvedAttrs := rpcCounts(client)
+	resolvedAttrs, err := object.Attrs(ctx, key)
+	if err != nil {
+		return classify("resolved attrs", err)
+	}
+	if resolvedAttrs.Size != int64(len(payload)) {
+		return failf("resolved attrs", "size %d, expected %d", resolvedAttrs.Size, len(payload))
+	}
+	if anyContains(rpcDelta(beforeResolvedAttrs, rpcCounts(client)), "download_file_by_name") {
+		return failf("resolved attrs", "an already resolved object unexpectedly issued a keyed HEAD request")
 	}
 
 	largePayload := payloadOf(5_000_000 + 4096)
