@@ -21,6 +21,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -225,5 +227,35 @@ func TestSSECLoggingRedactsKeyMaterial(t *testing.T) {
 	}
 	if count := strings.Count(redacted, "[REDACTED]"); count != 3 {
 		t.Errorf("redacted JSON = %s, want three redactions", redacted)
+	}
+}
+
+func TestSSECResponseHeadersAreRedactedInLogs(t *testing.T) {
+	const key = "response-key-secret"
+	const digest = "response-digest-secret"
+	if os.Getenv("BLAZER_SSEC_RESPONSE_LOG_CHILD") == "1" {
+		req, err := http.NewRequest(http.MethodGet, "https://example.invalid/file/bucket/object", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Blazer-Method", "b2_download_file_by_name")
+		resp := &http.Response{Request: req, Status: "200 OK", StatusCode: http.StatusOK, Header: make(http.Header)}
+		resp.Header.Set("X-Bz-Server-Side-Encryption-Customer-Key", key)
+		resp.Header.Set("X-Bz-Server-Side-Encryption-Customer-Key-Md5", digest)
+		resp.Header.Set("X-Bz-Server-Side-Encryption-Customer-Algorithm", "AES256")
+		logResponse(resp, nil)
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSSECResponseHeadersAreRedactedInLogs$")
+	cmd.Env = append(os.Environ(), "B2_LOG_LEVEL=2", "BLAZER_SSEC_RESPONSE_LOG_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("logging subprocess failed: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), key) || strings.Contains(string(out), digest) {
+		t.Fatal("SSE-C key or digest appeared in response logs")
+	}
+	if strings.Count(string(out), "[REDACTED]") < 2 || !strings.Contains(string(out), "AES256") {
+		t.Fatalf("response log omitted expected redacted headers or algorithm: %s", out)
 	}
 }

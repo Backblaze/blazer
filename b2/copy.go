@@ -31,13 +31,15 @@ const (
 )
 
 type copyOptions struct {
-	destinationBucket  *Bucket
-	byteRange          string
-	metadataDirective  MetadataDirective
-	contentType        string
-	info               map[string]string
-	sourceSSECKey      *SSECKey
-	destinationSSECKey *SSECKey
+	destinationBucket        *Bucket
+	byteRange                string
+	metadataDirective        MetadataDirective
+	contentType              string
+	info                     map[string]string
+	sourceSSECKey            *SSECKey
+	destinationSSECKey       *SSECKey
+	sourceSSECRequested      bool
+	destinationSSECRequested bool
 }
 
 // CopyOption configures a Copy operation.
@@ -72,14 +74,20 @@ func CopyWithMetadata(directive MetadataDirective, contentType string, info map[
 // CopySourceSSECKey supplies the customer-managed key used to decrypt an
 // SSE-C source file during the server-side copy.
 func CopySourceSSECKey(key *SSECKey) CopyOption {
-	return func(o *copyOptions) { o.sourceSSECKey = key }
+	return func(o *copyOptions) {
+		o.sourceSSECKey = key
+		o.sourceSSECRequested = true
+	}
 }
 
 // CopyDestinationSSECKey encrypts the copied file with the supplied
 // customer-managed key. Without this option, the destination bucket's default
 // encryption applies.
 func CopyDestinationSSECKey(key *SSECKey) CopyOption {
-	return func(o *copyOptions) { o.destinationSSECKey = key }
+	return func(o *copyOptions) {
+		o.destinationSSECKey = key
+		o.destinationSSECRequested = true
+	}
 }
 
 // Copy creates destinationFileName from sourceFileID without transferring the
@@ -121,12 +129,12 @@ func (b *Bucket) Copy(ctx context.Context, sourceFileID, destinationFileName str
 }
 
 func (o *copyOptions) validate() error {
-	if o.sourceSSECKey != nil {
+	if o.sourceSSECRequested || o.sourceSSECKey != nil {
 		if err := o.sourceSSECKey.validate(); err != nil {
 			return err
 		}
 	}
-	if o.destinationSSECKey != nil {
+	if o.destinationSSECRequested || o.destinationSSECKey != nil {
 		if err := o.destinationSSECKey.validate(); err != nil {
 			return err
 		}

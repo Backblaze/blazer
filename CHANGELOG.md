@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- `(*b2.Object).NewReader`, `NewRangeReader`, and `Attrs` gained variadic `keys ...*SSECKey` parameters. Existing calls are unchanged, but uses as function values with their old method signatures no longer compile.
+
 ### Added
 
 - `b2.WithProgress` reports byte-level upload progress, and `b2.Reader.Progress` reports byte-level download progress. Callbacks are serialized off transfer locks and finish with a terminal value; known upload sizes and finite download ranges report their actual totals.

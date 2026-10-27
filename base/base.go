@@ -319,7 +319,7 @@ func logResponse(resp *http.Response, reply []byte) {
 	}
 	var headers []string
 	for k, v := range resp.Header {
-		headers = append(headers, fmt.Sprintf("%s: %s", k, strings.Join(v, ",")))
+		headers = append(headers, fmt.Sprintf("%s: %s", k, redactSSECHeader(k, strings.Join(v, ","))))
 	}
 	hstr := strings.Join(headers, "; ")
 	method := resp.Request.Header.Get("X-Blazer-Method")

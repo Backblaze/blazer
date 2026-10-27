@@ -450,6 +450,102 @@ func TestNilSSECKeyCannotSilentlyUpload(t *testing.T) {
 	}
 }
 
+func TestCopyRejectsExplicitNilSSECKeysBeforeRequest(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		option CopyOption
+	}{
+		{"source", CopySourceSSECKey(nil)},
+		{"destination", CopyDestinationSSECKey(nil)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			bucket := wire.newBucket(t)
+			wire.mu.Lock()
+			before := len(wire.requests)
+			wire.mu.Unlock()
+			_, err := bucket.Copy(context.Background(), "source-id", "copy", test.option)
+			if err == nil || !strings.Contains(err.Error(), "nil") {
+				t.Fatalf("Copy with nil %s key error = %v, want a clear nil-key error", test.name, err)
+			}
+			wire.mu.Lock()
+			after := len(wire.requests)
+			wire.mu.Unlock()
+			if after != before {
+				t.Fatalf("Copy with nil %s key sent %d requests", test.name, after-before)
+			}
+		})
+	}
+}
+
+func TestZeroSSECKeyRejectedByPublicOperations(t *testing.T) {
+	zero := &SSECKey{}
+	tests := []struct {
+		name string
+		run  func(context.Context, *Bucket) error
+	}{
+		{"Writer", func(ctx context.Context, bucket *Bucket) error {
+			writer := bucket.Object("zero-key").NewWriter(ctx, WithSSECKey(zero))
+			_, writeErr := writer.Write([]byte("payload"))
+			closeErr := writer.Close()
+			if writeErr != nil {
+				return writeErr
+			}
+			return closeErr
+		}},
+		{"NewReader", func(ctx context.Context, bucket *Bucket) error {
+			reader := bucket.Object("encrypted").NewReader(ctx, zero)
+			_, err := reader.Read(make([]byte, 1))
+			_ = reader.Close()
+			return err
+		}},
+		{"NewRangeReader", func(ctx context.Context, bucket *Bucket) error {
+			reader := bucket.Object("encrypted").NewRangeReader(ctx, 0, 1, zero)
+			_, err := reader.Read(make([]byte, 1))
+			_ = reader.Close()
+			return err
+		}},
+		{"Attrs", func(ctx context.Context, bucket *Bucket) error {
+			_, err := bucket.Object("encrypted").Attrs(ctx, zero)
+			return err
+		}},
+		{"Copy source", func(ctx context.Context, bucket *Bucket) error {
+			_, err := bucket.Copy(ctx, "source-id", "copy", CopySourceSSECKey(zero))
+			return err
+		}},
+		{"Copy destination", func(ctx context.Context, bucket *Bucket) error {
+			_, err := bucket.Copy(ctx, "source-id", "copy", CopyDestinationSSECKey(zero))
+			return err
+		}},
+		{"DownloadFileByID", func(ctx context.Context, bucket *Bucket) error {
+			reader, err := bucket.DownloadFileByID(ctx, "id-encrypted", zero)
+			if reader != nil {
+				_ = reader.Close()
+			}
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			bucket := wire.newBucket(t)
+			wire.mu.Lock()
+			before := len(wire.requests)
+			wire.mu.Unlock()
+			err := test.run(context.Background(), bucket)
+			if err == nil || !strings.Contains(err.Error(), "NewSSECKey") {
+				t.Fatalf("%s with zero-value key error = %v, want NewSSECKey guidance", test.name, err)
+			}
+			wire.mu.Lock()
+			after := len(wire.requests)
+			wire.mu.Unlock()
+			if after != before {
+				t.Fatalf("%s with zero-value key sent %d requests", test.name, after-before)
+			}
+		})
+	}
+}
+
 func TestOrdinaryWriterOptionRemainsDefaultable(t *testing.T) {
 	wire := newSSECPublicWire(t)
 	c, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL), DefaultWriterOptions(WithAttrsOption(&Attrs{ContentType: "text/plain"})))
