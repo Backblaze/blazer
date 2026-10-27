@@ -303,43 +303,6 @@ func redactSensitiveJSON(data []byte) string {
 	return string(safe)
 }
 
-func redactSSECHeader(name, value string) string {
-	if strings.EqualFold(name, "X-Bz-Server-Side-Encryption-Customer-Key") || strings.EqualFold(name, "X-Bz-Server-Side-Encryption-Customer-Key-Md5") {
-		return "[REDACTED]"
-	}
-	return value
-}
-
-func redactSSECJSON(args []byte) []byte {
-	var value any
-	if err := json.Unmarshal(args, &value); err != nil {
-		return []byte("[REDACTED]")
-	}
-	redactSSECFields(value)
-	redacted, err := json.Marshal(value)
-	if err != nil {
-		return []byte("[REDACTED]")
-	}
-	return redacted
-}
-
-func redactSSECFields(value any) {
-	switch value := value.(type) {
-	case map[string]any:
-		for key, nested := range value {
-			if strings.EqualFold(key, "customerKey") || strings.EqualFold(key, "customerKeyMd5") {
-				value[key] = "[REDACTED]"
-				continue
-			}
-			redactSSECFields(nested)
-		}
-	case []any:
-		for _, nested := range value {
-			redactSSECFields(nested)
-		}
-	}
-}
-
 func logResponse(resp *http.Response, reply []byte) {
 	if !blog.V(2) {
 		return

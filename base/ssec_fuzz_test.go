@@ -11,7 +11,7 @@ func FuzzRedactSSECJSON(f *testing.F) {
 		f.Add([]byte(body))
 	}
 	f.Fuzz(func(t *testing.T, body []byte) {
-		out := redactSSECJSON(body)
+		out := []byte(redactSensitiveJSON(body))
 		var value interface{}
 		if json.Unmarshal(out, &value) != nil {
 			return
@@ -21,7 +21,7 @@ func FuzzRedactSSECJSON(f *testing.F) {
 			switch v := value.(type) {
 			case map[string]interface{}:
 				for key, item := range v {
-					if (strings.EqualFold(key, "customerKey") || strings.EqualFold(key, "customerKeyMd5")) && item != "[REDACTED]" {
+					if (strings.EqualFold(key, "customerKey") || strings.EqualFold(key, "customerKeyMd5")) && item != "[redacted]" {
 						t.Fatalf("secret not redacted for key %q", key)
 					}
 					check(item)

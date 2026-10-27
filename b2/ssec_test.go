@@ -15,9 +15,13 @@
 package b2
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -78,24 +82,84 @@ func TestNewSSECKeyWithIDCopiesKeyAndKeepsCallerID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if key.keyID != "caller-id" {
-		t.Fatalf("key ID = %q, want caller-id", key.keyID)
+	if key.id() != "caller-id" {
+		t.Fatalf("key ID = %q, want caller-id", key.id())
 	}
 	raw[0] = 'x'
-	if key.key[0] != '0' {
+	if material := (*key.key)(); material[0] != '0' {
 		t.Fatal("constructor retained caller's mutable key buffer")
 	}
 	plain, err := NewSSECKey(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.keyID != "" {
-		t.Fatalf("plain key has unexpected ID %q", plain.keyID)
+	if plain.id() != "" {
+		t.Fatalf("plain key has unexpected ID %q", plain.id())
 	}
 }
 
 func TestNilSSECKeyIsRejected(t *testing.T) {
 	if _, _, err := (*SSECKey)(nil).encoded(); err == nil || !strings.Contains(err.Error(), "nil") {
 		t.Fatalf("nil key error = %v, want a clear validation error", err)
+	}
+}
+
+func TestZeroSSECKeyIsRejected(t *testing.T) {
+	if err := (&SSECKey{}).validate(); err == nil || !strings.Contains(err.Error(), "NewSSECKey") {
+		t.Fatalf("zero-value key validation = %v, want NewSSECKey guidance", err)
+	}
+}
+
+func TestSSECKeyEveryFormatRedactsMaterial(t *testing.T) {
+	raw := bytes.Repeat([]byte{0x33}, ssecKeySize)
+	const keyID = "caller-secret-key-identifier"
+	key, err := NewSSECKeyWithID(raw, keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := []struct {
+		name  string
+		value any
+	}{
+		{"value", *key},
+		{"pointer", key},
+		{"exported struct field", struct{ Key SSECKey }{*key}},
+		{"unexported struct field", struct{ key SSECKey }{*key}},
+	}
+	forbidden := []string{string(raw), "51 51", "3333", hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw), keyID}
+	for _, value := range values {
+		for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d", "%x", "%X"} {
+			t.Run(value.name+"/"+format, func(t *testing.T) {
+				got := fmt.Sprintf(format, value.value)
+				for _, secret := range forbidden {
+					if strings.Contains(got, secret) {
+						t.Fatalf("%s on %s disclosed key material", format, value.name)
+					}
+				}
+				if value.name == "value" || value.name == "pointer" {
+					if !strings.Contains(got, "REDACTED") {
+						t.Fatalf("%s on %s did not produce a redacted form", format, value.name)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSSECReaderMethodTypeChangeDocumented(t *testing.T) {
+	changelog, err := os.ReadFile(filepath.Join("..", "CHANGELOG.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreleased := strings.SplitN(string(changelog), "## [0.9.0]", 2)[0]
+	_, breaking, found := strings.Cut(unreleased, "### Breaking")
+	if !found {
+		t.Fatal("Unreleased changelog has no Breaking section")
+	}
+	breaking = strings.SplitN(breaking, "\n### ", 2)[0]
+	for _, want := range []string{"NewReader", "NewRangeReader", "Attrs", "keys ...*SSECKey", "function values"} {
+		if !strings.Contains(breaking, want) {
+			t.Errorf("Unreleased changelog missing %q for the SSE-C method-type change", want)
+		}
 	}
 }
