@@ -8,6 +8,8 @@ kindFormat: '### {{.Kind}}'
 changeFormat: '- {{.Body}}'
 footerFormat: |-
   [{{.VersionNoPrefix}}]: https://github.com/Backblaze/blazer/compare/{{.PreviousVersion}}...{{.Version}}
+# Breaking kinds stay `minor`: pre-1.0 semver bumps the minor, and a Go v2+ needs a /v2 module path,
+# so a major release is always an explicit `changie batch vN.0.0`, never `auto`.
 kinds:
   - label: Added
     auto: minor

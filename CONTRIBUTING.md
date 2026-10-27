@@ -131,7 +131,8 @@ make changelog-new
 ```
 
 Pick the kind (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`) and write one or two
-sentences for library users: name the exported identifiers and say what callers see. Commit the generated
+sentences for library users: name the exported identifiers and say what callers see. If callers must
+change their code, start the entry with `**Breaking:**` and say what to do instead. Commit the generated
 YAML file with your change. Do not edit `CHANGELOG.md` directly; maintainers rebuild it at release time
 (see [RELEASE.md](RELEASE.md)). The `changelog` check fails on a PR that changes library code without an
 entry; a maintainer can apply the `skip-changelog` label when no entry is warranted.

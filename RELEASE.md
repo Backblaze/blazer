@@ -22,6 +22,11 @@ Semantic versioning. Before 1.0, a breaking change bumps the minor version. chan
 the fragment kinds (`Added`, `Changed`, `Deprecated`, `Removed` → minor; `Fixed`, `Security` → patch);
 pass an explicit version to `changie batch` to override it.
 
+A major version is never computed by `auto`. `v1.0.0` is a deliberate `changie batch v1.0.0`. From v2 on,
+Go requires the module path to change to `github.com/Backblaze/blazer/vN` in the same release, so a major
+release is planned work, not a changelog bump. Entries starting with `**Breaking:**` tell the release
+manager what callers must change.
+
 ## Security and quality gate
 
 A release is held while any solvable security or quality finding is open on the
