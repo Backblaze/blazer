@@ -19,9 +19,11 @@
 package blog
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 )
 
 var level int32
@@ -37,15 +39,23 @@ func init() {
 	level = int32(i)
 }
 
+// sanitize drops carriage returns and line feeds so logged values cannot forge
+// extra log lines. It runs on the formatted message, so every argument type is
+// covered and verbs such as %T keep working.
+func sanitize(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	return strings.ReplaceAll(s, "\n", "")
+}
+
 func (v Verbose) Info(a ...interface{}) {
 	if v {
-		log.Print(a...)
+		log.Print(sanitize(fmt.Sprint(a...)))
 	}
 }
 
 func (v Verbose) Infof(format string, a ...interface{}) {
 	if v {
-		log.Printf(format, a...)
+		log.Print(sanitize(fmt.Sprintf(format, a...)))
 	}
 }
 
