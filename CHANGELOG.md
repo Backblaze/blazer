@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `b2.VerifySignature` checks the HMAC-SHA256 signature of a raw B2 event-notification body, and `b2.ParseEvent` decodes its events. The helpers reject missing or malformed signatures, empty signing secrets, and bodies larger than 1 MiB; callers must cap HTTP reads before passing a body to them and deduplicate at-least-once deliveries by event ID.
 - `b2.WithProgress` reports byte-level upload progress, and `b2.Reader.Progress` reports byte-level download progress. Callbacks are serialized off transfer locks and finish with a terminal value; known upload sizes and finite download ranges report their actual totals.
 - `(*b2.Bucket).Compose` builds a large file from ordered uploaded and server-side copied parts, using `b2_copy_part`. It validates part sizes and copy ranges before starting, rejects overlapping ranges from the same source, and cancels an unfinished file if a part fails, even after caller cancellation.
 - `(*b2.Bucket).DownloadFileByID` downloads the exact file version identified by its B2 file ID, including historical versions and optional per-request SSE-C keys; `(*base.Bucket).DownloadFileByID` provides low-level GET, HEAD, and range requests.
