@@ -9,16 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-request SSE-C keys for uploads, downloads, metadata lookup, and server-side copies. Large-file uploads send the key on the start request and every part; keys cannot be configured as client writer defaults. `NewSSECKeyWithID` accepts an optional caller-chosen key identifier, stored as `sse_c_key_id` in large-file info for resume. Blazer adds no key-derived fingerprint to metadata. Resume rejects missing or different IDs, and an unkeyed writer cannot resume an SSE-C upload. Callers must not reuse an ID for another key: B2 rejects wrong keys on uploaded parts, but cannot check a key when every part is skipped.
 - `b2.VerifySignature` checks the HMAC-SHA256 signature of a raw B2 event-notification body, and `b2.ParseEvent` decodes its events. The helpers reject missing or malformed signatures, empty signing secrets, and bodies larger than 1 MiB; callers must cap HTTP reads before passing a body to them and deduplicate at-least-once deliveries by event ID.
 - `b2.WithProgress` reports byte-level upload progress, and `b2.Reader.Progress` reports byte-level download progress. Callbacks are serialized off transfer locks and finish with a terminal value; known upload sizes and finite download ranges report their actual totals.
 - `(*b2.Bucket).Compose` builds a large file from ordered uploaded and server-side copied parts, using `b2_copy_part`. It validates part sizes and copy ranges before starting, rejects overlapping ranges from the same source, and cancels an unfinished file if a part fails, even after caller cancellation.
 - `(*b2.Bucket).DownloadFileByID` downloads the exact file version identified by its B2 file ID, including historical versions and optional per-request SSE-C keys; `(*base.Bucket).DownloadFileByID` provides low-level GET, HEAD, and range requests.
-- Per-request SSE-C keys for uploads, downloads, metadata lookup, and server-side copies. Large-file uploads send the key on the start request and every part; keys cannot be configured as client writer defaults. Keyed resume refuses an unfinished upload when its encryption mode or key digest cannot be verified.
 - `b2.WithSSEB2("AES256")` requests SSE-B2 for one upload without changing the bucket default. Resumed uploads validate the existing encryption mode and algorithm; SSE-B2 and SSE-C writer options cannot be combined.
 - `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
 
 ### Fixed
 
+- SSE-C large-file starts reject a caller key ID that would exceed B2's 10-entry file-info limit before sending the request.
 - Concurrent bounded reads stop allocating download chunks when the requested range is exhausted, rather than requesting data past its end. `NewRangeReader(ctx, offset, 0)` now returns zero bytes instead of reading the rest of the object.
 - Large-file Writer uploads retain a replacement upload-part endpoint across later chunks; copied and uploaded part replacement safely retain the verified prior size across ambiguous responses. `File.AsLargeFile().CopyPart` no longer panics, and Compose stops buffering promptly when its context is canceled.
 - Download response lengths that cannot fit in the platform's `int` are rejected before conversion, including on 32-bit systems. Download-by-ID logging and free-form error details redact file IDs; HTTP status and B2 error codes remain available.
