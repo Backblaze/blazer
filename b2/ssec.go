@@ -29,7 +29,8 @@ const ssecKeySize = 32
 //
 // SSECKey's formatted representation is always redacted.
 type SSECKey struct {
-	key [ssecKeySize]byte
+	key   [ssecKeySize]byte
+	keyID string
 }
 
 // NewSSECKey validates and copies a raw 32-byte AES-256 key. The caller remains
@@ -40,6 +41,21 @@ func NewSSECKey(key []byte) (*SSECKey, error) {
 	}
 	k := &SSECKey{}
 	copy(k.key[:], key)
+	return k, nil
+}
+
+// NewSSECKeyWithID attaches a caller-chosen identifier to an SSE-C key. The
+// identifier is saved as sse_c_key_id in large-file metadata, visible to
+// file-info readers, and must uniquely identify the key for safe resume.
+// Choose an opaque stable ID, not the key or a key-derived value. An empty ID
+// behaves like NewSSECKey and cannot resume an SSE-C large file. The key and ID
+// remain per-request, not Client defaults.
+func NewSSECKeyWithID(key []byte, id string) (*SSECKey, error) {
+	k, err := NewSSECKey(key)
+	if err != nil {
+		return nil, err
+	}
+	k.keyID = id
 	return k, nil
 }
 

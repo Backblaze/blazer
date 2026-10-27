@@ -1,0 +1,3 @@
+kind: Fixed
+body: "SSE-C large-file starts reject a caller key ID that would exceed B2's 10-entry file-info limit before sending the request."
+time: 2026-10-26T13:00:05.000000-05:00

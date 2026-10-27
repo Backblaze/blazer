@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Verbose B2 wire logging redacts authorization tokens, newly created application keys, and SSE-C key fields; logs header names without values and omits malformed or failed response bodies and untrusted transport error text. This fixes credential exposure in logs (#149)."
+time: 2026-10-26T13:00:04.000000-05:00
