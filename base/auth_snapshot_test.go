@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -106,6 +107,35 @@ func TestConcurrentUpdateUsesConsistentAuthorizationSnapshot(t *testing.T) {
 	if got := old.snapshot().s3URI; got != "https://s3.invalid" {
 		t.Errorf("S3 endpoint after update = %q", got)
 	}
+}
+
+func TestConcurrentAuthDataUsesConsistentSnapshot(t *testing.T) {
+	oldState := &B2{accountID: "old", authToken: "old", apiURI: "https://old.invalid", downloadURI: "https://old.invalid", s3URI: "https://old.invalid", minPartSize: 1, recommendedPartSize: 10, buckets: []string{"old-bucket"}, pfx: "old/", capabilities: []string{"old-cap"}}
+	newState := &B2{accountID: "new", authToken: "new", apiURI: "https://new.invalid", downloadURI: "https://new.invalid", s3URI: "https://new.invalid", minPartSize: 2, recommendedPartSize: 20, buckets: []string{"new-bucket"}, pfx: "new/", capabilities: []string{"new-cap"}}
+	oldData, newData := oldState.AuthData(), newState.AuthData()
+	account := &B2{}
+	account.Update(oldState)
+	var wg sync.WaitGroup
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			account.Update(newState)
+			account.Update(oldState)
+		}
+	}()
+	for i := 0; i < 4; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 250; j++ {
+				data := account.AuthData()
+				if !reflect.DeepEqual(data, oldData) && !reflect.DeepEqual(data, newData) {
+					t.Errorf("mixed persisted authorization snapshot: %+v", data)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestConcurrentUpdateWithKeyedDownloadByID(t *testing.T) {
