@@ -4,6 +4,13 @@
 // application-key credentials or capabilities, retention, replication, encryption, lifecycle,
 // CORS, or download-authorization signatures. Unsupported endpoints fail with
 // a non-2xx response; they never silently succeed.
+// With valid simulator authorization, b2_hide_file, b2_list_unfinished_large_files
+// (so Writer.Resume), b2_list_parts, b2_copy_file, b2_copy_part (so Copy and
+// Compose with copied parts), b2_download_file_by_id, b2_get_download_authorization,
+// b2_get_bucket_notification_rules, b2_set_bucket_notification_rules,
+// b2_update_file_retention, b2_update_file_legal_hold, b2_create_key (v4),
+// b2_list_keys, and b2_delete_key return HTTP 501 unsupported_operation.
+// Other unimplemented v4 endpoints also return 501; v3 endpoints return 404.
 // Multipart part-number and minimum-size limits are enforced like B2.
 package b2sim
 
