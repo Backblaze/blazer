@@ -30,6 +30,7 @@ _testmain.go
 /cleanup
 /simple
 /b2keys
+/bin/b2keys/b2keys
 
 .go-version
 
@@ -39,3 +40,9 @@ _testmain.go
 # Local tooling
 .memsearch/
 .worktrees/
+
+# OS files
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json

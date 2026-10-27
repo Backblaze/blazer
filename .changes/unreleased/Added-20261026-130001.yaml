@@ -1,0 +1,3 @@
+kind: Added
+body: "`b2.SetupReplication` merges caller-owned source and destination key IDs into bucket replication configurations, and `b2.ReplicationStatus` reads configured rules. Both reject unreadable existing configuration; setup rejects conflicting options and key mappings."
+time: 2026-10-26T13:00:01.000000-05:00

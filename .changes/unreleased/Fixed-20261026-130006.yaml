@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Concurrent bounded reads stop allocating download chunks when the requested range is exhausted, rather than requesting data past its end. `NewRangeReader(ctx, offset, 0)` now returns zero bytes instead of reading the rest of the object."
+time: 2026-10-26T13:00:06.000000-05:00
