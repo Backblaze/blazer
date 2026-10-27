@@ -46,6 +46,7 @@ type beRoot struct {
 	account, key      string
 	b2i               b2RootInterface
 	options           clientOptions
+	accountInfo       AccountInfo
 	refreshMu         sync.Mutex // coordinates refreshes; never held during authorize or backoff
 	refreshGeneration uint64
 	refreshFlight     *authorizationRefresh
@@ -263,8 +264,31 @@ func (r *beRoot) retryAfter(d time.Duration) <-chan time.Time {
 
 func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c clientOptions) error {
 	f := func() error {
+		if r.account == "" && r.accountInfo != nil {
+			data, ok := r.accountInfo.AuthData()
+			if err := accountInfoError(r.accountInfo); err != nil && !errors.Is(err, errUnavailableAccountInfoSession) {
+				return err
+			}
+			if ok && usableCachedAuthData(data, account) {
+				if root, ok := r.b2i.(*b2Root); ok {
+					root.restoreAccount(data, c)
+					r.account, r.key, r.options = account, key, c
+					return nil
+				}
+			}
+		}
 		if err := r.b2i.authorizeAccount(ctx, account, key, c); err != nil {
 			return err
+		}
+		if r.accountInfo != nil {
+			if root, ok := r.b2i.(*b2Root); ok {
+				data := root.authData()
+				data.ApplicationKeyID = account
+				r.accountInfo.Set(data)
+				if err := accountInfoError(r.accountInfo); err != nil {
+					return err
+				}
+			}
 		}
 		r.account = account
 		r.key = key
@@ -274,13 +298,32 @@ func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c cl
 	return withBackoff(ctx, r, f)
 }
 
+func usableCachedAuthData(data AuthData, account string) bool {
+	return data.ApplicationKeyID == account && data.AccountID != "" &&
+		data.AuthToken != "" && data.APIURL != "" && data.DownloadURL != "" &&
+		data.S3URL != "" && data.AbsMinPartSize > 0 && data.RecommendedPartSize > 0
+}
+
+func accountInfoError(info AccountInfo) error {
+	if withError, ok := info.(interface{ Err() error }); ok {
+		return withError.Err()
+	}
+	return nil
+}
+
+func (r *beRoot) clearAccountInfo() error {
+	if r.accountInfo == nil {
+		return nil
+	}
+	r.accountInfo.Clear()
+	return accountInfoError(r.accountInfo)
+}
+
 func (r *beRoot) reauthorizeAccount(ctx context.Context) error {
-	// The stored credentials/options are set once during NewClient. Refreshing
-	// only the underlying authorization avoids rewriting those fields while
-	// other operations are reading them.
-	return withBackoff(ctx, r, func() error {
-		return r.b2i.authorizeAccount(ctx, r.account, r.key, r.options)
-	})
+	if err := r.clearAccountInfo(); err != nil {
+		return err
+	}
+	return r.authorizeAccount(ctx, r.account, r.key, r.options)
 }
 
 func (r *beRoot) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (beBucketInterface, error) {
@@ -1063,6 +1106,11 @@ func withReauth(ctx context.Context, ri beRootInterface, f func() error) error {
 		if ok {
 			refreshErr = coordinated.reauthorizeIfUnchanged(ctx, generation)
 		} else {
+			if clearer, ok := ri.(interface{ clearAccountInfo() error }); ok {
+				if err := clearer.clearAccountInfo(); err != nil {
+					return err
+				}
+			}
 			refreshErr = ri.reauthorizeAccount(ctx)
 		}
 		if refreshErr != nil {
