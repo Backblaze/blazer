@@ -1,21 +1,87 @@
-Blazer
-====
+# Blazer
 
-[![GoDoc](https://godoc.org/github.com/Backblaze/blazer/b2?status.svg)](https://godoc.org/github.com/Backblaze/blazer/b2)
+[![CI](https://github.com/Backblaze/blazer/actions/workflows/ci.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Backblaze/blazer/actions/workflows/codeql.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/codeql.yml)
+[![Security checks](https://github.com/Backblaze/blazer/actions/workflows/security.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/security.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Backblaze/blazer/b2.svg)](https://pkg.go.dev/github.com/Backblaze/blazer/b2)
+[![Latest release](https://img.shields.io/github/v/tag/Backblaze/blazer?sort=semver&label=release&color=blue)](https://github.com/Backblaze/blazer/tags)
+[![Go version](https://img.shields.io/github/go-mod/go-version/Backblaze/blazer?logo=go&logoColor=white)](go.mod)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)](b2/licenses.csv)
 
-Blazer is a Golang client library for Backblaze B2 Cloud Object Storage.
+Blazer is a Go client library for [Backblaze B2 Cloud Storage](https://www.backblaze.com/cloud-storage),
+maintained by Backblaze.
 
 ```go
 import "github.com/Backblaze/blazer/b2"
 ```
 
-Blazer targets the Backblaze B2 Native API. Unless you specifically need to access Backblaze B2 via its Native API, you should use the [MinIO Go Client SDK](https://github.com/minio/minio-go) with Backblaze B2's S3 Compatible SDK. 
+Blazer targets the B2 Native API. Unless you specifically need the Native API, you should use the
+[MinIO Go Client SDK](https://github.com/minio/minio-go) with B2's
+[S3 Compatible API](https://www.backblaze.com/docs/cloud-storage-s3-compatible-api).
 
-_Many thanks to Toby Burress ([kurin](https://github.com/kurin)) for creating and maintaining Blazer for its first six years._
+_Many thanks to Toby Burress ([kurin](https://github.com/kurin)) for creating and maintaining Blazer for its
+first six years._
+
+**Contents**
+
+- [Features](#features)
+- [Install](#install)
+- [Packages](#packages)
+- [Examples](#examples)
+- [Testing resilience with B2 test mode](#testing-resilience-with-b2-test-mode)
+- [Contributing](#contributing)
+- [Security](#security)
+- [Licenses](#licenses)
+- [Backblaze ecosystem](#backblaze-ecosystem)
+
+## Features
+
+- **Streaming I/O.** `Writer` and `Reader` implement `io.Writer` and `io.Reader`; large files are split
+  into parts automatically, with concurrent part uploads and ranged, concurrent downloads.
+- **Large files.** Resumable uploads, server-side copies, and `Bucket.Compose` to build a file from
+  uploaded and copied parts.
+- **Encryption.** Per-request SSE-B2 and SSE-C (customer-supplied keys) for uploads, downloads, metadata
+  lookups and copies.
+- **Object Lock.** File retention and legal hold on upload.
+- **Buckets and keys.** Create, update and delete buckets; create and list application keys; issue
+  download authorization tokens for a prefix.
+- **Replication and notifications.** `SetupReplication` and `ReplicationStatus`; event-notification rules,
+  plus `VerifySignature` and `ParseEvent` for inbound webhooks.
+- **Sync.** `b2/sync` pushes a local directory tree into a B2 prefix, with dry runs and per-file results.
+- **Progress and status.** Byte-level progress callbacks for uploads and downloads, and a `Client.Status`
+  snapshot you can serve over HTTP.
+- **Reliable by default.** Retries with backoff, `Retry-After` support and automatic reauthorization;
+  optional session persistence with `WithAccountInfo`.
+- **No third-party dependencies.** The `b2` package imports only the Go standard library.
+
+## Install
+
+```bash
+go get github.com/Backblaze/blazer/b2
+```
+
+Blazer supports the Go version in [`go.mod`](go.mod) and newer; CI tests it on the current stable Go
+release as well. Releases follow [semantic versioning](https://semver.org) and are listed in the
+[changelog](CHANGELOG.md).
+
+You need a B2 [application key](https://www.backblaze.com/docs/cloud-storage-application-keys). Give it
+only the capabilities and buckets your program uses.
+
+## Packages
+
+| Package | Purpose |
+| --- | --- |
+| [`b2`](https://pkg.go.dev/github.com/Backblaze/blazer/b2) | The client library. Start here. |
+| [`b2/sync`](https://pkg.go.dev/github.com/Backblaze/blazer/b2/sync) | Sync a local directory tree into a B2 prefix. |
+| [`base`](https://pkg.go.dev/github.com/Backblaze/blazer/base) | A thin, low-level mapping of the B2 Native API calls that `b2` is built on. |
+| [`x/...`](https://pkg.go.dev/github.com/Backblaze/blazer/x) | Experimental packages; their API may change between minor releases. |
+| [`bin/b2keys`](bin/b2keys) | A small command-line tool for creating application keys (a separate module). |
 
 ## Examples
 
 ### Getting started
+
 ```go
 import "os"
 
@@ -56,10 +122,8 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, src, dst string) error {
 }
 ```
 
-If the file is less than 100MB, Blazer will simply buffer the file and use the
-`b2_upload_file` API to send the file to Backblaze.  If the file is greater
-than 100MB, Blazer will use B2's large file support to upload the file in 100MB
-chunks.
+If the file is smaller than the writer's `ChunkSize` (100 MB by default), Blazer buffers it and sends it
+with `b2_upload_file`. Larger files are uploaded in `ChunkSize` parts with B2's large file API.
 
 ### Copy a file into B2, with multiple concurrent uploads
 
@@ -83,8 +147,8 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, writers int, src, dst stri
 }
 ```
 
-This will automatically split the file into `writers` chunks of 100MB uploads.
-Note that 100MB is the smallest chunk size that B2 supports.
+This uploads up to `writers` parts at a time. `ChunkSize` sets the part size: 100 MB by default, at least
+5 MB, at most 5 GB.
 
 ### Download a file from B2
 
@@ -120,6 +184,42 @@ func printObjects(ctx context.Context, bucket *b2.Bucket) error {
 }
 ```
 
+### Report upload progress
+
+```go
+w := bucket.Object(dst).NewWriter(ctx, b2.WithProgress(func(done, total int64) {
+	log.Printf("%d of %d bytes", done, total)
+}))
+```
+
+### Encrypt with a customer-supplied key (SSE-C)
+
+```go
+key, err := b2.NewSSECKey(secret) // 32 bytes; keep it safe, B2 does not store it
+if err != nil {
+	return err
+}
+w := bucket.Object("private.bin").NewWriter(ctx, b2.WithSSECKey(key))
+// ... write and close w, then read it back with the same key:
+r := bucket.Object("private.bin").NewReader(ctx, key)
+```
+
+Use `b2.WithSSEB2("AES256")` instead for B2-managed encryption on a single upload.
+
+### Sync a local directory
+
+```go
+import "github.com/Backblaze/blazer/b2/sync"
+
+res, err := sync.Sync(ctx, bucket, "backups/", "./data", sync.WithConcurrency(4))
+if err != nil {
+	return err
+}
+log.Printf("uploaded %d, skipped %d, failed %d", len(res.Uploaded), len(res.Skipped), len(res.Failed))
+```
+
+Add `sync.WithDryRun()` to see what would be uploaded without writing anything.
+
 ### Grant temporary auth to a file
 
 Say you have a number of files in a private bucket, and you want to allow other
@@ -140,8 +240,10 @@ be found via the BaseURL method:
 base := bucket.BaseURL()
 ```
 
+More runnable code lives in [`examples/`](examples), and every exported identifier is documented on
+[pkg.go.dev](https://pkg.go.dev/github.com/Backblaze/blazer/b2).
 
-### Testing resilience with B2 test mode
+## Testing resilience with B2 test mode
 
 B2 provides documented "test mode" hooks (sent as the `X-Bz-Test-Mode` request
 header) that ask the service to inject controlled failures, so you can exercise
@@ -173,7 +275,35 @@ in production. See Backblaze's
 [Integration Checklist](https://www.backblaze.com/docs/cloud-storage-integration-checklist)
 for the authoritative behavior.
 
+## Contributing
 
-### Licenses
-The b2 package currently does not consume any third party packages and entirely depends on imports of the Go stdlib or from sources provided within the `blazer` repository itself.
-A report of used licenses can be found at `./b2/licenses.csv` which was generated with https://github.com/google/go-licenses . Please double check yourself if this is a concern as this may change over time and the licenses report could become stale
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR: it covers
+`make ci` (the same checks CI runs), changelog entries with [changie](https://changie.dev), and the review
+process in [REVIEW.md](REVIEW.md). Contributor references, including the B2 behaviors Blazer must get right,
+are in [`docs/`](docs). Coding agents start from [AGENTS.md](AGENTS.md). Releases follow
+[RELEASE.md](RELEASE.md).
+
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+Do not open public issues for vulnerabilities. See [SECURITY.md](SECURITY.md) for how to report one.
+
+## Licenses
+
+Blazer is licensed under the [Apache License 2.0](LICENSE).
+
+The b2 package does not consume any third-party packages; it depends only on the Go standard library and
+code within the `blazer` repository. A report of used licenses is in [`b2/licenses.csv`](b2/licenses.csv),
+generated with [go-licenses](https://github.com/google/go-licenses). Double-check it yourself if this is a
+concern: it can become stale as the code changes.
+
+## Backblaze ecosystem
+
+- **[b2-sdk-python](https://github.com/Backblaze/b2-sdk-python)** — the Python SDK for B2, and the
+  reference implementation Blazer is checked against.
+- **[B2 Command Line Tool](https://github.com/Backblaze/B2_Command_Line_Tool)** — the `b2` CLI.
+- **[b2-sdk-typescript](https://github.com/backblaze-labs/b2-sdk-typescript)** — a TypeScript and
+  JavaScript SDK for B2, incubating in Backblaze Labs.
+- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — a Model Context Protocol server for B2.
+- **[b2-action](https://github.com/backblaze-labs/b2-action)** — a GitHub Action for B2.
