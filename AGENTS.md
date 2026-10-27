@@ -48,6 +48,8 @@ not exercised the wire.
   writer) return an error, never "last one wins". A per-call option may still override a client default.
 - Comments are short and explain non-obvious decisions. Godoc on every exported identifier, including what
   is not supported.
+- Detail lives in [`docs/`](docs/README.md): B2 facts with sources in `b2-contracts.md`, test levels and
+  how to run them in `testing.md`, problems earlier reviews found in `review-lessons.md`.
 
 ## Things agents get wrong here
 
@@ -74,6 +76,14 @@ Each line was raised by a reviewer on at least two PRs.
    fields). Pin the real shape with a fixture; say in the PR what you verified live.
 10. **PR text that disagrees with code** (`> 0` vs `> 1`). Re-read the description after the last commit.
 11. **Over-generic abstractions.** Prefer a parameter on the existing helper to a new framework.
+12. **Secrets past `String()`.** `%d`, `%x` and `%+v` on a struct bypass `String`; a zero-value key type is
+    still a key; response logs and escaped JSON names leak too. Test every verb and both log directions.
+13. **Compatibility beyond call sites.** A new variadic parameter breaks function values; returned maps,
+    `nil` vs empty and `base` exports are public. Mark it `**Breaking:**` and say what callers must do.
+14. **Explicit `nil` and hidden state.** An option given `nil` is an error, not "unset"; configuration the
+    key cannot read (`isClientAuthorizedToRead: false`) is hidden, not absent. Never overwrite either.
+15. **Proof that did not run.** CI does not run the `.sdkharness` simulator contract; run the scenarios for
+    what you changed. A skipped check is NOT RUN, never PASS. See [docs/testing.md](docs/testing.md).
 
 ## Workflow (AI-native SDLC)
 

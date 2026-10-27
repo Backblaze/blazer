@@ -29,6 +29,10 @@ Tag each finding with its pass.
   behave like sibling calls; gzip `Content-Encoding` downloads still report length and SHA1.
 - **Security**: secrets (application keys, auth tokens, SSE-C keys) never logged or put in errors;
   capability checks fail closed; integer conversions are bounded (CodeQL).
+- **Compatibility**: exported signatures in every package, not only `b2` (a new variadic parameter breaks
+  function values; a new `base` parameter breaks callers); returned shapes (`nil` vs empty, map keys);
+  changed behavior of an existing field or default. Each needs a `**Breaking:**` changelog entry that
+  says what callers must do. Compare with `b2-sdk-python` and the `b2` CLI ([docs/b2-contracts.md](docs/b2-contracts.md)).
 - **Compliance**: the change matches the issue, `spec.md` and `plan.md`; the PR description matches the
   code; a `.changes/unreleased` entry exists and reads well for users; godoc says what is not supported;
   `AGENTS.md` is updated when the change makes it stale or breaks a convention in it.
