@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -475,7 +476,18 @@ func (w *Writer) ssecFileInfo() (map[string]string, error) {
 		return w.info, nil
 	}
 	id := w.encryption.ssec.keyID
-	existing, present := w.info[ssecKeyIDFileInfo]
+	var existing string
+	present := false
+	for k, v := range w.info {
+		if !strings.EqualFold(k, ssecKeyIDFileInfo) {
+			continue
+		}
+		if present && existing != v {
+			return nil, fmt.Errorf("b2: SSE-C file info %q conflicts with the requested key", ssecKeyIDFileInfo)
+		}
+		existing = v
+		present = true
+	}
 	if id == "" {
 		if present {
 			return nil, fmt.Errorf("b2: SSE-C file info %q requires a caller-supplied key ID", ssecKeyIDFileInfo)
@@ -487,6 +499,9 @@ func (w *Writer) ssecFileInfo() (map[string]string, error) {
 	}
 	info := make(map[string]string, len(w.info)+1)
 	for k, v := range w.info {
+		if strings.EqualFold(k, ssecKeyIDFileInfo) {
+			continue
+		}
 		info[k] = v
 	}
 	info[ssecKeyIDFileInfo] = id
@@ -824,7 +839,9 @@ func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
 // ID, resume fails closed. B2 rejects a wrong key on uploaded parts, but cannot
 // check it when all existing parts are skipped, so callers must not reuse an ID
 // for another key. This option adds neither the key nor a key-derived value to
-// file info.
+// file info. Before any request, uploads reject caller file info with a
+// conflicting sse_c_key_id in any letter case, an ID for a key without one, or
+// more than 10 entries after adding the key ID.
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
 		w.encryption = &uploadEncryption{ssec: key}
