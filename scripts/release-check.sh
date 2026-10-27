@@ -75,7 +75,7 @@ if advisories=$(list "repos/$repo/security-advisories?per_page=100"); then
   fixes=${RELEASE_FIXES_ADVISORIES:-}
   # Only GHSA ids and states are printed: summaries of unpublished advisories must stay private.
   fixed=$(jq -c --arg f ",$fixes," 'select(.state == "draft" and (.ghsa_id as $id | $f | contains("," + $id + ",")))' <<<"$advisories")
-  open=$(jq -c --arg f ",$fixes," 'select((.state == "triage" or .state == "draft") and (.ghsa_id as $id | $f | contains("," + $id + ",") | not))' <<<"$advisories")
+  open=$(jq -c --arg f ",$fixes," 'select(.state == "triage" or (.state == "draft" and (.ghsa_id as $id | $f | contains("," + $id + ",") | not)))' <<<"$advisories")
   if [ -n "$fixed" ]; then
     jq -r '"  \(.ghsa_id) fixed by this release: publish it right after tagging"' <<<"$fixed"
   fi
