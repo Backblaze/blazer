@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Simple SSE-C uploads made with `NewSSECKeyWithID` now store the caller ID as `sse_c_key_id` in file info. This adds one file-info entry and counts toward B2's 10-entry limit.
+- Simple SSE-C uploads made with `NewSSECKeyWithID` now store the caller ID as `sse_c_key_id` in file info. This adds one file-info entry and counts toward B2's 10-entry limit. They now fail before any request when caller file info conflicts with the key ID, sets an ID for a key without one, or would exceed that limit. Previously those file-info combinations were sent to B2 as-is.
 
 ### Fixed
 

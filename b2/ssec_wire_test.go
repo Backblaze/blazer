@@ -425,6 +425,26 @@ func TestSSECSimpleUploadKeyIDFileInfo(t *testing.T) {
 			},
 		},
 		{
+			name: "key without ID rejects caller key ID before requests",
+			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
+				writer := bucket.Object("simple-unkeyed-id").NewWriter(context.Background(),
+					WithAttrsOption(&Attrs{Info: map[string]string{ssecKeyIDFileInfo: keyID}}),
+					WithSSECKey(wire.key))
+				if _, err := writer.Write([]byte("payload")); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err == nil || !strings.Contains(err.Error(), ssecKeyIDFileInfo) {
+					t.Fatalf("Close error = %v, want key-ID rejection", err)
+				}
+				if got := len(wire.requestsTo("/b2api/v4/b2_get_upload_url")); got != 0 {
+					t.Errorf("get-upload-url calls = %d, want 0", got)
+				}
+				if got := len(wire.requestsTo("/upload")); got != 0 {
+					t.Errorf("upload calls = %d, want 0", got)
+				}
+			},
+		},
+		{
 			name: "too much file info is rejected before requests",
 			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
 				info := make(map[string]string)
