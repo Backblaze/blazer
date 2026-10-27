@@ -6,7 +6,7 @@ teaches something new. [AGENTS.md](../AGENTS.md) holds the short rules; this fil
 
 Each entry says what is true, where it comes from, and the test that pins it in blazer. Evidence kinds:
 **docs** (B2 API documentation), **reference** (`b2-sdk-python` or the `b2` CLI, pinned to a commit),
-**live** (observed against B2, with the date), **simulator** (the pinned harness simulator used by
+**live** (observed against B2, with the date), **simulator** ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator), pinned by the harness and used by
 `.sdkharness/`). When two sources disagree, keep both and say which one blazer follows and why.
 
 ## SSE-C keys and identity
@@ -84,7 +84,7 @@ Each entry says what is true, where it comes from, and the test that pins it in 
 | --- | --- | --- |
 | Fake backend (`b2/b2_test.go`) | `b2` package logic | The request sent on the wire |
 | Wire test (`httptest` through `NewClient`) | The exact request and how a response is decoded | That B2 answers that way |
-| Harness simulator (`.sdkharness/`) | Behavior against a B2-shaped server, pinned | Behavior it does not model (encryption keys, retention, replication), or behavior not yet confirmed against live B2 |
+| B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator), through `.sdkharness/`) | Behavior against a B2-shaped server, pinned | Behavior it does not model (encryption keys, retention, replication), or behavior not yet confirmed against live B2 |
 | Live B2 | Real behavior on that date and account | Other accounts, regions or later B2 releases |
 
 A check that did not run is **NOT RUN**, never PASS. Say in the PR which surfaces you used.

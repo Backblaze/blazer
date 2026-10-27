@@ -9,7 +9,7 @@ how to run it, and how to show that a test pins the behavior a PR claims.
 | --- | --- | --- | --- | --- |
 | Unit, fake backend | `b2/*_test.go` using the fake in `b2/b2_test.go` | `go test ./...` | Logic inside the `b2` package | What is sent on the wire |
 | Wire | `httptest` server or `RoundTripper` stub through `NewClient` (`*_wire_test.go`) | `go test ./...` | The exact request body, headers and query, and how a response is decoded | That B2 answers that way |
-| Repo-owned SDK harness contract | `.sdkharness/` ([README](../.sdkharness/README.md)) | See below | Behavior against a B2-shaped simulator, one scenario per capability | Behavior the simulator does not model (encryption keys, retention, replication effects) |
+| Repo-owned SDK harness contract | `.sdkharness/` ([README](../.sdkharness/README.md)) | See below | Behavior against the B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator)), one scenario per capability | Behavior the simulator does not model (encryption keys, retention, replication effects) |
 | Live integration | `b2/integration_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/` | Real B2 behavior for that account on that day | Other accounts, regions or later B2 releases |
 
 `make ci` runs build, vet, gofmt, tidy, verify, lint, the race tests, b2keys, cross-compiles and the
@@ -34,9 +34,11 @@ server that returns an empty `200`, must not satisfy an assertion meant for a sp
 
 `.sdkharness/tests.tsv` lists one row per scenario: level (`conformance`, `resilience`, `health`), scenario
 id, target and the executable that runs it. Each scenario runs against a fresh simulator and prints one
-`SDKHARNESS_RESULT` line. The central SDK harness runs every row daily against a pinned simulator.
+`SDKHARNESS_RESULT` line. The central SDK harness runs every row daily against a pinned commit of
+[`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator).
 
-To run a scenario yourself, start a B2-compatible simulator on loopback and run, for example:
+To run a scenario yourself, start that simulator on loopback (see the [`.sdkharness` README](../.sdkharness/README.md))
+and run, for example:
 
 ```sh
 SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=enc.sse_c \
@@ -53,6 +55,13 @@ PRs that each add a row will conflict on those counts; the second to merge sets 
 
 GitHub CI does not run the simulator contract, so a change can be green in CI and still fail a scenario.
 Run the scenarios for the area you changed before asking for review.
+
+## One simulator
+
+blazer does not keep its own B2 simulator. The B2 simulator for every Backblaze SDK lives in one repository,
+[`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator), so its behavior is defined once and every SDK is tested against the same server. Tests that need a
+B2-shaped server use it; tests that only need a canned response use a wire test. Do not add an in-package
+simulator or a second copy of B2 behavior to this repository.
 
 ## Live integration tests
 

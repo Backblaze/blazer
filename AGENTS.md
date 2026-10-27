@@ -27,7 +27,7 @@ coding agents and new contributors; `CLAUDE.md` points here. Keep it under about
 | `internal/retry/`, `internal/blog/` | Backoff helpers and debug logging. |
 | `x/` | Experimental packages (`consistent`, `transport`, `window`); weaker compatibility promise. |
 | `bin/b2keys/` | Key-management CLI, its own module. |
-| `.sdkharness/` | Contract checks run by the central SDK harness against a loopback B2 simulator. |
+| `.sdkharness/` | Contract checks run by the central SDK harness against the B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator)) on loopback. |
 | `.changes/` | changie fragments; `CHANGELOG.md` is generated from them. |
 | `intent/` | Per-change `intent.md`, `spec.md`, `plan.md` (see Workflow). |
 
@@ -84,6 +84,8 @@ Each line was raised by a reviewer on at least two PRs.
     key cannot read (`isClientAuthorizedToRead: false`) is hidden, not absent. Never overwrite either.
 15. **Proof that did not run.** CI does not run the `.sdkharness` simulator contract; run the scenarios for
     what you changed. A skipped check is NOT RUN, never PASS. See [docs/testing.md](docs/testing.md).
+16. **A second simulator.** The B2 simulator is [`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator), shared by every Backblaze SDK. Do not add an
+    in-package simulator or fake B2 server here; use that simulator, or a wire test for a canned response.
 
 ## Workflow (AI-native SDLC)
 
