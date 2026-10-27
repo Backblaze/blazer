@@ -878,6 +878,9 @@ func TestUploadFileRejectsChangeDuringStream(t *testing.T) {
 	if len(result.Failed) != 1 || result.Failed[0].Rel != "large.bin" || result.Failed[0].Err == nil {
 		t.Fatalf("failures=%+v, want large.bin", result.Failed)
 	}
+	if !strings.Contains(result.Failed[0].Err.Error(), "file changed during upload") {
+		t.Fatalf("large.bin failed with %v, want the SHA1 change error", result.Failed[0].Err)
+	}
 	if got := fmt.Sprint(result.Uploaded); got != "[z-good.txt]" {
 		t.Fatalf("uploaded=%s, want only z-good.txt", got)
 	}
