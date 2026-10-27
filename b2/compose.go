@@ -19,11 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const composeMaxLargeFileSize int64 = 10_000_000_000_000
 
 // ComposePart describes one part of a composed large file. Parts are used in
 // the order given to Compose.
@@ -43,6 +44,72 @@ func PartFromReader(r io.Reader, size int64) ComposePart {
 // the form "bytes=0-4999999". An empty range copies the entire source.
 func PartFromCopy(sourceFileID, byteRange string) ComposePart {
 	return ComposePart{sourceFileID: sourceFileID, byteRange: byteRange}
+}
+
+// ComposeOption configures metadata or Object Lock for Compose. Encryption is
+// not currently supported; this variadic option slot permits adding it later
+// without changing Compose's signature.
+type ComposeOption func(*composeOptions)
+
+type composeOptions struct {
+	attrs        *Attrs
+	attrsSet     bool
+	retention    *FileRetention
+	retentionSet bool
+	legalHold    LegalHold
+}
+
+// ComposeWithAttrs sets the composed file's content type, file info, SHA1 and
+// last-modified time. SHA1 and LastModified are always stored as
+// large_file_sha1 and src_last_modified_millis when set; file-info size limits
+// are left to the server. An empty ContentType keeps application/octet-stream. A
+// nil Attrs returns an error before a request is made. It does not copy
+// Attrs.Retention or Attrs.LegalHold; use ComposeFileRetention and
+// ComposeLegalHold.
+func ComposeWithAttrs(attrs *Attrs) ComposeOption {
+	return func(options *composeOptions) {
+		options.attrs = attrs
+		options.attrsSet = true
+	}
+}
+
+// ComposeFileRetention sets Object Lock retention on the composed file. A nil
+// retention returns an error before a request is made.
+func ComposeFileRetention(retention *FileRetention) ComposeOption {
+	return func(options *composeOptions) {
+		options.retention = retention
+		options.retentionSet = true
+	}
+}
+
+// ComposeLegalHold sets Object Lock legal hold on the composed file.
+func ComposeLegalHold(legalHold LegalHold) ComposeOption {
+	return func(options *composeOptions) {
+		options.legalHold = legalHold
+	}
+}
+
+func (options *composeOptions) validate() (contentType string, info map[string]string, err error) {
+	contentType = "application/octet-stream"
+	if options.attrsSet {
+		if options.attrs == nil {
+			return "", nil, errors.New("b2: Compose attrs must not be nil")
+		}
+		if options.attrs.ContentType != "" {
+			contentType = options.attrs.ContentType
+		}
+		info = fileInfoFromAttrs(options.attrs, 0)
+	}
+	if options.retentionSet && options.retention == nil {
+		return "", nil, errors.New("b2: Compose retention must not be nil")
+	}
+	if err := options.retention.validate(); err != nil {
+		return "", nil, err
+	}
+	if err := options.legalHold.validate(true); err != nil {
+		return "", nil, err
+	}
+	return contentType, info, nil
 }
 
 func (p ComposePart) validate(nonFinal bool) error {
@@ -107,34 +174,28 @@ func parseComposeRange(value string) (uint64, uint64, error) {
 	return start, end, nil
 }
 
-func validateComposeOverlap(parts []ComposePart) error {
-	type interval struct{ start, end uint64 }
-	ranges := make(map[string][]interval)
-	for _, part := range parts {
-		if part.sourceFileID == "" {
-			continue
-		}
-		if part.byteRange == "" {
-			// A whole-source copy overlaps every other range of that source.
-			if len(ranges[part.sourceFileID]) != 0 {
-				return fmt.Errorf("b2: Compose overlapping copy ranges for source %q", part.sourceFileID)
-			}
-			ranges[part.sourceFileID] = []interval{{0, ^uint64(0)}}
-			continue
-		}
-		start, end, err := parseComposeRange(part.byteRange)
-		if err != nil {
-			return err
-		}
-		ranges[part.sourceFileID] = append(ranges[part.sourceFileID], interval{start, end})
+func (p ComposePart) knownSize() (int64, bool) {
+	if p.reader != nil {
+		return p.size, true
 	}
-	for source, intervals := range ranges {
-		sort.Slice(intervals, func(i, j int) bool { return intervals[i].start < intervals[j].start })
-		for i := 1; i < len(intervals); i++ {
-			if intervals[i].start <= intervals[i-1].end {
-				return fmt.Errorf("b2: Compose overlapping copy ranges for source %q", source)
-			}
+	if p.byteRange == "" {
+		return 0, false
+	}
+	start, end, _ := parseComposeRange(p.byteRange) // validated before use
+	return int64(end - start + 1), true
+}
+
+func validateComposeTotalSize(parts []ComposePart) error {
+	var total int64
+	for i, part := range parts {
+		size, known := part.knownSize()
+		if !known {
+			continue
 		}
+		if size > composeMaxLargeFileSize-total {
+			return fmt.Errorf("b2: Compose part %d brings the known total over the 10 TB (10,000,000,000,000 bytes) large-file limit", i+1)
+		}
+		total += size
 	}
 	return nil
 }
@@ -143,8 +204,22 @@ func validateComposeOverlap(parts []ComposePart) error {
 // the supplied order. It requires at least two parts; every part except the
 // last must be at least five million bytes. At most 10000 parts of at most
 // five billion bytes each are allowed. Copy ranges from the same source file
-// may be adjacent but must not overlap.
-func (b *Bucket) Compose(ctx context.Context, name string, parts ...ComposePart) (object *Object, err error) {
+// may overlap. Compose defaults the content type to application/octet-stream.
+// The known total of uploaded parts and ranged copies may not exceed 10 TB
+// (10,000,000,000,000 bytes); whole-file copies have an unknown size and are
+// not counted toward that limit.
+func (b *Bucket) Compose(ctx context.Context, name string, parts []ComposePart, opts ...ComposeOption) (object *Object, err error) {
+	options := composeOptions{}
+	for _, option := range opts {
+		if option == nil {
+			continue
+		}
+		option(&options)
+	}
+	contentType, info, err := options.validate()
+	if err != nil {
+		return nil, err
+	}
 	if len(parts) < 2 {
 		return nil, fmt.Errorf("b2: Compose requires at least two parts")
 	}
@@ -156,10 +231,10 @@ func (b *Bucket) Compose(ctx context.Context, name string, parts ...ComposePart)
 			return nil, fmt.Errorf("part %d: %w", i+1, err)
 		}
 	}
-	if err := validateComposeOverlap(parts); err != nil {
+	if err := validateComposeTotalSize(parts); err != nil {
 		return nil, err
 	}
-	large, err := b.b.startLargeFile(ctx, name, "application/octet-stream", nil, nil, "", nil)
+	large, err := b.b.startLargeFile(ctx, name, contentType, info, options.retention, options.legalHold, nil)
 	if err != nil {
 		return nil, err
 	}

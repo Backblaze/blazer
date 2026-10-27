@@ -130,9 +130,10 @@ func runCheck(ctx context.Context, target *string) error {
 	if err != nil {
 		return err
 	}
-	object, err := bucket.Compose(ctx, name,
+	object, err := bucket.Compose(ctx, name, []b2.ComposePart{
 		b2.PartFromReader(bytes.NewReader(uploaded), int64(len(uploaded))),
-		b2.PartFromCopy(source.ID(), "bytes=0-3"))
+		b2.PartFromCopy(source.ID(), "bytes=0-3"),
+	})
 	if err != nil {
 		return classify("compose", err)
 	}

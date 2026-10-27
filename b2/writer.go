@@ -774,17 +774,26 @@ func (w *Writer) Close() error {
 
 func (w *Writer) withAttrs(attrs *Attrs) *Writer {
 	w.contentType = attrs.ContentType
-	w.info = make(map[string]string)
-	for k, v := range attrs.Info {
-		w.info[k] = v
-	}
-	if len(w.info) < 10 && attrs.SHA1 != "" {
-		w.info["large_file_sha1"] = attrs.SHA1
-	}
-	if len(w.info) < 10 && !attrs.LastModified.IsZero() {
-		w.info["src_last_modified_millis"] = fmt.Sprintf("%d", attrs.LastModified.UnixNano()/1e6)
-	}
+	w.info = fileInfoFromAttrs(attrs, 10)
 	return w
+}
+
+// fileInfoFromAttrs copies user file info and adds the large-file metadata that
+// Blazer derives from Attrs. Each derived key is added only while the info has
+// fewer than maxEntries entries; maxEntries <= 0 adds them unconditionally.
+func fileInfoFromAttrs(attrs *Attrs, maxEntries int) map[string]string {
+	info := make(map[string]string)
+	for k, v := range attrs.Info {
+		info[k] = v
+	}
+	room := func() bool { return maxEntries <= 0 || len(info) < maxEntries }
+	if room() && attrs.SHA1 != "" {
+		info["large_file_sha1"] = attrs.SHA1
+	}
+	if room() && !attrs.LastModified.IsZero() {
+		info["src_last_modified_millis"] = fmt.Sprintf("%d", attrs.LastModified.UnixNano()/1e6)
+	}
+	return info
 }
 
 func completedBytes(buf writeBuffer) int64 {
