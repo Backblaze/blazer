@@ -382,6 +382,8 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 
 func TestComposeOptionsReachStartLargeFile(t *testing.T) {
 	retentionUntil := time.UnixMilli(1735689600000)
+	lastModified := time.UnixMilli(1700000000000)
+	sha1 := strings.Repeat("a", 40)
 	parts := []ComposePart{
 		PartFromCopy("source", "bytes=0-4999999"),
 		PartFromCopy("source", "bytes=0-2"),
@@ -398,14 +400,20 @@ func TestComposeOptionsReachStartLargeFile(t *testing.T) {
 			},
 		},
 		{
-			name: "attrs content type and info",
+			name: "attrs content type info sha1 and last modified",
 			options: []ComposeOption{ComposeWithAttrs(&Attrs{
-				ContentType: "text/plain",
-				Info:        map[string]string{"author": "blazer"},
+				ContentType:  "video/mp4",
+				Info:         map[string]string{"author": "blazer"},
+				SHA1:         sha1,
+				LastModified: lastModified,
 			})},
 			wantStart: map[string]any{
-				"contentType": "text/plain",
-				"fileInfo":    map[string]any{"author": "blazer"},
+				"contentType": "video/mp4",
+				"fileInfo": map[string]any{
+					"author":                   "blazer",
+					"large_file_sha1":          sha1,
+					"src_last_modified_millis": strconv.FormatInt(lastModified.UnixMilli(), 10),
+				},
 			},
 		},
 		{
@@ -451,9 +459,6 @@ func TestComposeRejectsInvalidOptionsBeforeStarting(t *testing.T) {
 		want    string
 	}{
 		{"nil attrs", []ComposeOption{ComposeWithAttrs(nil)}, "attrs must not be nil"},
-		{"too much file info", []ComposeOption{ComposeWithAttrs(&Attrs{Info: map[string]string{
-			"1": "", "2": "", "3": "", "4": "", "5": "", "6": "", "7": "", "8": "", "9": "", "10": "", "11": "",
-		}})}, "at most 10"},
 		{"invalid retention", []ComposeOption{ComposeFileRetention(&FileRetention{})}, "invalid retention mode"},
 		{"invalid legal hold", []ComposeOption{ComposeLegalHold("invalid")}, "invalid legal hold"},
 	}
@@ -471,15 +476,59 @@ func TestComposeRejectsInvalidOptionsBeforeStarting(t *testing.T) {
 	}
 }
 
+func TestComposeAllowsMoreThanTenFileInfoEntries(t *testing.T) {
+	info := make(map[string]string, 11)
+	for i := range 11 {
+		info[strconv.Itoa(i)] = "value"
+	}
+	wire := newComposeWire(t)
+	_, err := wire.bucket(t).Compose(context.Background(), "many-info", []ComposePart{
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromCopy("source", "bytes=0-2"),
+	}, ComposeWithAttrs(&Attrs{Info: info}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if len(wire.starts) != 1 {
+		t.Fatalf("start bodies = %#v, want one", wire.starts)
+	}
+	got, ok := wire.starts[0]["fileInfo"].(map[string]any)
+	if !ok || len(got) != len(info) {
+		t.Fatalf("start file info = %#v, want %#v", wire.starts[0]["fileInfo"], info)
+	}
+	for key, want := range info {
+		if got[key] != want {
+			t.Fatalf("start file info[%q] = %#v, want %q", key, got[key], want)
+		}
+	}
+}
+
+func TestComposeIgnoresNilOption(t *testing.T) {
+	wire := newComposeWire(t)
+	_, err := wire.bucket(t).Compose(context.Background(), "nil-option", []ComposePart{
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromCopy("source", "bytes=0-2"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls, _, _, _ := wire.snapshot()
+	if want := []string{"start", "copy:1", "copy:2", "finish"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
 func TestComposeRejectsKnownTotalOverTenTBBeforeStarting(t *testing.T) {
 	parts := make([]ComposePart, 2001)
 	for i := range parts[:2000] {
 		parts[i] = PartFromCopy("source", "bytes=0-4999999999")
 	}
-	parts[2000] = PartFromReader(bytes.NewReader(nil), 5_000_000_000)
+	parts[2000] = PartFromCopy("source", "bytes=0-4999999")
 	wire := newComposeWire(t)
-	if _, err := wire.bucket(t).Compose(context.Background(), "too-large", parts); err == nil || !strings.Contains(err.Error(), "10 TB") {
-		t.Fatalf("Compose error = %v, want 10 TB preflight rejection", err)
+	if _, err := wire.bucket(t).Compose(context.Background(), "too-large", parts); err == nil || !strings.Contains(err.Error(), "part 2001 brings the known total over the 10 TB (10,000,000,000,000 bytes) large-file limit") {
+		t.Fatalf("Compose error = %v, want named 10 TB preflight rejection", err)
 	}
 	calls, _, _, _ := wire.snapshot()
 	if len(calls) != 0 {

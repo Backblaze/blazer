@@ -755,17 +755,24 @@ func (w *Writer) Close() error {
 
 func (w *Writer) withAttrs(attrs *Attrs) *Writer {
 	w.contentType = attrs.ContentType
-	w.info = make(map[string]string)
-	for k, v := range attrs.Info {
-		w.info[k] = v
-	}
-	if len(w.info) < 10 && attrs.SHA1 != "" {
-		w.info["large_file_sha1"] = attrs.SHA1
-	}
-	if len(w.info) < 10 && !attrs.LastModified.IsZero() {
-		w.info["src_last_modified_millis"] = fmt.Sprintf("%d", attrs.LastModified.UnixNano()/1e6)
-	}
+	w.info = fileInfoFromAttrs(attrs)
 	return w
+}
+
+// fileInfoFromAttrs copies user file info and adds the large-file metadata that
+// Blazer derives from Attrs when there is room for it.
+func fileInfoFromAttrs(attrs *Attrs) map[string]string {
+	info := make(map[string]string)
+	for k, v := range attrs.Info {
+		info[k] = v
+	}
+	if len(info) < 10 && attrs.SHA1 != "" {
+		info["large_file_sha1"] = attrs.SHA1
+	}
+	if len(info) < 10 && !attrs.LastModified.IsZero() {
+		info["src_last_modified_millis"] = fmt.Sprintf("%d", attrs.LastModified.UnixNano()/1e6)
+	}
+	return info
 }
 
 func completedBytes(buf writeBuffer) int64 {

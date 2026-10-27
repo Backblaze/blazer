@@ -58,7 +58,11 @@ type composeOptions struct {
 	legalHold LegalHold
 }
 
-// ComposeWithAttrs sets the composed file's content type and file info.
+// ComposeWithAttrs sets the composed file's content type, file info, SHA1 and
+// last-modified time. An empty ContentType keeps application/octet-stream. A
+// nil Attrs returns an error before a request is made. It does not copy
+// Attrs.Retention or Attrs.LegalHold; use ComposeFileRetention and
+// ComposeLegalHold.
 func ComposeWithAttrs(attrs *Attrs) ComposeOption {
 	return func(options *composeOptions) {
 		options.attrs = attrs
@@ -89,15 +93,7 @@ func (options *composeOptions) validate() (contentType string, info map[string]s
 		if options.attrs.ContentType != "" {
 			contentType = options.attrs.ContentType
 		}
-		if len(options.attrs.Info) > 10 {
-			return "", nil, fmt.Errorf("b2: Compose file info has %d entries, B2 allows at most 10", len(options.attrs.Info))
-		}
-		if len(options.attrs.Info) != 0 {
-			info = make(map[string]string, len(options.attrs.Info))
-			for key, value := range options.attrs.Info {
-				info[key] = value
-			}
-		}
+		info = fileInfoFromAttrs(options.attrs)
 	}
 	if err := options.retention.validate(); err != nil {
 		return "", nil, err
@@ -183,13 +179,13 @@ func (p ComposePart) knownSize() (int64, bool) {
 
 func validateComposeTotalSize(parts []ComposePart) error {
 	var total int64
-	for _, part := range parts {
+	for i, part := range parts {
 		size, known := part.knownSize()
 		if !known {
 			continue
 		}
 		if size > composeMaxLargeFileSize-total {
-			return fmt.Errorf("b2: Compose known parts exceed the 10 TB B2 large-file limit")
+			return fmt.Errorf("b2: Compose part %d brings the known total over the 10 TB (10,000,000,000,000 bytes) large-file limit", i+1)
 		}
 		total += size
 	}
@@ -201,11 +197,15 @@ func validateComposeTotalSize(parts []ComposePart) error {
 // last must be at least five million bytes. At most 10000 parts of at most
 // five billion bytes each are allowed. Copy ranges from the same source file
 // may overlap. Compose defaults the content type to application/octet-stream.
-// The known total of uploaded parts and ranged copies may not exceed 10 TB;
-// whole-file copies have an unknown size and are not counted toward that limit.
+// The known total of uploaded parts and ranged copies may not exceed 10 TB
+// (10,000,000,000,000 bytes); whole-file copies have an unknown size and are
+// not counted toward that limit.
 func (b *Bucket) Compose(ctx context.Context, name string, parts []ComposePart, opts ...ComposeOption) (object *Object, err error) {
 	options := composeOptions{}
 	for _, option := range opts {
+		if option == nil {
+			continue
+		}
 		option(&options)
 	}
 	contentType, info, err := options.validate()
