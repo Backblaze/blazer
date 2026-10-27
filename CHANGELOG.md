@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `b2.WithSSEB2("AES256")` requests SSE-B2 for one upload without changing the bucket default. Resumed uploads validate the existing encryption mode and algorithm; SSE-B2 and SSE-C writer options cannot be combined.
 - `(*b2.Client).NewBucket` can set a replication configuration at bucket creation; `(*base.B2).CreateBucket` accepts the replication configuration as a new parameter.
 
+### Changed
+
+- Simple SSE-C uploads made with `NewSSECKeyWithID` now store the caller ID as `sse_c_key_id` in file info. This adds one file-info entry and counts toward B2's 10-entry limit.
+
 ### Fixed
 
 - A rejected bucket replication update no longer leaves the attempted configuration in the local bucket cache, where a later unrelated update could resend it.

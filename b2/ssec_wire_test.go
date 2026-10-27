@@ -355,6 +355,132 @@ func TestSSECWriterDownloadAttrsAndCopyWire(t *testing.T) {
 	}
 }
 
+func TestSSECSimpleUploadKeyIDFileInfo(t *testing.T) {
+	const keyID = "key-a"
+	testCases := []struct {
+		name string
+		run  func(t *testing.T, wire *ssecPublicWire, bucket *Bucket)
+	}{
+		{
+			name: "Write stores caller key ID and other info",
+			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
+				writer := bucket.Object("simple-with-id").NewWriter(context.Background(),
+					WithAttrsOption(&Attrs{Info: map[string]string{"caller": "value"}}),
+					WithSSECKey(wire.keyWithID(t, keyID)))
+				if _, err := writer.Write([]byte("payload")); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				uploads := wire.requestsTo("/upload")
+				if len(uploads) != 1 {
+					t.Fatalf("upload calls = %d, want 1", len(uploads))
+				}
+				if got := uploads[0].headers.Get("X-Bz-Info-sse_c_key_id"); got != keyID {
+					t.Errorf("key ID header = %q, want %q", got, keyID)
+				}
+				if got := uploads[0].headers.Get("X-Bz-Info-caller"); got != "value" {
+					t.Errorf("caller info header = %q, want value", got)
+				}
+			},
+		},
+		{
+			name: "Write without key ID does not add file info",
+			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
+				writer := bucket.Object("simple-without-id").NewWriter(context.Background(), WithSSECKey(wire.key))
+				if _, err := writer.Write([]byte("payload")); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				uploads := wire.requestsTo("/upload")
+				if len(uploads) != 1 {
+					t.Fatalf("upload calls = %d, want 1", len(uploads))
+				}
+				if got := uploads[0].headers.Get("X-Bz-Info-sse_c_key_id"); got != "" {
+					t.Errorf("key ID header = %q, want absent", got)
+				}
+			},
+		},
+		{
+			name: "conflicting caller key ID is rejected before requests",
+			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
+				writer := bucket.Object("simple-conflict").NewWriter(context.Background(),
+					WithAttrsOption(&Attrs{Info: map[string]string{ssecKeyIDFileInfo: "other-key"}}),
+					WithSSECKey(wire.keyWithID(t, keyID)))
+				if _, err := writer.Write([]byte("payload")); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err == nil || !strings.Contains(err.Error(), ssecKeyIDFileInfo) {
+					t.Fatalf("Close error = %v, want conflicting key-ID rejection", err)
+				}
+				if got := len(wire.requestsTo("/b2api/v4/b2_get_upload_url")); got != 0 {
+					t.Errorf("get-upload-url calls = %d, want 0", got)
+				}
+				if got := len(wire.requestsTo("/upload")); got != 0 {
+					t.Errorf("upload calls = %d, want 0", got)
+				}
+			},
+		},
+		{
+			name: "too much file info is rejected before requests",
+			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
+				info := make(map[string]string)
+				for i := 0; i < 10; i++ {
+					info[fmt.Sprintf("user_%d", i)] = "value"
+				}
+				writer := bucket.Object("simple-too-many").NewWriter(context.Background(),
+					WithAttrsOption(&Attrs{Info: info}),
+					WithSSECKey(wire.keyWithID(t, keyID)))
+				if _, err := writer.Write([]byte("payload")); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err == nil || !strings.Contains(err.Error(), "10") {
+					t.Fatalf("Close error = %v, want file-info limit rejection", err)
+				}
+				if got := len(wire.requestsTo("/b2api/v4/b2_get_upload_url")); got != 0 {
+					t.Errorf("get-upload-url calls = %d, want 0", got)
+				}
+				if got := len(wire.requestsTo("/upload")); got != 0 {
+					t.Errorf("upload calls = %d, want 0", got)
+				}
+			},
+		},
+		{
+			name: "ReadFrom stores caller key ID",
+			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
+				writer := bucket.Object("read-from-with-id").NewWriter(context.Background(),
+					WithAttrsOption(&Attrs{Info: map[string]string{"caller": "value"}}),
+					WithSSECKey(wire.keyWithID(t, keyID)))
+				if n, err := writer.ReadFrom(bytes.NewReader([]byte("payload"))); err != nil || n != int64(len("payload")) {
+					t.Fatalf("ReadFrom = %d, %v; want %d, nil", n, err, len("payload"))
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				uploads := wire.requestsTo("/upload")
+				if len(uploads) != 1 {
+					t.Fatalf("upload calls = %d, want 1", len(uploads))
+				}
+				if got := uploads[0].headers.Get("X-Bz-Info-sse_c_key_id"); got != keyID {
+					t.Errorf("key ID header = %q, want %q", got, keyID)
+				}
+				if got := uploads[0].headers.Get("X-Bz-Info-caller"); got != "value" {
+					t.Errorf("caller info header = %q, want value", got)
+				}
+			},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			tc.run(t, wire, wire.newBucket(t))
+		})
+	}
+}
+
 func TestDownloadFileByIDWithSSECWire(t *testing.T) {
 	wire := newSSECPublicWire(t)
 	bucket := wire.newBucket(t)

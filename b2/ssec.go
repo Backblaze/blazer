@@ -45,8 +45,9 @@ func NewSSECKey(key []byte) (*SSECKey, error) {
 }
 
 // NewSSECKeyWithID attaches a caller-chosen identifier to an SSE-C key. The
-// identifier is saved as sse_c_key_id in large-file metadata, visible to
-// file-info readers, and must uniquely identify the key for safe resume.
+// identifier is saved as sse_c_key_id in file info for every SSE-C upload,
+// visible to file-info readers, and must uniquely identify the key for safe
+// large-file resume.
 // Choose an opaque stable ID, not the key or a key-derived value. An empty ID
 // behaves like NewSSECKey and cannot resume an SSE-C large file. The key and ID
 // remain per-request, not Client defaults.

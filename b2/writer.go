@@ -330,6 +330,10 @@ func (w *Writer) simpleWriteFile() error {
 	if err := w.checkObjectLock(); err != nil {
 		return err
 	}
+	info, err := w.ssecFileInfo()
+	if err != nil {
+		return err
+	}
 	ue, err := w.getUploadURL(w.ctx)
 	if err != nil {
 		return err
@@ -361,7 +365,7 @@ func (w *Writer) simpleWriteFile() error {
 	err = retry.Do(
 		w.ctx,
 		func() error {
-			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, w.info, w.retention, w.legalHold, w.encryption)
+			f, err := ue.uploadFile(w.ctx, mr, int(w.w.Len()), w.name, ctype, sha1, info, w.retention, w.legalHold, w.encryption)
 			if err != nil {
 				return err
 			}
@@ -815,11 +819,12 @@ func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
 // WithSSECKey encrypts this upload with a caller-provided AES-256 key. The key
 // is used for the simple upload request or for the large-file start request and
 // every part upload; it is never retained by the Object, Bucket or Client.
-// For large files, a caller-supplied ID from NewSSECKeyWithID is saved as
-// sse_c_key_id in file info to permit resume. Without an ID, resume fails
-// closed. B2 rejects a wrong key on uploaded parts, but cannot check it when
-// all existing parts are skipped, so callers must not reuse an ID for another
-// key. This option adds neither the key nor a key-derived value to file info.
+// A caller-supplied ID from NewSSECKeyWithID is saved as sse_c_key_id in file
+// info for every SSE-C upload. For large files, it permits resume. Without an
+// ID, resume fails closed. B2 rejects a wrong key on uploaded parts, but cannot
+// check it when all existing parts are skipped, so callers must not reuse an ID
+// for another key. This option adds neither the key nor a key-derived value to
+// file info.
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
 		w.encryption = &uploadEncryption{ssec: key}
