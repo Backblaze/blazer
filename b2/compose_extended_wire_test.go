@@ -263,7 +263,7 @@ func TestComposeValidationRejectsInvalidPartsBeforeStarting(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := bucket.Compose(context.Background(), "invalid", tc.parts...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := bucket.Compose(context.Background(), "invalid", tc.parts); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Compose error = %v, want %q", err, tc.want)
 			}
 			calls, _, _, _ := wire.snapshot()
@@ -281,7 +281,7 @@ func TestComposeRejectsMoreThan10000PartsBeforeStarting(t *testing.T) {
 	for i := range parts {
 		parts[i] = PartFromCopy(fmt.Sprintf("source-%d", i), "bytes=0-4999999")
 	}
-	if _, err := wire.bucket(t).Compose(context.Background(), "too-many", parts...); err == nil || !strings.Contains(err.Error(), "10000") {
+	if _, err := wire.bucket(t).Compose(context.Background(), "too-many", parts); err == nil || !strings.Contains(err.Error(), "10000") {
 		t.Fatalf("Compose with 10001 parts error = %v, want preflight rejection", err)
 	}
 	calls, _, _, _ := wire.snapshot()
@@ -348,7 +348,7 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newComposeWire(t)
-			object, err := wire.bucket(t).Compose(context.Background(), "composed", tc.parts...)
+			object, err := wire.bucket(t).Compose(context.Background(), "composed", tc.parts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -380,17 +380,128 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 	}
 }
 
-func TestComposeRejectsOverlappingRangesBeforeStarting(t *testing.T) {
+func TestComposeOptionsReachStartLargeFile(t *testing.T) {
+	retentionUntil := time.UnixMilli(1735689600000)
+	parts := []ComposePart{
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromCopy("source", "bytes=0-2"),
+	}
+	for _, tc := range []struct {
+		name      string
+		options   []ComposeOption
+		wantStart map[string]any
+	}{
+		{
+			name: "defaults content type",
+			wantStart: map[string]any{
+				"contentType": "application/octet-stream",
+			},
+		},
+		{
+			name: "attrs content type and info",
+			options: []ComposeOption{ComposeWithAttrs(&Attrs{
+				ContentType: "text/plain",
+				Info:        map[string]string{"author": "blazer"},
+			})},
+			wantStart: map[string]any{
+				"contentType": "text/plain",
+				"fileInfo":    map[string]any{"author": "blazer"},
+			},
+		},
+		{
+			name: "retention and legal hold",
+			options: []ComposeOption{
+				ComposeFileRetention(&FileRetention{Mode: RetentionCompliance, RetainUntil: retentionUntil}),
+				ComposeLegalHold(LegalHoldOn),
+			},
+			wantStart: map[string]any{
+				"fileRetention": map[string]any{"mode": "compliance", "retainUntilTimestamp": float64(retentionUntil.UnixMilli())},
+				"legalHold":     "on",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newComposeWire(t)
+			if _, err := wire.bucket(t).Compose(context.Background(), "options", parts, tc.options...); err != nil {
+				t.Fatal(err)
+			}
+			wire.mu.Lock()
+			starts := append([]map[string]any(nil), wire.starts...)
+			wire.mu.Unlock()
+			if len(starts) != 1 {
+				t.Fatalf("start bodies = %#v, want one", starts)
+			}
+			for key, want := range tc.wantStart {
+				if got := starts[0][key]; !reflect.DeepEqual(got, want) {
+					t.Errorf("start %s = %#v, want %#v", key, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestComposeRejectsInvalidOptionsBeforeStarting(t *testing.T) {
+	parts := []ComposePart{
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromCopy("source", "bytes=0-2"),
+	}
+	tests := []struct {
+		name    string
+		options []ComposeOption
+		want    string
+	}{
+		{"nil attrs", []ComposeOption{ComposeWithAttrs(nil)}, "attrs must not be nil"},
+		{"too much file info", []ComposeOption{ComposeWithAttrs(&Attrs{Info: map[string]string{
+			"1": "", "2": "", "3": "", "4": "", "5": "", "6": "", "7": "", "8": "", "9": "", "10": "", "11": "",
+		}})}, "at most 10"},
+		{"invalid retention", []ComposeOption{ComposeFileRetention(&FileRetention{})}, "invalid retention mode"},
+		{"invalid legal hold", []ComposeOption{ComposeLegalHold("invalid")}, "invalid legal hold"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newComposeWire(t)
+			if _, err := wire.bucket(t).Compose(context.Background(), "invalid-options", parts, tc.options...); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Compose error = %v, want %q", err, tc.want)
+			}
+			calls, _, _, _ := wire.snapshot()
+			if len(calls) != 0 {
+				t.Fatalf("invalid Compose option made calls %v", calls)
+			}
+		})
+	}
+}
+
+func TestComposeRejectsKnownTotalOverTenTBBeforeStarting(t *testing.T) {
+	parts := make([]ComposePart, 2001)
+	for i := range parts[:2000] {
+		parts[i] = PartFromCopy("source", "bytes=0-4999999999")
+	}
+	parts[2000] = PartFromReader(bytes.NewReader(nil), 5_000_000_000)
 	wire := newComposeWire(t)
-	_, err := wire.bucket(t).Compose(context.Background(), "overlap",
-		PartFromCopy("same-source", "bytes=0-4999999"),
-		PartFromCopy("same-source", "bytes=4999999-5000001"))
-	if err == nil || !strings.Contains(err.Error(), "overlap") {
-		t.Fatalf("overlapping copy ranges error = %v, want rejection", err)
+	if _, err := wire.bucket(t).Compose(context.Background(), "too-large", parts); err == nil || !strings.Contains(err.Error(), "10 TB") {
+		t.Fatalf("Compose error = %v, want 10 TB preflight rejection", err)
 	}
 	calls, _, _, _ := wire.snapshot()
 	if len(calls) != 0 {
-		t.Fatalf("overlap started a large file: %v", calls)
+		t.Fatalf("too-large Compose made calls %v", calls)
+	}
+}
+
+func TestComposeAcceptsOverlappingRanges(t *testing.T) {
+	wire := newComposeWire(t)
+	_, err := wire.bucket(t).Compose(context.Background(), "overlap", []ComposePart{
+		PartFromCopy("same-source", "bytes=0-4999999"),
+		PartFromCopy("same-source", "bytes=4999999-5000001"),
+	})
+	if err != nil {
+		t.Fatalf("overlapping copy ranges error = %v, want acceptance", err)
+	}
+	calls, copies, _, _ := wire.snapshot()
+	if want := []string{"start", "copy:1", "copy:2", "finish"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("overlap calls = %v, want %v", calls, want)
+	}
+	if len(copies) != 2 || copies[0]["range"] != "bytes=0-4999999" || copies[1]["range"] != "bytes=4999999-5000001" {
+		t.Fatalf("overlap copy bodies = %#v", copies)
 	}
 }
 
@@ -398,9 +509,10 @@ func TestComposeRetriesRecoverableUploadWithFreshURL(t *testing.T) {
 	wire := newComposeWire(t)
 	wire.failFirstUploadPart = true
 	payload := bytes.Repeat([]byte("r"), composeMinPartSize)
-	object, err := wire.bucket(t).Compose(context.Background(), "retry",
+	object, err := wire.bucket(t).Compose(context.Background(), "retry", []ComposePart{
 		PartFromReader(bytes.NewReader(payload), int64(len(payload))),
-		PartFromCopy("source", "bytes=0-2"))
+		PartFromCopy("source", "bytes=0-2"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,9 +536,10 @@ func TestComposeReusesReplacementPartURL(t *testing.T) {
 	wire := newComposeWire(t)
 	wire.failFirstUploadPart = true
 	payload := bytes.Repeat([]byte("r"), composeMinPartSize)
-	_, err := wire.bucket(t).Compose(context.Background(), "retry-two-uploads",
+	_, err := wire.bucket(t).Compose(context.Background(), "retry-two-uploads", []ComposePart{
 		PartFromReader(bytes.NewReader(payload), int64(len(payload))),
-		PartFromReader(bytes.NewReader([]byte("z")), 1))
+		PartFromReader(bytes.NewReader([]byte("z")), 1),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,9 +598,10 @@ func TestComposeStopsBufferingAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reader := &composeContinuingReader{cancel: cancel}
-	_, err := wire.bucket(t).Compose(ctx, "cancel-buffer",
+	_, err := wire.bucket(t).Compose(ctx, "cancel-buffer", []ComposePart{
 		PartFromCopy("source", "bytes=0-4999999"),
-		PartFromReader(reader, composeMinPartSize))
+		PartFromReader(reader, composeMinPartSize),
+	})
 	if !errors.Is(err, context.Canceled) || reader.reads != 1 {
 		t.Fatalf("Compose error=%v reads=%d, want context cancellation after one read", err, reader.reads)
 	}
@@ -508,9 +622,10 @@ func TestComposeUploadedPartMinimumBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newComposeWire(t)
-			_, err := wire.bucket(t).Compose(context.Background(), "boundary",
+			_, err := wire.bucket(t).Compose(context.Background(), "boundary", []ComposePart{
 				PartFromReader(bytes.NewReader(bytes.Repeat([]byte("x"), tc.size)), int64(tc.size)),
-				PartFromReader(bytes.NewReader([]byte("y")), 1))
+				PartFromReader(bytes.NewReader([]byte("y")), 1),
+			})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Compose error=%v, wantErr=%t", err, tc.wantErr)
 			}
@@ -539,9 +654,10 @@ func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
 			wire.copyFailStatus = tc.status
 			bucket := wire.bucket(t)
 			started := time.Now()
-			_, err := bucket.Compose(context.Background(), "retry-copy",
+			_, err := bucket.Compose(context.Background(), "retry-copy", []ComposePart{
 				PartFromCopy("source-one", "bytes=0-4999999"),
-				PartFromCopy("source-two", "bytes=0-2"))
+				PartFromCopy("source-two", "bytes=0-2"),
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -595,9 +711,10 @@ func (r composeDeadlineReader) Read([]byte) (int, error) {
 func TestComposeCancelsAfterCallerDeadlineExpires(t *testing.T) {
 	wire := newComposeWire(t)
 	ctx := &composeExpiringContext{Context: context.Background(), done: make(chan struct{})}
-	_, err := wire.bucket(t).Compose(ctx, "deadline",
+	_, err := wire.bucket(t).Compose(ctx, "deadline", []ComposePart{
 		PartFromCopy("source", "bytes=0-4999999"),
-		PartFromReader(composeDeadlineReader{ctx: ctx}, 1))
+		PartFromReader(composeDeadlineReader{ctx: ctx}, 1),
+	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Compose error = %v, want deadline exceeded", err)
 	}
@@ -614,9 +731,10 @@ func TestComposeCancelsAfterCallerContextIsCanceled(t *testing.T) {
 	wire := newComposeWire(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err := wire.bucket(t).Compose(ctx, "canceled",
+	_, err := wire.bucket(t).Compose(ctx, "canceled", []ComposePart{
 		PartFromCopy("source", "bytes=0-4999999"),
-		PartFromReader(composeCancelReader{cancel: cancel}, 1))
+		PartFromReader(composeCancelReader{cancel: cancel}, 1),
+	})
 	if err == nil || !strings.Contains(err.Error(), "injected read failure") {
 		t.Fatalf("Compose error = %v, want read failure", err)
 	}
@@ -632,9 +750,10 @@ func TestComposeCancelsAfterCallerContextIsCanceled(t *testing.T) {
 func TestComposeRejectsShortCopyResponseAndCancels(t *testing.T) {
 	wire := newComposeWire(t)
 	wire.copySizeOverride = composeMinPartSize - 1
-	_, err := wire.bucket(t).Compose(context.Background(), "short-copy",
+	_, err := wire.bucket(t).Compose(context.Background(), "short-copy", []ComposePart{
 		PartFromCopy("source", "bytes=0-4999999"),
-		PartFromReader(bytes.NewReader([]byte("x")), 1))
+		PartFromReader(bytes.NewReader([]byte("x")), 1),
+	})
 	if err == nil || !strings.Contains(err.Error(), "copied") {
 		t.Fatalf("short copy response error = %v, want rejection", err)
 	}
@@ -651,9 +770,10 @@ func TestComposeReportsCancelFailureAlongsidePartFailure(t *testing.T) {
 	wire := newComposeWire(t)
 	wire.failCopyPart = 2
 	wire.failCancel = true
-	_, err := wire.bucket(t).Compose(context.Background(), "cancel-fails",
+	_, err := wire.bucket(t).Compose(context.Background(), "cancel-fails", []ComposePart{
 		PartFromCopy("source", "bytes=0-4999999"),
-		PartFromCopy("source-two", "bytes=0-2"))
+		PartFromCopy("source-two", "bytes=0-2"),
+	})
 	if err == nil || !strings.Contains(err.Error(), "copy part failed") || !strings.Contains(err.Error(), "cancel failed") {
 		t.Fatalf("Compose error = %v, want both part and cleanup errors", err)
 	}
@@ -662,9 +782,10 @@ func TestComposeReportsCancelFailureAlongsidePartFailure(t *testing.T) {
 func TestComposeCancelsLargeFileAfterPartFailure(t *testing.T) {
 	wire := newComposeWire(t)
 	wire.failCopyPart = 2
-	_, err := wire.bucket(t).Compose(context.Background(), "failed",
+	_, err := wire.bucket(t).Compose(context.Background(), "failed", []ComposePart{
 		PartFromCopy("source-one", "bytes=0-4999999"),
-		PartFromCopy("source-two", "bytes=0-2"))
+		PartFromCopy("source-two", "bytes=0-2"),
+	})
 	if err == nil || !strings.Contains(err.Error(), "copy part failed") {
 		t.Fatalf("Compose error = %v, want the copy-part failure", err)
 	}
@@ -690,7 +811,7 @@ func TestComposeCancelsOnUploadAndFinishFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newComposeWire(t)
 			tc.configure(wire)
-			if _, err := wire.bucket(t).Compose(context.Background(), "failure", tc.parts...); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			if _, err := wire.bucket(t).Compose(context.Background(), "failure", tc.parts); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("Compose error = %v, want %q", err, tc.wantErr)
 			}
 			calls, _, _, _ := wire.snapshot()

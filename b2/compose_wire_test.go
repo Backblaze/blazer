@@ -72,14 +72,14 @@ func TestComposeUploadsAndCopiesInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bucket.Compose(ctx, "invalid", PartFromReader(bytes.NewReader([]byte("x")), 1), PartFromCopy("src", "bytes=0-2")); err == nil {
+	if _, err := bucket.Compose(ctx, "invalid", []ComposePart{PartFromReader(bytes.NewReader([]byte("x")), 1), PartFromCopy("src", "bytes=0-2")}); err == nil {
 		t.Fatal("short nonfinal part accepted")
 	}
 	if len(calls) != 0 {
 		t.Fatalf("invalid compose made calls: %v", calls)
 	}
 	payload := bytes.Repeat([]byte("x"), size)
-	object, err := bucket.Compose(ctx, "composed", PartFromReader(bytes.NewReader(payload), size), PartFromCopy("source-id", "bytes=0-2"))
+	object, err := bucket.Compose(ctx, "composed", []ComposePart{PartFromReader(bytes.NewReader(payload), size), PartFromCopy("source-id", "bytes=0-2")})
 	if err != nil {
 		t.Fatal(err)
 	}
