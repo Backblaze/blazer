@@ -52,6 +52,8 @@ type ssecPublicWire struct {
 	unfinishedInfo       string
 	partsResponse        string
 	authorizeCalls       int
+	sourceInfo           map[string]string
+	sourceContentType    string
 }
 
 func newSSECPublicWire(t *testing.T) *ssecPublicWire {
@@ -140,9 +142,27 @@ func (w *ssecPublicWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/file/bucket/"):
 		w.serveDownload(rw, r, strings.TrimPrefix(r.URL.Path, "/file/bucket/"))
 	case strings.HasSuffix(r.URL.Path, "/b2_get_file_info"):
-		if recorded.body["fileId"] == "historical-id" {
+		switch recorded.body["fileId"] {
+		case "source-id":
+			w.mu.Lock()
+			info := w.sourceInfo
+			contentType := w.sourceContentType
+			w.mu.Unlock()
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+			if info == nil {
+				info = map[string]string{}
+			}
+			encoded, err := json.Marshal(info)
+			if err != nil {
+				w.t.Error(err)
+				return
+			}
+			_, _ = fmt.Fprintf(rw, `{"fileId":"source-id","fileName":"source","action":"upload","contentLength":7,"contentSha1":"0000000000000000000000000000000000000000","contentType":%q,"fileInfo":%s,"uploadTimestamp":1}`, contentType, encoded)
+		case "historical-id":
 			_, _ = fmt.Fprint(rw, `{"fileId":"historical-id","fileName":"encrypted","action":"upload","contentLength":13,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{"version":"historical"},"uploadTimestamp":1}`)
-		} else {
+		default:
 			_, _ = fmt.Fprint(rw, `{"fileId":"id-encrypted","fileName":"encrypted","action":"upload","contentLength":7,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"uploadTimestamp":1}`)
 		}
 	case strings.HasSuffix(r.URL.Path, "/b2_list_unfinished_large_files"):
@@ -353,6 +373,83 @@ func TestSSECWriterDownloadAttrsAndCopyWire(t *testing.T) {
 		if _, ok := copies[1].body[field]; ok {
 			t.Errorf("plain copy unexpectedly sent %s", field)
 		}
+	}
+}
+
+func TestCopyDestinationSSECKeyIDMetadata(t *testing.T) {
+	const sourceID = "source-key-id"
+	newKey := func(t *testing.T, material, id string) *SSECKey {
+		t.Helper()
+		key, err := NewSSECKeyWithID([]byte(material), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	for _, tc := range []struct {
+		name, destinationID, directive, wantDirective, wantType string
+		replaceInfo                                             map[string]string
+		wantID                                                  string
+	}{
+		{"COPY to different ID", "destination-key-id", "COPY", "REPLACE", "text/source", nil, "destination-key-id"},
+		{"COPY to no ID", "", "COPY", "REPLACE", "text/source", nil, ""},
+		{"COPY to same ID", sourceID, "COPY", "COPY", "", nil, sourceID},
+		{"REPLACE to different ID", "destination-key-id", "REPLACE", "REPLACE", "text/replaced", map[string]string{"custom": "replacement", "sse_c_key_id": "stale-id"}, "destination-key-id"},
+		{"REPLACE to no ID", "", "REPLACE", "REPLACE", "text/replaced", map[string]string{"custom": "replacement", "sse_c_key_id": "stale-id"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			wire.sourceInfo = map[string]string{"sse_c_key_id": sourceID, "custom": "source-value"}
+			wire.sourceContentType = "text/source"
+			bucket := wire.newBucket(t)
+			sourceKey := newKey(t, "0123456789abcdef0123456789abcdef", sourceID)
+			destinationKey := newKey(t, "abcdef0123456789abcdef0123456789", tc.destinationID)
+			options := []CopyOption{CopySourceSSECKey(sourceKey), CopyDestinationSSECKey(destinationKey)}
+			if tc.directive == "REPLACE" {
+				options = append(options, CopyWithMetadata(ReplaceMetadata, "text/replaced", tc.replaceInfo))
+			}
+			if _, err := bucket.Copy(context.Background(), "source-id", "copy", options...); err != nil {
+				t.Fatal(err)
+			}
+			copies := wire.requestsTo("/b2api/v4/b2_copy_file")
+			if len(copies) != 1 {
+				t.Fatalf("copy requests = %d, want 1", len(copies))
+			}
+			body := copies[0].body
+			if got := body["metadataDirective"]; got != tc.wantDirective {
+				t.Errorf("metadata directive = %v, want %s", got, tc.wantDirective)
+			}
+			if got := body["contentType"]; tc.wantType != "" && got != tc.wantType {
+				t.Errorf("content type = %v, want %s", got, tc.wantType)
+			}
+			if tc.wantDirective == "COPY" {
+				if _, ok := body["fileInfo"]; ok {
+					t.Error("COPY unexpectedly sent replacement file info")
+				}
+			} else {
+				info, ok := body["fileInfo"].(map[string]any)
+				if !ok {
+					t.Fatalf("replacement file info = %v, want object", body["fileInfo"])
+				}
+				if tc.wantID == "" {
+					if _, ok := info["sse_c_key_id"]; ok {
+						t.Errorf("destination without ID inherited source ID: %v", info)
+					}
+				} else if got := info["sse_c_key_id"]; got != tc.wantID {
+					t.Errorf("destination key ID = %v, want %s", got, tc.wantID)
+				}
+				wantCustom := "source-value"
+				if tc.directive == "REPLACE" {
+					wantCustom = "replacement"
+				}
+				if got := info["custom"]; got != wantCustom {
+					t.Errorf("custom metadata = %v, want %s", got, wantCustom)
+				}
+			}
+			if tc.directive == "REPLACE" && tc.replaceInfo["sse_c_key_id"] != "stale-id" {
+				t.Error("Copy mutated caller's replacement metadata")
+			}
+		})
 	}
 }
 

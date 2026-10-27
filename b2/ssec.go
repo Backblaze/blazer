@@ -33,7 +33,8 @@ type SSECKey struct {
 	// A closure keeps fmt's reflection of an unexported SSECKey field from
 	// walking the raw bytes when it bypasses Format (notably with %s and %q).
 	key *func() [ssecKeySize]byte
-	keyID string
+	// Keep the caller's identifier behind a pointer for the same reason.
+	keyID *string
 }
 
 // NewSSECKey validates and copies a raw 32-byte AES-256 key. The caller remains
@@ -60,8 +61,15 @@ func NewSSECKeyWithID(key []byte, id string) (*SSECKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	k.keyID = id
+	k.keyID = &id
 	return k, nil
+}
+
+func (k *SSECKey) id() string {
+	if k == nil || k.keyID == nil {
+		return ""
+	}
+	return *k.keyID
 }
 
 func (k SSECKey) String() string   { return "SSECKey([REDACTED])" }

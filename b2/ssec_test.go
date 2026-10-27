@@ -82,8 +82,8 @@ func TestNewSSECKeyWithIDCopiesKeyAndKeepsCallerID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if key.keyID != "caller-id" {
-		t.Fatalf("key ID = %q, want caller-id", key.keyID)
+	if key.id() != "caller-id" {
+		t.Fatalf("key ID = %q, want caller-id", key.id())
 	}
 	raw[0] = 'x'
 	if material := (*key.key)(); material[0] != '0' {
@@ -93,8 +93,8 @@ func TestNewSSECKeyWithIDCopiesKeyAndKeepsCallerID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.keyID != "" {
-		t.Fatalf("plain key has unexpected ID %q", plain.keyID)
+	if plain.id() != "" {
+		t.Fatalf("plain key has unexpected ID %q", plain.id())
 	}
 }
 
@@ -112,7 +112,8 @@ func TestZeroSSECKeyIsRejected(t *testing.T) {
 
 func TestSSECKeyEveryFormatRedactsMaterial(t *testing.T) {
 	raw := bytes.Repeat([]byte{0x33}, ssecKeySize)
-	key, err := NewSSECKey(raw)
+	const keyID = "caller-secret-key-identifier"
+	key, err := NewSSECKeyWithID(raw, keyID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +126,7 @@ func TestSSECKeyEveryFormatRedactsMaterial(t *testing.T) {
 		{"exported struct field", struct{ Key SSECKey }{*key}},
 		{"unexported struct field", struct{ key SSECKey }{*key}},
 	}
-	forbidden := []string{string(raw), "51 51", "3333", hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw)}
+	forbidden := []string{string(raw), "51 51", "3333", hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw), keyID}
 	for _, value := range values {
 		for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d", "%x", "%X"} {
 			t.Run(value.name+"/"+format, func(t *testing.T) {

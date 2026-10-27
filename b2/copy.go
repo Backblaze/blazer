@@ -82,7 +82,9 @@ func CopySourceSSECKey(key *SSECKey) CopyOption {
 
 // CopyDestinationSSECKey encrypts the copied file with the supplied
 // customer-managed key. Without this option, the destination bucket's default
-// encryption applies.
+// encryption applies. If the key has a caller-supplied ID, Copy stores that ID
+// as sse_c_key_id in the destination's file info. A source key ID is not copied
+// when the destination key has no ID.
 func CopyDestinationSSECKey(key *SSECKey) CopyOption {
 	return func(o *copyOptions) {
 		o.destinationSSECKey = key
@@ -120,12 +122,53 @@ func (b *Bucket) Copy(ctx context.Context, sourceFileID, destinationFileName str
 	if o.destinationBucket != nil {
 		destination = o.destinationBucket
 	}
-
+	if err := b.prepareCopySSECMetadata(ctx, sourceFileID, &o); err != nil {
+		return nil, err
+	}
 	f, err := b.b.copyFile(ctx, sourceFileID, destinationFileName, destination.b.id(), o.byteRange, string(o.metadataDirective), o.contentType, o.info, o.sourceSSECKey, o.destinationSSECKey)
 	if err != nil {
 		return nil, err
 	}
 	return &Object{name: destinationFileName, f: f, b: destination}, nil
+}
+
+func (b *Bucket) prepareCopySSECMetadata(ctx context.Context, sourceFileID string, o *copyOptions) error {
+	if o.destinationSSECKey == nil {
+		return nil
+	}
+	destinationID := o.destinationSSECKey.id()
+	if o.metadataDirective == CopyMetadata {
+		fi, err := b.b.file(sourceFileID, "").getFileInfo(ctx)
+		if err != nil {
+			return fmt.Errorf("b2: read source metadata for SSE-C copy: %w", err)
+		}
+		_, _, _, contentType, sourceInfo, _, _ := fi.stats()
+		if sourceInfo[ssecKeyIDFileInfo] == destinationID {
+			return nil
+		}
+		if contentType == "" {
+			return errors.New("b2: source content type is required to replace SSE-C key ID on copy")
+		}
+		o.metadataDirective = ReplaceMetadata
+		o.contentType = contentType
+		o.info = copyInfoWithSSECKeyID(sourceInfo, destinationID)
+		return nil
+	}
+	o.info = copyInfoWithSSECKeyID(o.info, destinationID)
+	return nil
+}
+
+func copyInfoWithSSECKeyID(info map[string]string, id string) map[string]string {
+	copyInfo := make(map[string]string, len(info)+1)
+	for key, value := range info {
+		if key != ssecKeyIDFileInfo {
+			copyInfo[key] = value
+		}
+	}
+	if id != "" {
+		copyInfo[ssecKeyIDFileInfo] = id
+	}
+	return copyInfo
 }
 
 func (o *copyOptions) validate() error {
