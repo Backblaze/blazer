@@ -44,7 +44,11 @@ type Writer struct {
 
 	// Resume an upload.  If true, and the upload is a large file, and a file of
 	// the same name was started but not finished, then assume that we are
-	// resuming that file, and don't upload duplicate chunks.
+	// resuming that file, and don't upload duplicate chunks. SSE-C resume
+	// requires a matching caller-supplied key ID (NewSSECKeyWithID) saved as
+	// sse_c_key_id in file info; missing or different IDs are rejected. The ID
+	// must uniquely identify the key: B2 rejects wrong keys on uploaded parts,
+	// but receives no key if every existing part is skipped.
 	Resume bool
 
 	// ChunkSize is the size, in bytes, of each individual part, when writing
@@ -396,12 +400,16 @@ func (w *Writer) simpleWriteFile() error {
 }
 
 func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
+	info, err := w.ssecFileInfo()
+	if err != nil {
+		return nil, err
+	}
 	if !w.Resume {
 		ctype := w.contentType
 		if ctype == "" {
 			ctype = "application/octet-stream"
 		}
-		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, w.info, w.retention, w.legalHold, w.encryption)
+		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, info, w.retention, w.legalHold, w.encryption)
 	}
 	var got bool
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
@@ -454,6 +462,36 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	return fi.compileParts(size, seen, w.encryption), nil
 }
 
+const ssecKeyIDFileInfo = "sse_c_key_id"
+
+// ssecFileInfo follows b2-sdk-python's caller-assigned key-ID convention.
+// The helper adds no key-derived value to file info.
+func (w *Writer) ssecFileInfo() (map[string]string, error) {
+	if w.encryption == nil || w.encryption.ssec == nil {
+		return w.info, nil
+	}
+	id := w.encryption.ssec.keyID
+	existing, present := w.info[ssecKeyIDFileInfo]
+	if id == "" {
+		if present {
+			return nil, fmt.Errorf("b2: SSE-C file info %q requires a caller-supplied key ID", ssecKeyIDFileInfo)
+		}
+		return w.info, nil
+	}
+	if present && existing != id {
+		return nil, fmt.Errorf("b2: SSE-C file info %q conflicts with the requested key", ssecKeyIDFileInfo)
+	}
+	info := make(map[string]string, len(w.info)+1)
+	for k, v := range w.info {
+		info[k] = v
+	}
+	info[ssecKeyIDFileInfo] = id
+	if len(info) > 10 {
+		return nil, fmt.Errorf("b2: SSE-C key identifier would exceed the 10-entry file info limit")
+	}
+	return info, nil
+}
+
 // checkResumedLock refuses to resume an unfinished upload whose Object Lock
 // settings are not the ones the writer asked for, since the file would then be
 // finished without them.
@@ -475,23 +513,40 @@ func (w *Writer) checkResumedLock(fi beFileInterface) error {
 	return nil
 }
 
-// checkResumedEncryption refuses to reuse parts when B2 reports a different
-// encryption mode, or when a requested mode/key cannot be verified.
+// checkResumedEncryption refuses to reuse parts unless the unfinished file's
+// reported encryption matches the request. SSE-C also requires a matching
+// caller-supplied key identifier in file info; B2 may omit the key digest from
+// b2_list_unfinished_large_files.
 func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
 	mode, algorithm, gotMD5 := fi.encryption()
 	if w.encryption == nil || (w.encryption.ssec == nil && w.encryption.sse == nil) {
 		if mode == "SSE-C" {
-			return fmt.Errorf("b2: cannot resume %q: unfinished upload uses SSE-C but no key was supplied", w.name)
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload requires an SSE-C key", w.name)
 		}
 		return nil
 	}
 	if w.encryption.ssec != nil {
-		_, wantMD5, err := w.encryption.ssec.encoded()
+		key := w.encryption.ssec
+		if mode != "SSE-C" || algorithm != "AES256" {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C mode or algorithm does not match", w.name)
+		}
+		if key.keyID == "" {
+			return fmt.Errorf("b2: cannot resume %q: SSE-C key identifier is required", w.name)
+		}
+		_, wantMD5, err := key.encoded()
 		if err != nil {
 			return err
 		}
-		if mode != "SSE-C" || algorithm != "AES256" || gotMD5 == "" || gotMD5 != wantMD5 {
-			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest is missing or does not match", w.name)
+		if gotMD5 != "" && gotMD5 != wantMD5 {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key digest does not match", w.name)
+		}
+		info, err := fi.getFileInfo(w.ctx)
+		if err != nil {
+			return err
+		}
+		_, _, _, _, fileInfo, _, _ := info.stats()
+		if fileInfo[ssecKeyIDFileInfo] == "" || fileInfo[ssecKeyIDFileInfo] != key.keyID {
+			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key identifier is missing or does not match", w.name)
 		}
 		return nil
 	}
@@ -760,6 +815,11 @@ func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
 // WithSSECKey encrypts this upload with a caller-provided AES-256 key. The key
 // is used for the simple upload request or for the large-file start request and
 // every part upload; it is never retained by the Object, Bucket or Client.
+// For large files, a caller-supplied ID from NewSSECKeyWithID is saved as
+// sse_c_key_id in file info to permit resume. Without an ID, resume fails
+// closed. B2 rejects a wrong key on uploaded parts, but cannot check it when
+// all existing parts are skipped, so callers must not reuse an ID for another
+// key. This option adds neither the key nor a key-derived value to file info.
 func WithSSECKey(key *SSECKey) WriterOption {
 	return func(w *Writer) {
 		w.encryption = &uploadEncryption{ssec: key}
