@@ -172,14 +172,22 @@ func syncWithLocalIO(ctx context.Context, bucket *b2.Bucket, prefix, localRoot s
 	}
 
 	dest := make(map[string]*b2.Attrs)
+	// A destination whose attributes cannot be read only fails the local file
+	// that maps to it; unrelated destination objects must not stop the sync.
+	destErr := make(map[string]error)
 	iter := bucket.List(ctx, b2.ListPrefix(prefix))
 	for iter.Next() {
 		object := iter.Object()
+		name := strings.TrimPrefix(object.Name(), prefix)
 		attrs, err := object.Attrs(ctx)
 		if err != nil {
-			return nil, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			destErr[name] = fmt.Errorf("read destination attributes: %w", err)
+			continue
 		}
-		dest[strings.TrimPrefix(object.Name(), prefix)] = attrs
+		dest[name] = attrs
 	}
 	if err := iter.Err(); err != nil {
 		return nil, err
@@ -216,6 +224,10 @@ func syncWithLocalIO(ctx context.Context, bucket *b2.Bucket, prefix, localRoot s
 		rel, err := filepath.Rel(resolvedRoot, path)
 		if err != nil {
 			return err
+		}
+		if failure, ok := destErr[filepath.ToSlash(rel)]; ok {
+			recordFailure(path, failure)
+			return nil
 		}
 		local := localFile{path: path, rel: filepath.ToSlash(rel), size: info.Size(), modTime: info.ModTime(), info: info}
 		if settings.compare == CompareSHA1 {

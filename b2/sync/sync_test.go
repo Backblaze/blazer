@@ -641,7 +641,7 @@ func TestSyncFollowsSymlinkRoot(t *testing.T) {
 	}
 	link := filepath.Join(t.TempDir(), "root-link")
 	if err := os.Symlink(root, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	result, err := Sync(context.Background(), bucket, "p", link)
 	if err != nil {
@@ -923,5 +923,46 @@ func TestHashReaderStopsAfterCancellation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("hash did not stop after cancellation")
+	}
+}
+
+func TestSyncIgnoresMalformedUnrelatedRemoteMetadata(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	wire.mu.Lock()
+	wire.files["p/unrelated.txt"] = map[string]interface{}{"fileId": "id-unrelated", "fileName": "p/unrelated.txt", "contentLength": 1, "contentSha1": "none", "contentType": "text/plain", "fileInfo": map[string]interface{}{"src_last_modified_millis": "not-a-number"}, "action": "upload", "uploadTimestamp": int64(1700000000000)}
+	wire.mu.Unlock()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "good.txt"), []byte("good"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithCompare(CompareSize))
+	if err != nil {
+		t.Fatalf("unrelated remote metadata stopped the sync: %v", err)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != "[good.txt]" {
+		t.Fatalf("uploaded = %s, want [good.txt]", got)
+	}
+}
+
+func TestSyncReportsMalformedMatchingRemoteMetadataPerFile(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	wire.mu.Lock()
+	wire.files["p/bad.txt"] = map[string]interface{}{"fileId": "id-bad", "fileName": "p/bad.txt", "contentLength": 1, "contentSha1": "none", "contentType": "text/plain", "fileInfo": map[string]interface{}{"src_last_modified_millis": "not-a-number"}, "action": "upload", "uploadTimestamp": int64(1700000000000)}
+	wire.mu.Unlock()
+	root := t.TempDir()
+	for name, body := range map[string]string{"bad.txt": "bad", "good.txt": "good"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithCompare(CompareSize))
+	if err == nil || result == nil {
+		t.Fatalf("malformed metadata for a local file was not reported: result=%+v err=%v", result, err)
+	}
+	if len(result.Failed) != 1 || result.Failed[0].Rel != "bad.txt" {
+		t.Fatalf("failures=%+v, want bad.txt", result.Failed)
+	}
+	if got := fmt.Sprint(result.Uploaded); got != "[good.txt]" {
+		t.Fatalf("uploaded = %s, want [good.txt]", got)
 	}
 }
