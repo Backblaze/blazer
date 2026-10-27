@@ -59,7 +59,9 @@ type composeOptions struct {
 }
 
 // ComposeWithAttrs sets the composed file's content type, file info, SHA1 and
-// last-modified time. An empty ContentType keeps application/octet-stream. A
+// last-modified time. Like the Writer, SHA1 and LastModified are stored only
+// when Info has fewer than 10 entries; with 10 or more entries they are not
+// sent. An empty ContentType keeps application/octet-stream. A
 // nil Attrs returns an error before a request is made. It does not copy
 // Attrs.Retention or Attrs.LegalHold; use ComposeFileRetention and
 // ComposeLegalHold.

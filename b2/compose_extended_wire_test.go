@@ -505,6 +505,45 @@ func TestComposeAllowsMoreThanTenFileInfoEntries(t *testing.T) {
 	}
 }
 
+func TestComposeAttrsWithTenInfoEntriesOmitsDerivedMetadata(t *testing.T) {
+	info := make(map[string]string, 10)
+	for i := range 10 {
+		info[strconv.Itoa(i)] = "value"
+	}
+	wire := newComposeWire(t)
+	_, err := wire.bucket(t).Compose(context.Background(), "ten-info", []ComposePart{
+		PartFromCopy("source", "bytes=0-4999999"),
+		PartFromCopy("source", "bytes=0-2"),
+	}, ComposeWithAttrs(&Attrs{
+		Info:         info,
+		SHA1:         strings.Repeat("a", 40),
+		LastModified: time.UnixMilli(1700000000000),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if len(wire.starts) != 1 {
+		t.Fatalf("start bodies = %#v, want one", wire.starts)
+	}
+	got, ok := wire.starts[0]["fileInfo"].(map[string]any)
+	if !ok || len(got) != len(info) {
+		t.Fatalf("start file info = %#v, want %#v", wire.starts[0]["fileInfo"], info)
+	}
+	for key, want := range info {
+		if got[key] != want {
+			t.Fatalf("start file info[%q] = %#v, want %q", key, got[key], want)
+		}
+	}
+	if _, ok := got["large_file_sha1"]; ok {
+		t.Fatal("start file info unexpectedly contains large_file_sha1")
+	}
+	if _, ok := got["src_last_modified_millis"]; ok {
+		t.Fatal("start file info unexpectedly contains src_last_modified_millis")
+	}
+}
+
 func TestComposeIgnoresNilOption(t *testing.T) {
 	wire := newComposeWire(t)
 	_, err := wire.bucket(t).Compose(context.Background(), "nil-option", []ComposePart{
