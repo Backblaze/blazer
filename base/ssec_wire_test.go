@@ -208,24 +208,24 @@ func TestSSEB2JSONIsUnchanged(t *testing.T) {
 }
 
 func TestSSECLoggingRedactsKeyMaterial(t *testing.T) {
-	if got := redactSSECHeader("X-Bz-Server-Side-Encryption-Customer-Key", "header-secret"); got != "[REDACTED]" {
-		t.Errorf("key header redaction = %q", got)
+	if !sensitiveLogField("X-Bz-Server-Side-Encryption-Customer-Key") {
+		t.Error("SSE-C key header was not recognized as sensitive")
 	}
-	if got := redactSSECHeader("X-Bz-Server-Side-Encryption-Customer-Key-Md5", "digest-secret"); got != "[REDACTED]" {
-		t.Errorf("digest header redaction = %q", got)
+	if !sensitiveLogField("X-Bz-Server-Side-Encryption-Customer-Key-Md5") {
+		t.Error("SSE-C digest header was not recognized as sensitive")
 	}
-	if got := redactSSECHeader("X-Bz-Server-Side-Encryption-Customer-Algorithm", "AES256"); got != "AES256" {
-		t.Errorf("algorithm header redaction = %q, want AES256", got)
+	if sensitiveLogField("X-Bz-Server-Side-Encryption-Customer-Algorithm") {
+		t.Error("SSE-C algorithm header was incorrectly marked sensitive")
 	}
 
 	raw := []byte(`{"sourceServerSideEncryption":{"mode":"SSE-C","customerKey":"body-secret","customerKeyMd5":"body-digest"},"destinationServerSideEncryption":{"customerKey":"destination-secret"}}`)
-	redacted := string(redactSSECJSON(raw))
+	redacted := redactSensitiveJSON(raw)
 	for _, secret := range []string{"body-secret", "body-digest", "destination-secret"} {
 		if strings.Contains(redacted, secret) {
 			t.Errorf("redacted JSON disclosed %q", secret)
 		}
 	}
-	if count := strings.Count(redacted, "[REDACTED]"); count != 3 {
+	if count := strings.Count(redacted, "[redacted]"); count != 3 {
 		t.Errorf("redacted JSON = %s, want three redactions", redacted)
 	}
 }
@@ -288,5 +288,46 @@ func TestSSECResponseBodyIsRedactedInLogs(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "AES256") || !strings.Contains(string(out), "object") {
 		t.Fatalf("response body log dropped non-secret fields: %s", out)
+	}
+}
+
+func TestSSECEscapedAndNestedJSONNamesAreRedactedInLogs(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		safe    string
+		secrets []string
+	}{
+		{"compact escaped", `{"serverSideEncryption":{"customer\u004beyMd5":"compact-digest-secret","customer\u004bey":"compact-key-secret","algorithm":"compact-safe"}}`, "compact-safe", []string{"compact-digest-secret", "compact-key-secret"}},
+		{"pretty nested", "{\n  \"items\": [{\"serverSideEncryption\": {\"CUSTOMER\\u004bEYMD5\": \"pretty-digest-secret\", \"CustomerKey\": \"pretty-key-secret\", \"algorithm\": \"pretty-safe\"}}]\n}", "pretty-safe", []string{"pretty-digest-secret", "pretty-key-secret"}},
+	}
+	if os.Getenv("BLAZER_SSEC_ESCAPED_LOG_CHILD") == "1" {
+		for _, tc := range cases {
+			req, err := http.NewRequest(http.MethodPost, "https://example.invalid/b2api/v4/b2_copy_file", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("X-Blazer-Method", "b2_copy_file")
+			resp := &http.Response{Request: req, Status: "200 OK", StatusCode: http.StatusOK, Header: make(http.Header)}
+			logRequest(req, []byte(tc.body))
+			logResponse(resp, []byte(tc.body))
+		}
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSSECEscapedAndNestedJSONNamesAreRedactedInLogs$")
+	cmd.Env = append(os.Environ(), "B2_LOG_LEVEL=2", "BLAZER_SSEC_ESCAPED_LOG_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("logging subprocess failed: %v\n%s", err, out)
+	}
+	for _, tc := range cases {
+		for _, secret := range tc.secrets {
+			if strings.Contains(string(out), secret) {
+				t.Errorf("%s: log disclosed %s", tc.name, secret)
+			}
+		}
+		if count := strings.Count(string(out), tc.safe); count != 2 {
+			t.Errorf("%s: safe field appeared %d times, want request and response: %s", tc.name, count, out)
+		}
 	}
 }
