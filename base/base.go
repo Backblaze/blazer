@@ -325,8 +325,11 @@ func logResponse(resp *http.Response, reply []byte) {
 	method := resp.Request.Header.Get("X-Blazer-Method")
 	id := resp.Request.Header.Get("X-Blazer-Request-ID")
 	if reply != nil {
-		safe := string(authRegexp.ReplaceAll(reply, []byte(`"authorizationToken": "[redacted]"`)))
-		blog.V(2).Infof("<< %s (%s) %s {%s} (%s)", method, id, resp.Status, hstr, safe)
+		safe := authRegexp.ReplaceAll(reply, []byte(`"authorizationToken": "[redacted]"`))
+		if bytes.Contains(bytes.ToLower(safe), []byte("customerkey")) {
+			safe = redactSSECJSON(safe)
+		}
+		blog.V(2).Infof("<< %s (%s) %s {%s} (%s)", method, id, resp.Status, hstr, string(safe))
 		return
 	}
 	blog.V(2).Infof("<< %s (%s) %s {%s} (no reply)", method, id, resp.Status, hstr)

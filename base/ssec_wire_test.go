@@ -259,3 +259,34 @@ func TestSSECResponseHeadersAreRedactedInLogs(t *testing.T) {
 		t.Fatalf("response log omitted expected redacted headers or algorithm: %s", out)
 	}
 }
+
+func TestSSECResponseBodyIsRedactedInLogs(t *testing.T) {
+	const digest = "response-body-digest-secret"
+	const token = "response-body-auth-token"
+	if os.Getenv("BLAZER_SSEC_RESPONSE_BODY_LOG_CHILD") == "1" {
+		req, err := http.NewRequest(http.MethodPost, "https://example.invalid/b2api/v4/b2_copy_file", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Blazer-Method", "b2_copy_file")
+		resp := &http.Response{Request: req, Status: "200 OK", StatusCode: http.StatusOK, Header: make(http.Header)}
+		reply := []byte(`{"fileName": "object", "authorizationToken": "` + token + `", "serverSideEncryption": {"mode": "SSE-C", "algorithm": "AES256", "customerKeyMd5": "` + digest + `"}}`)
+		logResponse(resp, reply)
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSSECResponseBodyIsRedactedInLogs$")
+	cmd.Env = append(os.Environ(), "B2_LOG_LEVEL=2", "BLAZER_SSEC_RESPONSE_BODY_LOG_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("logging subprocess failed: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), digest) {
+		t.Fatal("SSE-C key digest appeared in the logged response body")
+	}
+	if strings.Contains(string(out), token) {
+		t.Fatal("authorization token appeared in the logged response body")
+	}
+	if !strings.Contains(string(out), "AES256") || !strings.Contains(string(out), "object") {
+		t.Fatalf("response body log dropped non-secret fields: %s", out)
+	}
+}
