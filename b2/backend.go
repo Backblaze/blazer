@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/Backblaze/blazer/internal/retry"
@@ -42,10 +43,70 @@ type beRootInterface interface {
 }
 
 type beRoot struct {
-	account, key string
-	b2i          b2RootInterface
-	options      clientOptions
-	accountInfo  AccountInfo
+	account, key      string
+	b2i               b2RootInterface
+	options           clientOptions
+	accountInfo       AccountInfo
+	refreshMu         sync.Mutex // coordinates refreshes; never held during authorize or backoff
+	refreshGeneration uint64
+	refreshFlight     *authorizationRefresh
+}
+
+type authorizationRefresh struct {
+	done                 chan struct{}
+	err                  error // set before done closes
+	leaderContextExpired bool
+}
+
+func (r *beRoot) authGeneration() uint64 {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	return r.refreshGeneration
+}
+
+func (r *beRoot) reauthorizeIfUnchanged(ctx context.Context, generation uint64) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		r.refreshMu.Lock()
+		if r.refreshGeneration != generation {
+			r.refreshMu.Unlock()
+			return nil
+		}
+		if flight := r.refreshFlight; flight != nil {
+			r.refreshMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-flight.done:
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if flight.leaderContextExpired {
+					continue
+				}
+				return flight.err
+			}
+		}
+		flight := &authorizationRefresh{done: make(chan struct{})}
+		r.refreshFlight = flight
+		r.refreshMu.Unlock()
+
+		// Authorization and its retry backoff can block. Never hold refreshMu while
+		// doing either, so waiters can abandon their own request on cancellation.
+		err := r.reauthorizeAccount(ctx)
+		r.refreshMu.Lock()
+		if err == nil {
+			r.refreshGeneration++
+		}
+		flight.err = err
+		flight.leaderContextExpired = ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
+		close(flight.done)
+		r.refreshFlight = nil
+		r.refreshMu.Unlock()
+		return err
+	}
 }
 
 type beBucketInterface interface {
@@ -259,6 +320,9 @@ func (r *beRoot) clearAccountInfo() error {
 }
 
 func (r *beRoot) reauthorizeAccount(ctx context.Context) error {
+	if err := r.clearAccountInfo(); err != nil {
+		return err
+	}
 	return r.authorizeAccount(ctx, r.account, r.key, r.options)
 }
 
@@ -1027,15 +1091,30 @@ func retryAfterFor(ri beRootInterface) func(time.Duration) <-chan time.Time {
 }
 
 func withReauth(ctx context.Context, ri beRootInterface, f func() error) error {
+	// Existing fake backends need not implement refresh coordination.
+	coordinated, ok := ri.(interface {
+		authGeneration() uint64
+		reauthorizeIfUnchanged(context.Context, uint64) error
+	})
+	var generation uint64
+	if ok {
+		generation = coordinated.authGeneration()
+	}
 	err := f()
 	if ri.reauth(err) {
-		if clearer, ok := ri.(interface{ clearAccountInfo() error }); ok {
-			if err := clearer.clearAccountInfo(); err != nil {
-				return err
+		var refreshErr error
+		if ok {
+			refreshErr = coordinated.reauthorizeIfUnchanged(ctx, generation)
+		} else {
+			if clearer, ok := ri.(interface{ clearAccountInfo() error }); ok {
+				if err := clearer.clearAccountInfo(); err != nil {
+					return err
+				}
 			}
+			refreshErr = ri.reauthorizeAccount(ctx)
 		}
-		if err := ri.reauthorizeAccount(ctx); err != nil {
-			return err
+		if refreshErr != nil {
+			return refreshErr
 		}
 		err = f()
 	}

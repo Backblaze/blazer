@@ -470,7 +470,7 @@ func (w *Writer) ssecFileInfo() (map[string]string, error) {
 	if w.encryption == nil || w.encryption.ssec == nil {
 		return w.info, nil
 	}
-	id := w.encryption.ssec.keyID
+	id := w.encryption.ssec.id()
 	existing, present := w.info[ssecKeyIDFileInfo]
 	if id == "" {
 		if present {
@@ -530,7 +530,7 @@ func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
 		if mode != "SSE-C" || algorithm != "AES256" {
 			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C mode or algorithm does not match", w.name)
 		}
-		if key.keyID == "" {
+		if key.id() == "" {
 			return fmt.Errorf("b2: cannot resume %q: SSE-C key identifier is required", w.name)
 		}
 		_, wantMD5, err := key.encoded()
@@ -545,7 +545,7 @@ func (w *Writer) checkResumedEncryption(fi beFileInterface) error {
 			return err
 		}
 		_, _, _, _, fileInfo, _, _ := info.stats()
-		if fileInfo[ssecKeyIDFileInfo] == "" || fileInfo[ssecKeyIDFileInfo] != key.keyID {
+		if fileInfo[ssecKeyIDFileInfo] == "" || fileInfo[ssecKeyIDFileInfo] != key.id() {
 			return fmt.Errorf("b2: cannot resume %q: unfinished upload SSE-C key identifier is missing or does not match", w.name)
 		}
 		return nil
