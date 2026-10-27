@@ -522,13 +522,13 @@ func TestObjAuthTokLive(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		blog.V(2).Infof("downloading %s", url.String())
+		blog.V(2).Info("downloading authorized object")
 		frsp, err := http.Get(url.String())
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("authorized download request failed (%T)", err)
 		}
 		if frsp.StatusCode != 200 {
-			t.Fatalf("%s: got %s, want 200", url.String(), frsp.Status)
+			t.Fatalf("authorized download: got %s, want 200", frsp.Status)
 		}
 	}
 }

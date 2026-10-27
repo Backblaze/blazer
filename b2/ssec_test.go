@@ -53,19 +53,44 @@ func TestNewSSECKeyValidatesLengthAndCopies(t *testing.T) {
 
 func TestSSECKeyFormattingIsRedacted(t *testing.T) {
 	raw := []byte("0123456789abcdef0123456789abcdef")
-	key, err := NewSSECKey(raw)
+	key, err := NewSSECKeyWithID(raw, "caller-owned-id")
 	if err != nil {
 		t.Fatal(err)
 	}
 	encoded := base64.StdEncoding.EncodeToString(raw)
 	for _, format := range []string{"%v", "%+v", "%#v"} {
 		got := fmt.Sprintf(format, key)
-		if strings.Contains(got, string(raw)) || strings.Contains(got, encoded) {
-			t.Errorf("format %s disclosed key material", format)
+		if strings.Contains(got, string(raw)) || strings.Contains(got, encoded) || strings.Contains(got, "caller-owned-id") {
+			t.Errorf("format %s disclosed key material or identifier", format)
 		}
 		if !strings.Contains(got, "REDACTED") {
 			t.Errorf("format %s did not contain an explicit redaction", format)
 		}
+	}
+}
+
+func TestNewSSECKeyWithIDCopiesKeyAndKeepsCallerID(t *testing.T) {
+	if _, err := NewSSECKeyWithID(make([]byte, 31), "caller-id"); err == nil {
+		t.Fatal("NewSSECKeyWithID accepted a short key")
+	}
+	raw := []byte("0123456789abcdef0123456789abcdef")
+	key, err := NewSSECKeyWithID(raw, "caller-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.keyID != "caller-id" {
+		t.Fatalf("key ID = %q, want caller-id", key.keyID)
+	}
+	raw[0] = 'x'
+	if key.key[0] != '0' {
+		t.Fatal("constructor retained caller's mutable key buffer")
+	}
+	plain, err := NewSSECKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.keyID != "" {
+		t.Fatalf("plain key has unexpected ID %q", plain.keyID)
 	}
 }
 
