@@ -97,9 +97,17 @@ func TestExplicitSSEB2OverDefaultSSEB2(t *testing.T) {
 
 func TestOverriddenSSECResumeUsesEffectiveEncryption(t *testing.T) {
 	wire := newSSECPublicWire(t)
-	wire.unfinishedEncryption = fmt.Sprintf(`{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":%q}`, wire.keyMD5)
+	// SSE-C resume requires a caller-supplied key ID (see #148), stored in file info.
+	const keyID = "override-key"
+	wire.unfinishedEncryption = `{"mode":"SSE-C","algorithm":"AES256"}`
+	wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, keyID)
+	material := (*wire.key.key)()
+	key, err := NewSSECKeyWithID(material[:], keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bucket := sseB2DefaultBucket(t, wire)
-	w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+	w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(key))
 	w.Resume = true
 	w.ChunkSize = 1
 	if _, err := w.Write([]byte("x")); err != nil {

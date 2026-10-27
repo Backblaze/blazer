@@ -30,7 +30,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -166,11 +165,7 @@ func mkErr(resp *http.Response) error {
 	if retry != "" {
 		parsed, err := parseRetryAfterSeconds(retry)
 		if err != nil {
-			if isDownloadByIDRequest(resp.Request) {
-				blog.V(1).Infof("couldn't parse retry-after header for b2_download_file_by_id")
-			} else {
-				blog.V(1).Infof("couldn't parse retry-after header %q: %v", retry, err)
-			}
+			blog.V(1).Info("couldn't parse retry-after header")
 		}
 		retryAfter = parsed
 	}
@@ -254,20 +249,58 @@ func logRequest(req *http.Request, args []byte) {
 		return
 	}
 	var headers []string
-	for k, v := range req.Header {
-		if k == "Authorization" || k == "X-Blazer-Method" {
+	for k := range req.Header {
+		if sensitiveLogField(k) || k == "X-Blazer-Method" {
 			continue
 		}
-		value := redactSSECHeader(k, strings.Join(v, ","))
-		headers = append(headers, fmt.Sprintf("%s: %s", k, value))
+		headers = append(headers, k)
 	}
 	hstr := strings.Join(headers, ";")
 	method := req.Header.Get("X-Blazer-Method")
 	if args != nil {
-		blog.V(2).Infof(">> %s %v: %v headers: {%s} args: (%s)", method, req.Method, req.URL, hstr, string(redactSSECJSON(args)))
+		blog.V(2).Infof(">> %s %v headers: {%s} args: (%s)", method, req.Method, hstr, redactSensitiveJSON(args))
 		return
 	}
-	blog.V(2).Infof(">> %s %v: %v {%s} (no args)", method, req.Method, req.URL, hstr)
+	blog.V(2).Infof(">> %s %v {%s} (no args)", method, req.Method, hstr)
+}
+
+// sensitiveLogField recognizes credentials in both JSON field names and HTTP headers.
+func sensitiveLogField(name string) bool {
+	name = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(name, "-", ""), "_", ""))
+	return strings.Contains(name, "authorization") || strings.Contains(name, "token") ||
+		strings.Contains(name, "secret") || strings.Contains(name, "applicationkey") ||
+		strings.Contains(name, "customerkey") || strings.Contains(name, "cookie") ||
+		strings.Contains(name, "authenticate")
+}
+
+func redactSensitiveValue(value interface{}) {
+	switch value := value.(type) {
+	case map[string]interface{}:
+		for key, item := range value {
+			if sensitiveLogField(key) {
+				value[key] = "[redacted]"
+			} else {
+				redactSensitiveValue(item)
+			}
+		}
+	case []interface{}:
+		for _, item := range value {
+			redactSensitiveValue(item)
+		}
+	}
+}
+
+func redactSensitiveJSON(data []byte) string {
+	var value interface{}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return "[unparseable JSON omitted]"
+	}
+	redactSensitiveValue(value)
+	safe, err := json.Marshal(value)
+	if err != nil {
+		return "[JSON omitted]"
+	}
+	return string(safe)
 }
 
 func redactSSECHeader(name, value string) string {
@@ -307,8 +340,6 @@ func redactSSECFields(value any) {
 	}
 }
 
-var authRegexp = regexp.MustCompile(`"authorizationToken": ".[^"]*"`)
-
 func logResponse(resp *http.Response, reply []byte) {
 	if !blog.V(2) {
 		return
@@ -317,22 +348,30 @@ func logResponse(resp *http.Response, reply []byte) {
 		blog.V(2).Infof("<< b2_download_file_by_id status=%d [headers and body redacted]", resp.StatusCode)
 		return
 	}
+	if resp.Request != nil && resp.Request.Header.Get("X-Blazer-Method") == "b2_authorize_account" {
+		blog.V(2).Infof("<< b2_authorize_account status=%d [redacted]", resp.StatusCode)
+		return
+	}
 	var headers []string
-	for k, v := range resp.Header {
-		headers = append(headers, fmt.Sprintf("%s: %s", k, redactSSECHeader(k, strings.Join(v, ","))))
+	for k := range resp.Header {
+		if resp.StatusCode >= 400 || sensitiveLogField(k) {
+			continue
+		}
+		headers = append(headers, k)
 	}
 	hstr := strings.Join(headers, "; ")
 	method := resp.Request.Header.Get("X-Blazer-Method")
 	id := resp.Request.Header.Get("X-Blazer-Request-ID")
-	if reply != nil {
-		safe := authRegexp.ReplaceAll(reply, []byte(`"authorizationToken": "[redacted]"`))
-		if bytes.Contains(bytes.ToLower(safe), []byte("customerkey")) {
-			safe = redactSSECJSON(safe)
-		}
-		blog.V(2).Infof("<< %s (%s) %s {%s} (%s)", method, id, resp.Status, hstr, string(safe))
+	if resp.StatusCode >= 400 {
+		blog.V(2).Infof("<< %s (%s) %d {%s} (error response omitted)", method, id, resp.StatusCode, hstr)
 		return
 	}
-	blog.V(2).Infof("<< %s (%s) %s {%s} (no reply)", method, id, resp.Status, hstr)
+	if reply != nil {
+		safe := redactSensitiveJSON(reply)
+		blog.V(2).Infof("<< %s (%s) %d {%s} (%s)", method, id, resp.StatusCode, hstr, safe)
+		return
+	}
+	blog.V(2).Infof("<< %s (%s) %d {%s} (no reply)", method, id, resp.StatusCode, hstr)
 }
 
 func isDownloadByIDRequest(req *http.Request) bool {
@@ -408,15 +447,60 @@ func (o *b2Options) getTransport() http.RoundTripper {
 
 // B2 holds account information for Backblaze.
 type B2 struct {
-	accountID   string
-	authToken   string
-	apiURI      string
-	s3URI       string
-	downloadURI string
-	minPartSize int
-	opts        *b2Options
-	buckets     []string // restricted to these buckets if non-empty
-	pfx         string   // restricted to objects with this prefix if present
+	accountID           string
+	authToken           string
+	apiURI              string
+	s3URI               string
+	downloadURI         string
+	minPartSize         int
+	recommendedPartSize int
+	opts                *b2Options
+	buckets             []string // restricted to these buckets if non-empty
+	pfx                 string   // restricted to objects with this prefix if present
+	capabilities        []string
+}
+
+// AuthData is the authorization state needed to resume a B2 session. It does
+// not contain the application key used to obtain or refresh the session.
+type AuthData struct {
+	ApplicationKeyID    string
+	AccountID           string
+	AuthToken           string
+	APIURL              string
+	DownloadURL         string
+	S3URL               string
+	AbsMinPartSize      int
+	RecommendedPartSize int
+	AllowedBuckets      []string
+	AllowedPrefix       string
+	AllowedCapabilities []string
+}
+
+// AuthData returns a detached snapshot of the current authorization state.
+func (b *B2) AuthData() AuthData {
+	return AuthData{
+		AccountID: b.accountID, AuthToken: b.authToken, APIURL: b.apiURI,
+		DownloadURL: b.downloadURI, S3URL: b.s3URI,
+		AbsMinPartSize: b.minPartSize, RecommendedPartSize: b.recommendedPartSize,
+		AllowedBuckets: append([]string(nil), b.buckets...), AllowedPrefix: b.pfx,
+		AllowedCapabilities: append([]string(nil), b.capabilities...),
+	}
+}
+
+// NewAuthorizedAccount restores a session while applying this client's own
+// transport, user agent, and other request options.
+func NewAuthorizedAccount(data AuthData, opts ...AuthOption) *B2 {
+	b2opts := &b2Options{}
+	for _, option := range opts {
+		option(b2opts)
+	}
+	return &B2{
+		accountID: data.AccountID, authToken: data.AuthToken, apiURI: data.APIURL,
+		downloadURI: data.DownloadURL, s3URI: data.S3URL,
+		minPartSize: data.AbsMinPartSize, recommendedPartSize: data.RecommendedPartSize,
+		buckets: append([]string(nil), data.AllowedBuckets...), pfx: data.AllowedPrefix,
+		capabilities: append([]string(nil), data.AllowedCapabilities...), opts: b2opts,
+	}
 }
 
 // Update replaces the B2 object with a new one, in-place.
@@ -424,11 +508,14 @@ func (b *B2) Update(n *B2) {
 	b.accountID = n.accountID
 	b.authToken = n.authToken
 	b.apiURI = n.apiURI
+	b.s3URI = n.s3URI
 	b.downloadURI = n.downloadURI
 	b.minPartSize = n.minPartSize
+	b.recommendedPartSize = n.recommendedPartSize
 	b.opts = n.opts
 	b.buckets = n.buckets
 	b.pfx = n.pfx
+	b.capabilities = n.capabilities
 }
 
 type httpReply struct {
@@ -446,11 +533,7 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 		return nil, err
 	default:
 		method := req.Header.Get("X-Blazer-Method")
-		if isDownloadByIDRequest(req) {
-			blog.V(2).Infof(">> %s transport error [URL and error redacted]", method)
-		} else {
-			blog.V(2).Infof(">> %s uri: %v err: %v", method, req.URL, err)
-		}
+		blog.V(2).Infof(">> %s transport error: %T [URL and error text redacted]", method, err)
 		// Only an upload fault is classified by method (see Action). Other
 		// transport errors stay method-less so their retry budget and message
 		// do not change.
@@ -586,7 +669,7 @@ func (o *b2Options) makeRequest(ctx context.Context, method, verb, uri string, b
 	} else {
 		ra, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			blog.V(1).Infof("%s: couldn't read response: %v", method, err)
+			blog.V(1).Infof("%s: couldn't read response body", method)
 		}
 		replyArgs = ra
 	}
@@ -621,15 +704,17 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		pfx = allowed.Prefix
 	}
 	return &B2{
-		accountID:   b2resp.AccountID,
-		authToken:   b2resp.AuthToken,
-		apiURI:      storageAPI.URI,
-		s3URI:       storageAPI.S3URI,
-		downloadURI: storageAPI.DownloadURI,
-		minPartSize: storageAPI.AbsMinPartSize,
-		buckets:     buckets,
-		pfx:         pfx,
-		opts:        b2opts,
+		accountID:           b2resp.AccountID,
+		authToken:           b2resp.AuthToken,
+		apiURI:              storageAPI.URI,
+		s3URI:               storageAPI.S3URI,
+		downloadURI:         storageAPI.DownloadURI,
+		minPartSize:         storageAPI.AbsMinPartSize,
+		recommendedPartSize: storageAPI.PartSize,
+		buckets:             buckets,
+		pfx:                 pfx,
+		capabilities:        append([]string(nil), storageAPI.Capabilities...),
+		opts:                b2opts,
 	}, nil
 }
 
@@ -818,6 +903,9 @@ type Bucket struct {
 	DefaultServerSideEncryption *b2types.ServerSideEncryption
 	FileLockEnabled             bool
 	ReplicationConfiguration    *b2types.ReplicationConfiguration
+	// ReplicationConfigurationUnreadable records a list response that withheld
+	// replication settings. Callers must not replace a config they cannot read.
+	ReplicationConfigurationUnreadable bool
 }
 
 // Update wraps b2_update_bucket.
@@ -993,6 +1081,9 @@ func (b *B2) listBuckets(ctx context.Context, bucketID, name string, bucketTypes
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
 		}
 		listed.DefaultRetention = decodeDefaultRetention(bucket.FileLockConfig)
+		if cfg := bucket.ReplicationConfiguration; cfg != nil && !cfg.IsClientAuthorizedToRead {
+			listed.ReplicationConfigurationUnreadable = true
+		}
 		if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
 			(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
 			listed.ReplicationConfiguration = cfg.Value

@@ -27,6 +27,10 @@ import (
 // This file wraps the base package in a thin layer, for testing.  It should be
 // the only file in b2 that imports base.
 
+// AuthData is the authorized session snapshot stored by AccountInfo.
+// It excludes the application key secret.
+type AuthData base.AuthData
+
 type b2RootInterface interface {
 	authorizeAccount(context.Context, string, string, clientOptions) error
 	backoff(error) time.Duration
@@ -169,6 +173,31 @@ type b2Key struct {
 }
 
 func (b *b2Root) authorizeAccount(ctx context.Context, account, key string, c clientOptions) error {
+	aopts := authOptions(c)
+	nb, err := base.AuthorizeAccount(ctx, account, key, aopts...)
+	if err != nil {
+		return err
+	}
+	if b.b == nil {
+		b.b = nb
+		return nil
+	}
+	b.b.Update(nb)
+	return nil
+}
+
+func (b *b2Root) restoreAccount(data AuthData, c clientOptions) {
+	nb := base.NewAuthorizedAccount(base.AuthData(data), authOptions(c)...)
+	if b.b == nil {
+		b.b = nb
+		return
+	}
+	b.b.Update(nb)
+}
+
+func (b *b2Root) authData() AuthData { return AuthData(b.b.AuthData()) }
+
+func authOptions(c clientOptions) []base.AuthOption {
 	var aopts []base.AuthOption
 	ct := &clientTransport{client: c.client}
 	if c.transport != nil {
@@ -190,16 +219,7 @@ func (b *b2Root) authorizeAccount(ctx context.Context, account, key string, c cl
 	for _, agent := range c.userAgents {
 		aopts = append(aopts, base.UserAgent(agent))
 	}
-	nb, err := base.AuthorizeAccount(ctx, account, key, aopts...)
-	if err != nil {
-		return err
-	}
-	if b.b == nil {
-		b.b = nb
-		return nil
-	}
-	b.b.Update(nb)
-	return nil
+	return aopts
 }
 
 func (b *b2Root) backoff(err error) time.Duration {
@@ -419,6 +439,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	previousFileLock := b.b.FileLockEnabled
 	b.b.FileLockEnabled = attrs.FileLockEnabled && !previousFileLock
 
+	previousReplication := b.b.ReplicationConfiguration
 	if attrs.ReplicationConfig != nil {
 		b.b.ReplicationConfiguration = toBaseReplicationConfiguration(attrs.ReplicationConfig, b.b.ReplicationConfiguration)
 	}
@@ -431,6 +452,7 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.FileLockEnabled = previousFileLock
 		b.b.Info = previousInfo
 		b.b.LifecycleRules = previousRules
+		b.b.ReplicationConfiguration = previousReplication
 	}
 	code, _ := base.Code(err)
 	if code == 409 {
@@ -504,10 +526,11 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 		})
 	}
 	attrs := &BucketAttrs{
-		LifecycleRules:  rules,
-		Info:            b.b.Info,
-		Type:            BucketType(b.b.Type),
-		FileLockEnabled: b.b.FileLockEnabled,
+		LifecycleRules:              rules,
+		Info:                        b.b.Info,
+		Type:                        BucketType(b.b.Type),
+		FileLockEnabled:             b.b.FileLockEnabled,
+		replicationConfigUnreadable: b.b.ReplicationConfigurationUnreadable,
 	}
 	for _, rule := range b.b.CORSRules {
 		attrs.CORSRules = append(attrs.CORSRules, CORSRule{

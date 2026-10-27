@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x bucket.inbound_webhook -- the contract is bin/conformance/README.md.
+#
+# Scenario: synthesize a signed B2 webhook payload and verify its raw-body
+# signature before parsing its events. This is intentionally offline: the
+# simulator does not emit signed webhook deliveries.
+#
+# B2 sends X-Bz-Event-Notification-Signature as v1=<hex HMAC-SHA256>, using
+# the rule's hmacSha256SigningSecret verbatim over the exact request body.
+# https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+SLUG=blazer
+CAP=bucket.inbound_webhook
+TARGET=simulator
+
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+	say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+	exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+	say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+	exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+	say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+	exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+	0) ;;
+	10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+	*) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+	say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+	exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"reflect"
+	"strings"
+
+	"github.com/Backblaze/blazer/b2"
+)
+
+const (
+	capability = "bucket.inbound_webhook"
+	secret     = "0123456789abcdef0123456789abcdef"
+	wrongSecret = "fedcba9876543210fedcba9876543210"
+)
+
+func fail(format string, args ...interface{}) {
+	fmt.Printf("CONFORMANCE blazer %s @simulator: FAIL (%s)\n", capability, fmt.Sprintf(format, args...))
+	os.Exit(1)
+}
+
+func signature(body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(body)
+	return "v1=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func main() {
+	// Same fixture and signing key as the TypeScript inbound-webhook check.
+	body := []byte(`{"events":[{"accountId":"sim_account_0001","bucketId":"b2_bucket_sdkharness_conformance","bucketName":"sdkharness-conf-webhook","eventId":"sdkharness-conformance-event","eventTimestamp":1700000000000,"eventType":"b2:ObjectCreated:Upload","eventVersion":1,"matchedRuleName":"sdkharness-conf-rule","objectName":"st/webhook.txt","objectSize":11,"objectVersionId":"4_z_sdkharness_conformance"}]}`)
+	want := b2.Event{AccountID: "sim_account_0001", BucketID: "b2_bucket_sdkharness_conformance", BucketName: "sdkharness-conf-webhook", EventID: "sdkharness-conformance-event", EventTimestamp: 1700000000000, EventType: "b2:ObjectCreated:Upload", EventVersion: 1, MatchedRuleName: "sdkharness-conf-rule", ObjectName: "st/webhook.txt", ObjectVersionID: "4_z_sdkharness_conformance"}
+	if err := b2.VerifySignature(body, signature(body), secret); err != nil {
+		fail("verify valid signature: %v", err)
+	}
+	upper := "v1=" + strings.ToUpper(strings.TrimPrefix(signature(body), "v1="))
+	if err := b2.VerifySignature(body, upper, secret); err != nil {
+		fail("verify uppercase signature: %v", err)
+	}
+	tampered := append([]byte(nil), body...)
+	tampered[0] ^= 1
+	if err := b2.VerifySignature(tampered, signature(body), secret); err == nil {
+		fail("tampered body was accepted")
+	}
+	if err := b2.VerifySignature(body, signature(body), wrongSecret); err == nil {
+		fail("wrong secret was accepted")
+	}
+	for _, header := range []string{"", "v2=" + strings.TrimPrefix(signature(body), "v1="), "v1=not-hex"} {
+		if err := b2.VerifySignature(body, header, secret); err == nil {
+			fail("malformed header %q was accepted", header)
+		}
+	}
+	got, err := b2.ParseEvent(body)
+	if err != nil {
+		fail("parse event: %v", err)
+	}
+	if len(got.Events) != 1 || got.Events[0].AccountID != want.AccountID || got.Events[0].BucketID != want.BucketID || got.Events[0].EventID != want.EventID || got.Events[0].ObjectName != want.ObjectName || got.Events[0].ObjectSize == nil || *got.Events[0].ObjectSize != 11 || got.Events[0].ObjectVersionID != want.ObjectVersionID {
+		fail("parsed event did not match payload")
+	}
+	batch := []byte(`{"events":[{"eventId":"created","eventType":"b2:ObjectCreated:Upload","objectSize":11},{"eventId":"deleted","eventType":"b2:ObjectDeleted:Delete","objectName":"st/webhook.txt"}]}`)
+	if err := b2.VerifySignature(batch, signature(batch), secret); err != nil {
+		fail("verify batch signature: %v", err)
+	}
+	parsedBatch, err := b2.ParseEvent(batch)
+	if err != nil {
+		fail("parse batch: %v", err)
+	}
+	size := int64(11)
+	wantBatch := []b2.Event{{EventID: "created", EventType: "b2:ObjectCreated:Upload", ObjectSize: &size}, {EventID: "deleted", EventType: "b2:ObjectDeleted:Delete", ObjectName: "st/webhook.txt"}}
+	if !reflect.DeepEqual(parsedBatch.Events, wantBatch) {
+		fail("parsed batch lost event order or delete-without-size: %+v", parsedBatch.Events)
+	}
+	fmt.Println("CONFORMANCE blazer bucket.inbound_webhook @simulator: PASS")
+}
+__EOF_GO__

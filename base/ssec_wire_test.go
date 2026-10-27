@@ -255,8 +255,8 @@ func TestSSECResponseHeadersAreRedactedInLogs(t *testing.T) {
 	if strings.Contains(string(out), key) || strings.Contains(string(out), digest) {
 		t.Fatal("SSE-C key or digest appeared in response logs")
 	}
-	if strings.Count(string(out), "[REDACTED]") < 2 || !strings.Contains(string(out), "AES256") {
-		t.Fatalf("response log omitted expected redacted headers or algorithm: %s", out)
+	if !strings.Contains(string(out), "X-Bz-Server-Side-Encryption-Customer-Algorithm") || strings.Contains(string(out), "AES256") {
+		t.Fatalf("response log did not preserve the safe header name without exposing values: %s", out)
 	}
 }
 
