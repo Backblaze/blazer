@@ -7,6 +7,7 @@ conformance	bucket.notification_rules	simulator	./.sdkharness/tests/run-conforma
 conformance	bucket.replication_config	simulator	./.sdkharness/tests/run-conformance
 conformance	client.auth_persistence	simulator	./.sdkharness/tests/run-conformance
 conformance	client.progress	simulator	./.sdkharness/tests/run-conformance
+conformance	client.sync	simulator	./.sdkharness/tests/run-conformance
 conformance	client.simulator	simulator	./.sdkharness/tests/run-conformance
 conformance	enc.sse_b2	simulator	./.sdkharness/tests/run-conformance
 conformance	enc.sse_c	simulator	./.sdkharness/tests/run-conformance
