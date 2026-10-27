@@ -92,8 +92,11 @@ func Action(err error) ErrAction {
 		}
 		return Punt
 	case 408:
-		return AttemptNewUpload
-	case 429, 500, 503:
+		if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
+			return AttemptNewUpload
+		}
+		return Retry
+	case 429, 500, 502, 503, 504:
 		return Retry
 	}
 	return Punt

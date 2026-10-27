@@ -66,6 +66,41 @@ func TestActionConnectionFaultUpload(t *testing.T) {
 	}
 }
 
+func TestActionStatusMatrixForUploadsAndCopyParts(t *testing.T) {
+	tests := []struct {
+		name                 string
+		code, retry          int
+		wantUpload, wantCopy ErrAction
+	}{
+		{"bad request", http.StatusBadRequest, 0, Punt, Punt},
+		{"unauthorized", http.StatusUnauthorized, 0, AttemptNewUpload, ReAuthenticate},
+		{"forbidden", http.StatusForbidden, 0, Punt, Punt},
+		{"request timeout", http.StatusRequestTimeout, 0, AttemptNewUpload, Retry},
+		{"too many requests", http.StatusTooManyRequests, 0, Retry, Retry},
+		{"internal server error", http.StatusInternalServerError, 0, AttemptNewUpload, Retry},
+		{"bad gateway", http.StatusBadGateway, 0, AttemptNewUpload, Retry},
+		{"service unavailable", http.StatusServiceUnavailable, 0, AttemptNewUpload, Retry},
+		{"gateway timeout", http.StatusGatewayTimeout, 0, AttemptNewUpload, Retry},
+		{"transport failure", 0, 1, AttemptNewUpload, Retry},
+	}
+	for _, tc := range tests {
+		for _, method := range []struct {
+			name, method string
+			want         ErrAction
+		}{
+			{"upload", "b2_upload_part", tc.wantUpload},
+			{"copy", "b2_copy_part", tc.wantCopy},
+		} {
+			t.Run(tc.name+"/"+method.name, func(t *testing.T) {
+				err := b2err{method: method.method, code: tc.code, retry: tc.retry}
+				if got := Action(err); got != method.want {
+					t.Errorf("Action(%#v) = %v, want %v", err, got, method.want)
+				}
+			})
+		}
+	}
+}
+
 func TestActionTransportFaultUpload(t *testing.T) {
 	for _, method := range []string{"b2_upload_file", "b2_upload_part"} {
 		t.Run(method, func(t *testing.T) {
