@@ -1,0 +1,3 @@
+kind: Fixed
+body: Downloads by ID and by name request stored bytes without HTTP gzip decompression, preserving the file's content length and SHA1 for gzip-encoded objects.
+time: 2026-10-26T16:39:25.095262-05:00

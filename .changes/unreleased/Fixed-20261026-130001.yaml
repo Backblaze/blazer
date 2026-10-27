@@ -1,0 +1,3 @@
+kind: Fixed
+body: "A rejected bucket replication update no longer leaves the attempted configuration in the local bucket cache, where a later unrelated update could resend it."
+time: 2026-10-26T13:00:01.000000-05:00
