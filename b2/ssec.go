@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 )
 
 const ssecKeySize = 32
@@ -29,8 +30,11 @@ const ssecKeySize = 32
 //
 // SSECKey's formatted representation is always redacted.
 type SSECKey struct {
-	key   [ssecKeySize]byte
-	keyID string
+	// A closure keeps fmt's reflection of an unexported SSECKey field from
+	// walking the raw bytes when it bypasses Format (notably with %s and %q).
+	key *func() [ssecKeySize]byte
+	// Keep the caller's identifier behind a pointer for the same reason.
+	keyID *string
 }
 
 // NewSSECKey validates and copies a raw 32-byte AES-256 key. The caller remains
@@ -39,8 +43,10 @@ func NewSSECKey(key []byte) (*SSECKey, error) {
 	if len(key) != ssecKeySize {
 		return nil, fmt.Errorf("b2: SSE-C key must be exactly %d bytes (got %d)", ssecKeySize, len(key))
 	}
-	k := &SSECKey{}
-	copy(k.key[:], key)
+	var material [ssecKeySize]byte
+	copy(material[:], key)
+	readKey := func() [ssecKeySize]byte { return material }
+	k := &SSECKey{key: &readKey}
 	return k, nil
 }
 
@@ -55,16 +61,31 @@ func NewSSECKeyWithID(key []byte, id string) (*SSECKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	k.keyID = id
+	k.keyID = &id
 	return k, nil
+}
+
+func (k *SSECKey) id() string {
+	if k == nil || k.keyID == nil {
+		return ""
+	}
+	return *k.keyID
 }
 
 func (k SSECKey) String() string   { return "SSECKey([REDACTED])" }
 func (k SSECKey) GoString() string { return "b2.SSECKey([REDACTED])" }
 
+// Format redacts the key for every formatting verb.
+func (k SSECKey) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, k.String())
+}
+
 func (k *SSECKey) validate() error {
 	if k == nil {
 		return errors.New("b2: SSE-C key is nil")
+	}
+	if k.key == nil {
+		return errors.New("b2: SSE-C key is uninitialized; use NewSSECKey")
 	}
 	return nil
 }
@@ -73,8 +94,9 @@ func (k *SSECKey) encoded() (key, keyMD5 string, err error) {
 	if err := k.validate(); err != nil {
 		return "", "", err
 	}
-	sum := md5.Sum(k.key[:])
-	return base64.StdEncoding.EncodeToString(k.key[:]), base64.StdEncoding.EncodeToString(sum[:]), nil
+	material := (*k.key)()
+	sum := md5.Sum(material[:])
+	return base64.StdEncoding.EncodeToString(material[:]), base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
 func optionalSSECKey(keys []*SSECKey) (*SSECKey, error) {

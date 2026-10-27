@@ -101,7 +101,8 @@ func TestOverriddenSSECResumeUsesEffectiveEncryption(t *testing.T) {
 	const keyID = "override-key"
 	wire.unfinishedEncryption = `{"mode":"SSE-C","algorithm":"AES256"}`
 	wire.unfinishedInfo = fmt.Sprintf(`{"sse_c_key_id":%q}`, keyID)
-	key, err := NewSSECKeyWithID(wire.key.key[:], keyID)
+	material := (*wire.key.key)()
+	key, err := NewSSECKeyWithID(material[:], keyID)
 	if err != nil {
 		t.Fatal(err)
 	}

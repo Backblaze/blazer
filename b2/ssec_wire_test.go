@@ -52,6 +52,8 @@ type ssecPublicWire struct {
 	unfinishedInfo       string
 	partsResponse        string
 	authorizeCalls       int
+	sourceInfo           map[string]string
+	sourceContentType    string
 }
 
 func newSSECPublicWire(t *testing.T) *ssecPublicWire {
@@ -77,7 +79,8 @@ func newSSECPublicWire(t *testing.T) *ssecPublicWire {
 
 func (w *ssecPublicWire) keyWithID(t *testing.T, id string) *SSECKey {
 	t.Helper()
-	key, err := NewSSECKeyWithID(w.key.key[:], id)
+	material := (*w.key.key)()
+	key, err := NewSSECKeyWithID(material[:], id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,9 +142,27 @@ func (w *ssecPublicWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/file/bucket/"):
 		w.serveDownload(rw, r, strings.TrimPrefix(r.URL.Path, "/file/bucket/"))
 	case strings.HasSuffix(r.URL.Path, "/b2_get_file_info"):
-		if recorded.body["fileId"] == "historical-id" {
+		switch recorded.body["fileId"] {
+		case "source-id":
+			w.mu.Lock()
+			info := w.sourceInfo
+			contentType := w.sourceContentType
+			w.mu.Unlock()
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+			if info == nil {
+				info = map[string]string{}
+			}
+			encoded, err := json.Marshal(info)
+			if err != nil {
+				w.t.Error(err)
+				return
+			}
+			_, _ = fmt.Fprintf(rw, `{"fileId":"source-id","fileName":"source","action":"upload","contentLength":7,"contentSha1":"0000000000000000000000000000000000000000","contentType":%q,"fileInfo":%s,"uploadTimestamp":1}`, contentType, encoded)
+		case "historical-id":
 			_, _ = fmt.Fprint(rw, `{"fileId":"historical-id","fileName":"encrypted","action":"upload","contentLength":13,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{"version":"historical"},"uploadTimestamp":1}`)
-		} else {
+		default:
 			_, _ = fmt.Fprint(rw, `{"fileId":"id-encrypted","fileName":"encrypted","action":"upload","contentLength":7,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"uploadTimestamp":1}`)
 		}
 	case strings.HasSuffix(r.URL.Path, "/b2_list_unfinished_large_files"):
@@ -355,6 +376,83 @@ func TestSSECWriterDownloadAttrsAndCopyWire(t *testing.T) {
 	}
 }
 
+func TestCopyDestinationSSECKeyIDMetadata(t *testing.T) {
+	const sourceID = "source-key-id"
+	newKey := func(t *testing.T, material, id string) *SSECKey {
+		t.Helper()
+		key, err := NewSSECKeyWithID([]byte(material), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	for _, tc := range []struct {
+		name, destinationID, directive, wantDirective, wantType string
+		replaceInfo                                             map[string]string
+		wantID                                                  string
+	}{
+		{"COPY to different ID", "destination-key-id", "COPY", "REPLACE", "text/source", nil, "destination-key-id"},
+		{"COPY to no ID", "", "COPY", "REPLACE", "text/source", nil, ""},
+		{"COPY to same ID", sourceID, "COPY", "COPY", "", nil, sourceID},
+		{"REPLACE to different ID", "destination-key-id", "REPLACE", "REPLACE", "text/replaced", map[string]string{"custom": "replacement", "sse_c_key_id": "stale-id"}, "destination-key-id"},
+		{"REPLACE to no ID", "", "REPLACE", "REPLACE", "text/replaced", map[string]string{"custom": "replacement", "sse_c_key_id": "stale-id"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			wire.sourceInfo = map[string]string{"sse_c_key_id": sourceID, "custom": "source-value"}
+			wire.sourceContentType = "text/source"
+			bucket := wire.newBucket(t)
+			sourceKey := newKey(t, "0123456789abcdef0123456789abcdef", sourceID)
+			destinationKey := newKey(t, "abcdef0123456789abcdef0123456789", tc.destinationID)
+			options := []CopyOption{CopySourceSSECKey(sourceKey), CopyDestinationSSECKey(destinationKey)}
+			if tc.directive == "REPLACE" {
+				options = append(options, CopyWithMetadata(ReplaceMetadata, "text/replaced", tc.replaceInfo))
+			}
+			if _, err := bucket.Copy(context.Background(), "source-id", "copy", options...); err != nil {
+				t.Fatal(err)
+			}
+			copies := wire.requestsTo("/b2api/v4/b2_copy_file")
+			if len(copies) != 1 {
+				t.Fatalf("copy requests = %d, want 1", len(copies))
+			}
+			body := copies[0].body
+			if got := body["metadataDirective"]; got != tc.wantDirective {
+				t.Errorf("metadata directive = %v, want %s", got, tc.wantDirective)
+			}
+			if got := body["contentType"]; tc.wantType != "" && got != tc.wantType {
+				t.Errorf("content type = %v, want %s", got, tc.wantType)
+			}
+			if tc.wantDirective == "COPY" {
+				if _, ok := body["fileInfo"]; ok {
+					t.Error("COPY unexpectedly sent replacement file info")
+				}
+			} else {
+				info, ok := body["fileInfo"].(map[string]any)
+				if !ok {
+					t.Fatalf("replacement file info = %v, want object", body["fileInfo"])
+				}
+				if tc.wantID == "" {
+					if _, ok := info["sse_c_key_id"]; ok {
+						t.Errorf("destination without ID inherited source ID: %v", info)
+					}
+				} else if got := info["sse_c_key_id"]; got != tc.wantID {
+					t.Errorf("destination key ID = %v, want %s", got, tc.wantID)
+				}
+				wantCustom := "source-value"
+				if tc.directive == "REPLACE" {
+					wantCustom = "replacement"
+				}
+				if got := info["custom"]; got != wantCustom {
+					t.Errorf("custom metadata = %v, want %s", got, wantCustom)
+				}
+			}
+			if tc.directive == "REPLACE" && tc.replaceInfo["sse_c_key_id"] != "stale-id" {
+				t.Error("Copy mutated caller's replacement metadata")
+			}
+		})
+	}
+}
+
 func TestDownloadFileByIDWithSSECWire(t *testing.T) {
 	wire := newSSECPublicWire(t)
 	bucket := wire.newBucket(t)
@@ -459,6 +557,102 @@ func TestNilSSECKeyCannotSilentlyUpload(t *testing.T) {
 	}
 	if got := len(wire.requestsTo("/upload")); got != 0 {
 		t.Fatalf("nil SSE-C key caused %d unencrypted uploads", got)
+	}
+}
+
+func TestCopyRejectsExplicitNilSSECKeysBeforeRequest(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		option CopyOption
+	}{
+		{"source", CopySourceSSECKey(nil)},
+		{"destination", CopyDestinationSSECKey(nil)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			bucket := wire.newBucket(t)
+			wire.mu.Lock()
+			before := len(wire.requests)
+			wire.mu.Unlock()
+			_, err := bucket.Copy(context.Background(), "source-id", "copy", test.option)
+			if err == nil || !strings.Contains(err.Error(), "nil") {
+				t.Fatalf("Copy with nil %s key error = %v, want a clear nil-key error", test.name, err)
+			}
+			wire.mu.Lock()
+			after := len(wire.requests)
+			wire.mu.Unlock()
+			if after != before {
+				t.Fatalf("Copy with nil %s key sent %d requests", test.name, after-before)
+			}
+		})
+	}
+}
+
+func TestZeroSSECKeyRejectedByPublicOperations(t *testing.T) {
+	zero := &SSECKey{}
+	tests := []struct {
+		name string
+		run  func(context.Context, *Bucket) error
+	}{
+		{"Writer", func(ctx context.Context, bucket *Bucket) error {
+			writer := bucket.Object("zero-key").NewWriter(ctx, WithSSECKey(zero))
+			_, writeErr := writer.Write([]byte("payload"))
+			closeErr := writer.Close()
+			if writeErr != nil {
+				return writeErr
+			}
+			return closeErr
+		}},
+		{"NewReader", func(ctx context.Context, bucket *Bucket) error {
+			reader := bucket.Object("encrypted").NewReader(ctx, zero)
+			_, err := reader.Read(make([]byte, 1))
+			_ = reader.Close()
+			return err
+		}},
+		{"NewRangeReader", func(ctx context.Context, bucket *Bucket) error {
+			reader := bucket.Object("encrypted").NewRangeReader(ctx, 0, 1, zero)
+			_, err := reader.Read(make([]byte, 1))
+			_ = reader.Close()
+			return err
+		}},
+		{"Attrs", func(ctx context.Context, bucket *Bucket) error {
+			_, err := bucket.Object("encrypted").Attrs(ctx, zero)
+			return err
+		}},
+		{"Copy source", func(ctx context.Context, bucket *Bucket) error {
+			_, err := bucket.Copy(ctx, "source-id", "copy", CopySourceSSECKey(zero))
+			return err
+		}},
+		{"Copy destination", func(ctx context.Context, bucket *Bucket) error {
+			_, err := bucket.Copy(ctx, "source-id", "copy", CopyDestinationSSECKey(zero))
+			return err
+		}},
+		{"DownloadFileByID", func(ctx context.Context, bucket *Bucket) error {
+			reader, err := bucket.DownloadFileByID(ctx, "id-encrypted", zero)
+			if reader != nil {
+				_ = reader.Close()
+			}
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			bucket := wire.newBucket(t)
+			wire.mu.Lock()
+			before := len(wire.requests)
+			wire.mu.Unlock()
+			err := test.run(context.Background(), bucket)
+			if err == nil || !strings.Contains(err.Error(), "NewSSECKey") {
+				t.Fatalf("%s with zero-value key error = %v, want NewSSECKey guidance", test.name, err)
+			}
+			wire.mu.Lock()
+			after := len(wire.requests)
+			wire.mu.Unlock()
+			if after != before {
+				t.Fatalf("%s with zero-value key sent %d requests", test.name, after-before)
+			}
+		})
 	}
 }
 
