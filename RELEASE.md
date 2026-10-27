@@ -38,7 +38,7 @@ non-zero to hold:
 | Code scanning (CodeQL security and quality queries) | Any alert is open on the default branch | Fixing it, or a code owner dismissing it with a written reason |
 | Dependabot alerts | An open alert has a patched version | Upgrading the dependency |
 | `govulncheck` (both modules) | A reachable known vulnerability is reported | Upgrading the module or Go toolchain |
-| Repository security advisories | An advisory is in triage or draft | Fixing it and publishing the advisory with the release |
+| Repository security advisories | An advisory is in triage or draft that this release does not fix | Fixing it in this release (see below) |
 | Secret scanning | Any alert is open | Revoking the secret, then closing the alert |
 
 Alerts with no patched version yet do not hold the release; the gate lists them as notes. A section the
@@ -46,8 +46,15 @@ script cannot read (for example secret scanning without security access) is repo
 be checked by hand on the Security tab; it never passes silently.
 
 Every release aims to clear the gate, not just pass it at the last minute. When a release is planned, open
-an issue for each finding the gate lists and add it to that release's milestone. A finding that cannot be
-fixed in time needs a code owner's written dismissal reason on the alert, linked from the release PR.
+an issue in that release's milestone for each finding that is already public (for example a Dependabot alert
+for a published CVE). Never open a public issue for a repository advisory or a code scanning security alert:
+track those in the private advisory, so an unfixed vulnerability is not disclosed early. A finding that
+cannot be fixed in time needs a code owner's written dismissal reason on the alert.
+
+A draft advisory fixed by the pending release stays private through tagging. List its id in
+`RELEASE_FIXES_ADVISORIES=GHSA-xxxx-xxxx-xxxx make release-check`; the gate reports it instead of holding,
+and the code owner approving the release PR confirms the fix is in it. Publish the advisory right after
+the tag is pushed (step 7). The gate prints only advisory ids, never summaries.
 
 ## Steps
 
@@ -65,7 +72,7 @@ fixed in time needs a code owner's written dismissal reason on the alert, linked
 4. Check the diff touches exactly the three files above plus `.changes/`. Edit `.changes/vX.Y.Z.md` for
    readability if needed and run `merge` again. Run `make ci`.
 5. Commit as `Version X.Y.Z` and open a PR with the changelog section and the `make release-check` output as
-   its body. A code owner approves.
+   its body; leave out any advisory ids until they are published. A code owner approves.
 6. After it merges (`main` requires linear history, so squash or rebase), tag the release PR's merge
    commit, not the tip of `main`, which may already include later PRs:
 
@@ -82,6 +89,8 @@ fixed in time needs a code owner's written dismissal reason on the alert, linked
    ```bash
    gh release create vX.Y.Z --title vX.Y.Z --notes-file .changes/vX.Y.Z.md
    ```
+
+   Then publish each advisory listed in `RELEASE_FIXES_ADVISORIES`, naming vX.Y.Z as the patched version.
 
 8. Ask the Go proxy to index it, then check pkg.go.dev shows the version:
 

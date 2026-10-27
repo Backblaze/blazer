@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Release gate: holds a release while solvable security or quality findings are open.
 # Usage: scripts/release-check.sh [owner/repo]   (needs gh, jq, go; run from the repo root)
+# RELEASE_FIXES_ADVISORIES: comma-separated GHSA ids of draft advisories this release fixes; they are
+# published with the release instead of holding it.
 # Exit 0 = clear to release, 1 = hold. Findings that cannot be read are reported as UNVERIFIED and
 # must be checked by hand on the Security tab; they do not pass silently.
-set -uo pipefail
+set -euo pipefail
+
+for tool in gh jq go; do
+  command -v "$tool" >/dev/null || { echo "HOLD: $tool is not installed; the gate cannot run." >&2; exit 1; }
+done
 
 repo=${1:-Backblaze/blazer}
 govulncheck="golang.org/x/vuln/cmd/govulncheck@v1.1.4"
@@ -66,11 +72,17 @@ fi
 
 section "Repository security advisories in triage or draft"
 if advisories=$(list "repos/$repo/security-advisories?per_page=100"); then
-  open=$(jq -c 'select(.state == "triage" or .state == "draft")' <<<"$advisories")
+  fixes=${RELEASE_FIXES_ADVISORIES:-}
+  # Only GHSA ids and states are printed: summaries of unpublished advisories must stay private.
+  fixed=$(jq -c --arg f ",$fixes," 'select(.state == "draft" and (.ghsa_id as $id | $f | contains("," + $id + ",")))' <<<"$advisories")
+  open=$(jq -c --arg f ",$fixes," 'select((.state == "triage" or .state == "draft") and (.ghsa_id as $id | $f | contains("," + $id + ",") | not))' <<<"$advisories")
+  if [ -n "$fixed" ]; then
+    jq -r '"  \(.ghsa_id) fixed by this release: publish it right after tagging"' <<<"$fixed"
+  fi
   if [ -n "$open" ]; then
-    jq -r '"  \(.ghsa_id) \(.state) \(.severity) \(.summary)"' <<<"$open"
-    holdf "$(grep -c . <<<"$open") advisory(ies) not yet fixed and published."
-  else
+    jq -r '"  \(.ghsa_id) \(.state)"' <<<"$open"
+    holdf "$(grep -c . <<<"$open") advisory(ies) not yet fixed."
+  elif [ -z "$fixed" ]; then
     echo "  none in triage or draft"
   fi
 else
