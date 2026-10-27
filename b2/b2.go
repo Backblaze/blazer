@@ -734,6 +734,7 @@ func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys 
 		ssec:          key,
 		chunks:        make(map[int]*rchunk),
 		length:        length,
+		bounded:       length >= 0,
 		offset:        offset,
 		progressTotal: readerProgressTotal(length),
 	}
