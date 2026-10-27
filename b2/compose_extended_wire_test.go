@@ -531,7 +531,9 @@ func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
 		status, wantAuth int
 	}{
 		{"expired token", http.StatusUnauthorized, 2},
+		{"request timeout", http.StatusRequestTimeout, 1},
 		{"service unavailable", http.StatusServiceUnavailable, 1},
+		{"gateway timeout", http.StatusGatewayTimeout, 1},
 		{"rate limited", http.StatusTooManyRequests, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

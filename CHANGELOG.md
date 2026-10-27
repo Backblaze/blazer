@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Server-side copy and other non-upload calls now retry HTTP 408, 502 and 504 responses. Upload calls continue to obtain a new upload URL for those responses.
 - A rejected bucket replication update no longer leaves the attempted configuration in the local bucket cache, where a later unrelated update could resend it.
 - `b2/sync` treats an unavailable destination SHA1 as changed, stops hashing after context cancellation, rejects files swapped for symlinks after walking, cancels an upload if the streamed bytes differ from the walk-time SHA1, and reports a destination object whose attributes cannot be read only as a failure of the local file that maps to it.
 - `AccountInfoFile` rejects cached sessions read from non-private POSIX paths, incomplete sessions reauthorize and refresh the cache, and verbose authorization-response logging omits the response body entirely.

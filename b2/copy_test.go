@@ -13,11 +13,13 @@ import (
 // copyFixture serves two buckets, "a" and "b", and records every b2_copy_file
 // request body.
 type copyFixture struct {
-	t          *testing.T
-	copies     []map[string]any
-	client     *Client
-	srv        *httptest.Server
-	listAction string // action reported for the copied version in listings and get_file_info
+	t              *testing.T
+	copies         []map[string]any
+	client         *Client
+	srv            *httptest.Server
+	copyFailStatus int
+	copyFailures   int
+	listAction     string // action reported for the copied version in listings and get_file_info
 }
 
 func newCopyFixture(t *testing.T) *copyFixture {
@@ -48,6 +50,13 @@ func newCopyFixture(t *testing.T) *copyFixture {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.copies = append(f.copies, body)
+			if f.copyFailStatus != 0 && f.copyFailures == 0 {
+				f.copyFailures++
+				rwStatus := f.copyFailStatus
+				w.WriteHeader(rwStatus)
+				_, _ = fmt.Fprintf(w, `{"status":%d,"code":"service_unavailable","message":"retry copy"}`, rwStatus)
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"fileId":"copied-id","fileName":%q,"accountId":"a","bucketId":"x","contentLength":5,"contentSha1":"x","contentType":"text/plain","fileInfo":{},"action":"copy","uploadTimestamp":1}`, body["fileName"])
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
@@ -102,6 +111,17 @@ func TestCopyToBucketSendsThatBucketID(t *testing.T) {
 	}
 	if obj.b != b {
 		t.Errorf("returned object belongs to %q, want the destination bucket b", obj.b.Name())
+	}
+}
+
+func TestCopyRetriesRequestTimeout(t *testing.T) {
+	f := newCopyFixture(t)
+	f.copyFailStatus = http.StatusRequestTimeout
+	if _, err := f.bucket("b").Copy(context.Background(), "src", "dst"); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(f.copies); got != 2 {
+		t.Fatalf("b2_copy_file calls = %d, want 2 after one 408", got)
 	}
 }
 
