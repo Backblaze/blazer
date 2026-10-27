@@ -659,6 +659,28 @@ func TestSSECSimpleUploadKeyIDFileInfo(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "ReadFrom with a non-seekable reader stores caller key ID",
+			run: func(t *testing.T, wire *ssecPublicWire, bucket *Bucket) {
+				writer := bucket.Object("read-from-stream-with-id").NewWriter(context.Background(),
+					WithSSECKey(wire.keyWithID(t, keyID)))
+				// Hide Seek so ReadFrom takes the buffered path rather than the seekable one.
+				reader := struct{ io.Reader }{bytes.NewReader([]byte("payload"))}
+				if n, err := writer.ReadFrom(reader); err != nil || n != int64(len("payload")) {
+					t.Fatalf("ReadFrom = %d, %v; want %d, nil", n, err, len("payload"))
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				uploads := wire.requestsTo("/upload")
+				if len(uploads) != 1 {
+					t.Fatalf("upload calls = %d, want 1", len(uploads))
+				}
+				if got := uploads[0].headers.Get("X-Bz-Info-sse_c_key_id"); got != keyID {
+					t.Errorf("key ID header = %q, want %q", got, keyID)
+				}
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
