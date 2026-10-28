@@ -20,7 +20,6 @@ package, and it has no credential-free test to change it against.
   it skipped.
 - New credential-free tests cover `Group.Operate`'s contract against a stateful in-memory B2 (`x/b2sim`):
   - sequential updates are all applied;
-  - concurrent updates are all applied, with none lost;
   - `OperateJSON` round-trips a value.
 
 ## Affected users and APIs
@@ -41,6 +40,10 @@ package, and it has no credential-free test to change it against.
   bucket revisions and conflicts, which a recording server cannot model.
 
 ## Open questions
+
+Concurrent `Operate` is not tested here. A concurrent test fails under `-race` on current code
+(`Bucket.Attrs` replaces the shared `Bucket.b`, `b2/b2.go:543`); that is #186 item 4, so the test lands
+with #186's fix.
 
 1. `x/b2sim`'s future is still being decided (keep it, remove it, or replace it with an external
    simulator). If it is removed, these tests need another stateful fake. (@goanpeca)

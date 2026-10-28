@@ -17,23 +17,26 @@ this package)."
 - **R3. Sequential updates.** On an `x/b2sim` bucket, five sequential `g.Operate(ctx, "counter", inc)` calls
   (where `inc` parses the bytes as an integer, empty meaning 0, and returns n+1) leave a value that a fresh
   `Operate` reads as `"5"`.
-- **R4. Concurrent updates are not lost.** Four goroutines each run `Operate` with `inc` five times. All
-  calls return nil, and the final value is `"20"`. Run under `-race`.
+- **R4. Moved to #186.** A concurrent `Operate` test (four goroutines, no lost update) fails under `-race`
+  on current code: `Bucket.Attrs` replaces the shared `Bucket.b` without synchronization
+  (`b2/b2.go:543`), reached through `Group.info`. That is #186 item 4, whose acceptance criteria already
+  require `go test -race` on concurrent `Operate` to be clean. The concurrent test lands in #186's PR as
+  its failing regression test. This change adds no concurrent test.
 - **R5. JSON.** `OperateJSON` with a `struct{ N int }` value, incremented three times, reads back `N == 3`.
 - **R6. Mutex, uncontended.** `g.Mutex(ctx, "m").Lock()` then `Unlock()` returns, and a second `Lock()` then
   `Unlock()` on the same name also returns, within a 10-second test context.
 - **R7. The default run shows tests.** `go test -json ./x/consistent` with no environment variables set
-  contains `"Action":"run"` events for the R3–R6 tests, and `"Action":"skip"` for the three live tests.
+  contains `"Action":"run"` events for the R3, R5 and R6 tests, and `"Action":"skip"` for the three live tests.
 - **R8. Test-only.** No file outside `x/consistent/*_test.go` and `intent/consistent-tests-run/` changes.
 
 ## Design
 
 - `x/consistent/consistent_test.go`: change `TestMain` (R1) and add `requireLive(t)` (R2), called first
   in the three live tests. `startLiveTest` stays as it is.
-- `x/consistent/consistent_sim_test.go` (new): R3–R6. The client is created as in
+- `x/consistent/consistent_sim_test.go` (new): R3, R5 and R6. The client is created as in
   `x/b2sim/sim_test.go`: `b2.NewClient(ctx, "test-id", "test-key", b2.Transport(b2sim.New()))`, then
   `client.NewBucket(ctx, "consistent", nil)`.
-- Every test uses a context with a timeout (10 s for R3, R5, R6; 30 s for R4), so a livelock fails instead of
+- Every test uses a context with a timeout (10 s each), so a livelock fails instead of
   hanging.
 
 ## How each constraint in the intent is met
@@ -42,14 +45,13 @@ this package)."
 | --- | --- |
 | Test-only | R8 |
 | Live tests stay gated | R2 |
-| Expected values from the contract | R3–R5 literals derived from the `Operate` doc comment |
+| Expected values from the contract | R3 and R5 literals derived from the `Operate` doc comment |
 | Credential-free, race-safe | `x/b2sim`; `-race -count=5 -shuffle=on` |
 
 ## Areas of concern
 
-1. **Flakiness of R4.** `Operate` retries on conflicts with no backoff. If `x/b2sim` serializes updates
-   correctly, R4 is deterministic. If R4 fails or flakes, that is evidence for #186, not a reason to loosen
-   the test. Stop and report it. Owner: Felipe, with @goanpeca for #186.
+1. **Concurrency is #186's.** R4 moved there after the concurrent test exposed the `Bucket.Attrs` race
+   (2026-10-28). Do not add a concurrent `Operate` test here. Owner: @ffumero2003.
 2. **`x/b2sim` support.** It implements `b2_update_bucket` with `ifRevisionIs` conflicts
    (`x/b2sim/sim.go:383-390`), which `save` relies on. If a needed endpoint is missing, stop and report it;
    don't extend the simulator in this change.

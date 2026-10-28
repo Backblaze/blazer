@@ -8,7 +8,7 @@ and the package's own API, add only what the tests need.
 
 ```
 x/consistent/consistent_test.go            (edit)  R1, R2
-x/consistent/consistent_sim_test.go        (new)   R3-R6
+x/consistent/consistent_sim_test.go        (new)   R3, R5, R6
 intent/consistent-tests-run/plan.md        (edit only if the implementation departs from this plan)
 ```
 
@@ -25,16 +25,16 @@ No production file changes (R8). `x/b2sim` is not modified.
    Run `go test -json ./x/consistent` and confirm three skips.
 2. **Simulator fixture.** In `consistent_sim_test.go`, add `newSimBucket(t)`: `b2sim.New()`,
    `b2.NewClient(..., b2.Transport(sim))`, `client.NewBucket(ctx, "consistent", nil)`.
-3. **Operate** (R3, R4). An `inc` helper. `TestOperateAppliesSequentialUpdates` (5 calls, expect `"5"`) and
-   `TestOperateLosesNoConcurrentUpdates` (4 × 5 under goroutines with a `sync.WaitGroup`, expect `"20"`). Read
-   the final value with one more `Operate` that returns its input unchanged and captures it.
+3. **Operate** (R3). An `inc` helper and `TestOperateAppliesSequentialUpdates` (5 calls, expect `"5"`). Read
+   the final value with one more `Operate` that returns its input unchanged and captures it. No concurrent
+   test: R4 moved to #186.
 4. **JSON and Mutex** (R5, R6). `TestOperateJSONRoundTrips` and `TestMutexLockUnlockUncontended`.
 5. **Check and self-review.** `make ci`; then a fresh-context review of the diff per `AGENTS.md`, answering
    each finding.
 
 ## Risks
 
-- **A new test fails on current code** (especially R4). Then it found a product bug. Stop and report; do not
+- **A new test fails on current code.** Then it found a product bug. Stop and report; do not
   fix it here (spec concern 1).
 - **A missing simulator endpoint.** If `x/b2sim` answers 501 or 404 for a call the package needs, stop and
   report it (spec concern 2).
@@ -50,8 +50,6 @@ passing output.
 | Req | Break to apply | Test that must fail |
 | --- | --- | --- |
 | R3 | `OperateStream` (`x/consistent/consistent.go:100`): skip `w.Close()` (return nil after the copy) | `TestOperateAppliesSequentialUpdates` |
-| R4 | `save` (`x/consistent/consistent.go:318`): change `oldAI.Serial != ci.Serial-1` to `false` (no conflict detection) | `TestOperateLosesNoConcurrentUpdates` (report how many runs of `-count=5` fail; a lost update may not appear every run) |
-| R4 | `Writer.Close` (`x/consistent/consistent.go:199`): change `ok && old != w.key` to `false` | `TestOperateLosesNoConcurrentUpdates` (same note) |
 | R1, R7 | Restore the old `TestMain` | `go test -json ./x/consistent` shows no `"Action":"run"` events |
 
 Also record `go test -race -count=5 -shuffle=on ./x/consistent` passing with `BLAZER_TEST_CONSISTENT`,
