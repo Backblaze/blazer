@@ -61,7 +61,11 @@ func TestSetNotificationRulesSendsSigningSecret(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			request := srv.Last(t, "b2_set_bucket_notification_rules")
+			requests := srv.Calls("b2_set_bucket_notification_rules")
+			if len(requests) != 1 {
+				t.Fatalf("set requests = %d, want 1", len(requests))
+			}
+			request := requests[0]
 			b2wiretest.AssertJSON(t, request, "eventNotificationRules.0.targetConfiguration.url", "https://example.com/notify")
 			b2wiretest.AssertJSON(t, request, "eventNotificationRules.0.targetConfiguration.targetType", "webhook")
 			if test.secret == "" {
