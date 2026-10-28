@@ -108,6 +108,25 @@ func TestCreateKeyRequestBody(t *testing.T) {
 			},
 			absent: []string{"validDurationInSeconds", "bucketId", "namePrefix"},
 		},
+		{
+			name: "several buckets with lifetime and prefix",
+			opts: []KeyOption{
+				Capabilities("listBuckets", "readFiles"),
+				BucketIDs("b-1", "b-2"),
+				Lifetime(time.Hour),
+				Prefix("logs/"),
+			},
+			path: "/b2api/v4/b2_create_key",
+			want: map[string]any{
+				"accountId":              "acct-1",
+				"keyName":                "k1",
+				"capabilities":           []string{"listBuckets", "readFiles"},
+				"bucketIds":              []string{"b-1", "b-2"},
+				"validDurationInSeconds": 3600,
+				"namePrefix":             "logs/",
+			},
+			absent: []string{"bucketId"},
+		},
 	}
 
 	for _, test := range tests {
