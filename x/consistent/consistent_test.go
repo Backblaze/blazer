@@ -32,8 +32,7 @@ func requireLive(t *testing.T) {
 
 func TestOperationLive(t *testing.T) {
 	requireLive(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
@@ -91,8 +90,7 @@ type jsonThing struct {
 
 func TestOperationJSONLive(t *testing.T) {
 	requireLive(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
@@ -142,8 +140,7 @@ func TestOperationJSONLive(t *testing.T) {
 
 func TestMutex(t *testing.T) {
 	requireLive(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 

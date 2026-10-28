@@ -36,8 +36,8 @@ this package)."
 - `x/consistent/consistent_sim_test.go` (new): R3, R5 and R6. The client is created as in
   `x/b2sim/sim_test.go`: `b2.NewClient(ctx, "test-id", "test-key", b2.Transport(b2sim.New()))`, then
   `client.NewBucket(ctx, "consistent", nil)`.
-- Every test uses a context with a timeout (10 s each), so a livelock fails instead of
-  hanging.
+- Every new simulator test (R3, R5, R6) uses a context with a 10-second timeout, so a livelock fails
+  instead of hanging. The live tests keep `context.Background()`, unchanged (R2).
 
 ## How each constraint in the intent is met
 
