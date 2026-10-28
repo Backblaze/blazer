@@ -32,13 +32,16 @@ No production file changes (R6).
    - Lock rows assert the three headers (small) or the three body fields (large). No-lock rows assert their
      absence.
 3. **Resume** (R4, R5). `TestWriterResumeChecksTheUnfinishedLock`: script
-   `b2_list_unfinished_large_files` with one file named like the object, `b2_get_file_info` with the
-   mismatched lock (R4) or the matching lock (R5), and `b2_list_parts` with no parts (R5).
+   `b2_list_unfinished_large_files` with one file named like the object and the documented
+   `b2_get_file_info` Object Lock response shape carrying the mismatched lock (R4) or matching lock
+   (R5), and `b2_list_parts` with no parts (R5).
    - R4: `Close` errors, and no `upload_part` or `b2_finish_large_file` is recorded.
    - R5: a `b2_list_parts` request is recorded.
 
    Follow how `getLargeFile` (`b2/writer.go:403-450`) lists and checks, so the scripted calls match the
-   code path.
+   code path. `b2_list_unfinished_large_files` populates the candidate file's cached `FileInfo`, so
+   `b2File.getFileInfo` returns that cache without a `b2_get_file_info` request. Putting the documented
+   response shape in the list response exercises the real resume path without a dead script.
 4. **Check and self-review.** `make ci`; then a fresh-context review of the diff per `AGENTS.md`, answering
    each finding.
 
