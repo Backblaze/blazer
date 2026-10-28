@@ -43,7 +43,12 @@ func TestUpdateBucketSendsCORSRuleName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("updateBucket: %v", err)
 	}
-	b2wiretest.AssertJSON(t, srv.Last(t, "b2_update_bucket"), "corsRules.0.corsRuleName", "browser")
+	request := srv.Last(t, "b2_update_bucket")
+	rules, ok := request.JSON["corsRules"].([]any)
+	if !ok || len(rules) != 1 {
+		t.Fatalf("update request corsRules = %v, want one rule", request.JSON["corsRules"])
+	}
+	b2wiretest.AssertJSON(t, request, "corsRules.0.corsRuleName", "browser")
 }
 
 func TestReadModifyWriteKeepsCORSRuleName(t *testing.T) {
