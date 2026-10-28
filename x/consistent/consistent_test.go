@@ -3,7 +3,6 @@ package consistent
 import (
 	"context"
 	"io/ioutil"
-	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -20,18 +19,21 @@ const (
 	bucketName = "consistobucket"
 )
 
-// consistent is an experimental package, not currently maintained, with some tests that are flaky.
-// Skip all tests in the package unless the env var BLAZER_TEST_CONSISTENT is set.
 func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
+
+func requireLive(t *testing.T) {
+	t.Helper()
 	if os.Getenv("BLAZER_TEST_CONSISTENT") == "" {
-		log.Print("Skipping x/consistent/consistent_test.go. Set BLAZER_TEST_CONSISTENT to include these tests.")
-	} else {
-		m.Run()
+		t.Skip("set BLAZER_TEST_CONSISTENT to run the live x/consistent tests (experimental, flaky)")
 	}
 }
 
 func TestOperationLive(t *testing.T) {
-	ctx := context.Background()
+	requireLive(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
@@ -88,7 +90,9 @@ type jsonThing struct {
 }
 
 func TestOperationJSONLive(t *testing.T) {
-	ctx := context.Background()
+	requireLive(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
@@ -137,7 +141,9 @@ func TestOperationJSONLive(t *testing.T) {
 }
 
 func TestMutex(t *testing.T) {
-	ctx := context.Background()
+	requireLive(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
