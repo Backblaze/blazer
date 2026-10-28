@@ -65,6 +65,8 @@ Each break from `recorded-breaks` for task T2 must make a test fail. Apply it, r
 | R7 | `b2/key.go:128` and `:176`: drop the `if err != nil` return | `TestCreateKeyReturnsB2Errors` |
 | R1–R4 | `internal/b2types/b2types.go:443-448`: rename `keyName`, `capabilities`, `namePrefix` or `validDurationInSeconds` (one at a time) | `TestCreateKeyRequestBody` |
 | R4 | `internal/b2types/b2types.go:457`: rename `bucketIds` | `TestCreateKeyRequestBody` |
+| R4 | `internal/b2types/b2types.go:456`: rename the v4 `validDurationInSeconds` tag | `TestCreateKeyRequestBody` (v4 lifetime and prefix row) |
+| R4 | `internal/b2types/b2types.go:458`: rename the v4 `namePrefix` tag | `TestCreateKeyRequestBody` (v4 lifetime and prefix row) |
 
 Also record `go test -race -count=5 -shuffle=on ./b2` passing with `B2_APPLICATION_KEY_ID`,
 `B2_APPLICATION_KEY`, `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` unset, and `make ci` passing.

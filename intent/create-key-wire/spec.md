@@ -17,7 +17,9 @@ Source of truth for every expected value: the B2 API documentation for `b2_creat
 - **R3. One bucket, with a prefix.** `(*Client).CreateKey(..., BucketIDs("b-1"), Prefix("logs/"))` sends to
   v3 with `bucketId` `"b-1"` and `namePrefix` `"logs/"`, and no `bucketIds`.
 - **R4. Several buckets.** `BucketIDs("b-1", "b-2")` sends to `/b2api/v4/b2_create_key` with `bucketIds`
-  `["b-1","b-2"]` in that order, and no `bucketId`.
+  `["b-1","b-2"]` in that order, and no `bucketId`. With `Lifetime(time.Hour)` and `Prefix("logs/")` added,
+  the same v4 body also has `validDurationInSeconds` `3600` and `namePrefix` `"logs/"`. The v4 request type
+  has its own JSON tags, and a dropped prefix there creates a key wider than asked for.
 - **R5. Bucket key.** For a `*Bucket` obtained with `(*Client).Bucket` from a `b2_list_buckets` response
   whose `bucketId` is `"bucket-from-list"`, `(*Bucket).CreateKey(ctx, "k2", Capabilities("readFiles"),
   Prefix("p/"))` sends to v3 with `bucketId` `"bucket-from-list"` and `namePrefix` `"p/"`. (Kills
