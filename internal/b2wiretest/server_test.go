@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -112,6 +113,28 @@ func TestCallsReturnsIndependentJSON(t *testing.T) {
 	s.Calls(call)[0].JSON["added"] = true
 	if _, ok := s.Calls(call)[0].JSON["added"]; ok {
 		t.Error("returned JSON changed the recorded request")
+	}
+}
+
+func TestRecordsQuery(t *testing.T) {
+	s := New(t)
+	call := "b2_get_bucket_notification_rules"
+	s.Reply(call, http.StatusOK, `{}`)
+	response := get(t, s.URL()+"/b2api/v4/"+call+"?bucketId=b-1")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+
+	record := s.Calls(call)[0]
+	if record.Path != "/b2api/v4/b2_get_bucket_notification_rules" || record.Call != call {
+		t.Errorf("record = %+v, want path and call for b2_get_bucket_notification_rules", record)
+	}
+	if got := record.Query.Get("bucketId"); got != "b-1" {
+		t.Fatalf("bucketId = %q, want b-1", got)
+	}
+	record.Query.Set("bucketId", "changed")
+	if got := s.Calls(call)[0].Query.Get("bucketId"); got != "b-1" {
+		t.Errorf("returned Query changed the recorded request: got %q, want b-1", got)
 	}
 }
 
@@ -388,6 +411,17 @@ func TestAssertNoJSONAndAssertHeader(t *testing.T) {
 	AssertHeader(fake, r, "X-Test", "other")
 	messages := fake.errors()
 	if len(messages) != 2 || !strings.Contains(messages[0], "b2_create_bucket body nested.present: got true, want missing") || !strings.Contains(messages[1], `b2_create_bucket header X-Test: got "value", want "other"`) {
+		t.Errorf("assertion reports = %v", messages)
+	}
+}
+
+func TestAssertQueryReportsGotAndWant(t *testing.T) {
+	r := Request{Call: "b2_get_bucket_notification_rules", Query: url.Values{"bucketId": {"b-1"}}}
+	fake := &recordingTB{TB: t}
+	AssertQuery(fake, r, "bucketId", "other")
+	AssertQuery(fake, r, "missing", "value")
+	messages := fake.errors()
+	if len(messages) != 2 || !strings.Contains(messages[0], `b2_get_bucket_notification_rules query bucketId: got "b-1", want "other"`) || !strings.Contains(messages[1], `b2_get_bucket_notification_rules query missing: missing, want "value"`) {
 		t.Errorf("assertion reports = %v", messages)
 	}
 }
