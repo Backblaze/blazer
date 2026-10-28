@@ -65,8 +65,8 @@ Sources of truth (each test links the page):
 
 ## Areas of concern
 
-1. **Stacked on #191.** This branch starts from #191's branch; #191 merges first. Owner: Felipe.
+1. **Stacked on #191.** This branch starts from #191's branch; #191 merges first. Owner: @ffumero2003.
 2. **R8 may expose an existing sync test that relied on the fake ignoring the prefix.** If one fails, it
-   was not testing what it claimed: stop and report it rather than loosening the fake. Owner: Felipe.
+   was not testing what it claimed: stop and report it rather than loosening the fake. Owner: @ffumero2003.
 3. **Conflict with #184.** When #184 adds the prefix to unfinished listing, R3 should gain a prefix check.
-   Owner: whoever lands #184.
+   Owner: @ffumero2003, or whoever lands #184.
