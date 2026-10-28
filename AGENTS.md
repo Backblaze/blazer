@@ -24,6 +24,7 @@ coding agents and new contributors; `CLAUDE.md` points here. Keep it under about
 | `b2/` | Public, high-level API (`Client`, `Bucket`, `Object`, `Writer`, `Reader`). Users import this. |
 | `base/` | Low-level wire layer: one function per B2 call, request/response JSON, retry and reauth. |
 | `internal/b2types/` | JSON request/response structs shared by `base`. Wire-shape changes start here. |
+| `internal/b2wiretest/` | recording `httptest` B2 server for wire tests; imported only from `_test.go`. |
 | `internal/retry/`, `internal/blog/` | Backoff helpers and debug logging. |
 | `x/` | Experimental packages (`consistent`, `transport`, `window`); weaker compatibility promise. |
 | `bin/b2keys/` | Key-management CLI, its own module. |
@@ -59,6 +60,7 @@ Each line was raised by a reviewer on at least two PRs.
 2. **Tests that do not pin the fix.** Revert the change and the new test must fail. Prove it in the PR.
    Assert the request body sent on the wire (`httptest` server or `RoundTripper` stub through `NewClient`),
    not only the fake backend or a decoded response.
+   New wire tests use `internal/b2wiretest`; existing per-feature fakes stay until a test is rewritten.
 3. **Read-modify-write on `b2_update_bucket`.** Omit fields the caller did not change (`lifecycleRules`,
    `defaultRetention`, `defaultServerSideEncryption`, `replicationConfiguration`). Sending cached values
    needs extra capabilities and can regenerate rule IDs. Test two updates in a row on the same handle.
