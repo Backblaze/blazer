@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -94,6 +95,88 @@ func TestRecordsMethodPathHeadersAndJSON(t *testing.T) {
 	serverRequest.Header.Set("X-Test", "after")
 	if got := s.Last(t, "b2_create_key").Header.Get("X-Test"); got != "before" {
 		t.Errorf("recorded header = %q, want before", got)
+	}
+}
+
+func TestCallsReturnsIndependentJSON(t *testing.T) {
+	s := New(t)
+	s.Reply("b2_create_key", http.StatusOK, `{}`)
+	response, err := http.Post(s.URL()+"/b2api/v4/b2_create_key", "application/json", strings.NewReader(`{"keyName":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	call := "b2_create_key"
+	s.Calls(call)[0].JSON["added"] = true
+	if _, ok := s.Calls(call)[0].JSON["added"]; ok {
+		t.Error("returned JSON changed the recorded request")
+	}
+}
+
+func TestRecordsQuery(t *testing.T) {
+	s := New(t)
+	call := "b2_get_bucket_notification_rules"
+	s.Reply(call, http.StatusOK, `{}`)
+	response := get(t, s.URL()+"/b2api/v4/"+call+"?bucketId=b-1")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+
+	record := s.Calls(call)[0]
+	if record.Path != "/b2api/v4/b2_get_bucket_notification_rules" || record.Call != call {
+		t.Errorf("record = %+v, want path and call for b2_get_bucket_notification_rules", record)
+	}
+	if got := record.Query.Get("bucketId"); got != "b-1" {
+		t.Fatalf("bucketId = %q, want b-1", got)
+	}
+	record.Query.Set("bucketId", "changed")
+	if got := s.Calls(call)[0].Query.Get("bucketId"); got != "b-1" {
+		t.Errorf("returned Query changed the recorded request: got %q, want b-1", got)
+	}
+}
+
+func TestHandleAndCallsCanReadJSONConcurrently(t *testing.T) {
+	s := New(t)
+	handlerStarted := make(chan struct{})
+	readJSON := make(chan struct{})
+	s.Handle("b2_create_bucket", func(r Request) Response {
+		close(handlerStarted)
+		<-readJSON
+		for range 10000 {
+			if r.JSON["bucketName"] != "test" {
+				return Response{Status: http.StatusInternalServerError, Body: "wrong request JSON"}
+			}
+		}
+		return Response{Status: http.StatusOK, Body: `{}`}
+	})
+
+	responseDone := make(chan error, 1)
+	go func() {
+		response, err := http.Post(s.URL()+"/b2api/v4/b2_create_bucket", "application/json", strings.NewReader(`{"bucketName":"test"}`))
+		if err == nil {
+			err = response.Body.Close()
+		}
+		responseDone <- err
+	}()
+	<-handlerStarted
+
+	callsStarted := make(chan struct{})
+	callsDone := make(chan struct{})
+	go func() {
+		defer close(callsDone)
+		close(callsStarted)
+		for range 10000 {
+			_ = s.Calls("b2_create_bucket")
+		}
+	}()
+	<-callsStarted
+	close(readJSON)
+	<-callsDone
+	if err := <-responseDone; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -284,7 +367,7 @@ func TestUnscriptedCallFails(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Status != 400 || body.Code != "bad_request" || body.Message != "b2wiretest: no response for b2_unknown" {
+	if body.Status != 400 || body.Code != "bad_request" || body.Message != "b2wiretest: no response scripted for this call" {
 		t.Errorf("error body = %+v", body)
 	}
 	if messages := fake.errors(); len(messages) != 1 || !strings.Contains(messages[0], "b2_unknown") {
@@ -328,6 +411,17 @@ func TestAssertNoJSONAndAssertHeader(t *testing.T) {
 	AssertHeader(fake, r, "X-Test", "other")
 	messages := fake.errors()
 	if len(messages) != 2 || !strings.Contains(messages[0], "b2_create_bucket body nested.present: got true, want missing") || !strings.Contains(messages[1], `b2_create_bucket header X-Test: got "value", want "other"`) {
+		t.Errorf("assertion reports = %v", messages)
+	}
+}
+
+func TestAssertQueryReportsGotAndWant(t *testing.T) {
+	r := Request{Call: "b2_get_bucket_notification_rules", Query: url.Values{"bucketId": {"b-1"}}}
+	fake := &recordingTB{TB: t}
+	AssertQuery(fake, r, "bucketId", "other")
+	AssertQuery(fake, r, "missing", "value")
+	messages := fake.errors()
+	if len(messages) != 2 || !strings.Contains(messages[0], `b2_get_bucket_notification_rules query bucketId: got "b-1", want "other"`) || !strings.Contains(messages[1], `b2_get_bucket_notification_rules query missing: missing, want "value"`) {
 		t.Errorf("assertion reports = %v", messages)
 	}
 }
