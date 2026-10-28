@@ -32,6 +32,8 @@ type Response struct {
 	Header http.Header
 }
 
+const unscriptedResponseBody = `{"status":400,"code":"bad_request","message":"b2wiretest: no response scripted for this call"}`
+
 type script struct {
 	responses []Response
 	handler   func(Request) Response
@@ -168,8 +170,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok || response.Status == 0 {
 		s.t.Errorf("b2wiretest: no response for %s", call)
-		response = Response{Status: http.StatusBadRequest,
-			Body: fmt.Sprintf(`{"status":400,"code":"bad_request","message":"b2wiretest: no response for %s"}`, call)}
+		response = Response{Status: http.StatusBadRequest, Body: unscriptedResponseBody}
 	}
 	for name, values := range response.Header {
 		for _, value := range values {

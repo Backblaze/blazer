@@ -26,7 +26,7 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
   replaces the earlier one.
 - **R6. Unscripted calls fail loudly.** A request to a call with no response registered (other than the
   R3 and R7 built-ins) is recorded, answered with status 400 and a B2-shaped error body
-  (`{"status":400,"code":"bad_request","message":"b2wiretest: no response for <call>"}`), and reported
+  (`{"status":400,"code":"bad_request","message":"b2wiretest: no response scripted for this call"}`), and reported
   with `t.Errorf` naming the call.
 - **R7. Upload URLs.** Without scripting, `b2_get_upload_url` and `b2_get_upload_part_url` return
   `uploadUrl` = server URL + `/upload_file` or `/upload_part`, and authorization tokens `"upload-token"`

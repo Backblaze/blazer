@@ -367,7 +367,7 @@ func TestUnscriptedCallFails(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Status != 400 || body.Code != "bad_request" || body.Message != "b2wiretest: no response for b2_unknown" {
+	if body.Status != 400 || body.Code != "bad_request" || body.Message != "b2wiretest: no response scripted for this call" {
 		t.Errorf("error body = %+v", body)
 	}
 	if messages := fake.errors(); len(messages) != 1 || !strings.Contains(messages[0], "b2_unknown") {
