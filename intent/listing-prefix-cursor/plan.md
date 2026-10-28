@@ -59,7 +59,13 @@ Steps 2, 3 and 4 are independent once step 1 exists. Step 5 is independent of 2 
   wrap each test in a context with a 10-second timeout.
 - **Restricted-key auth shape.** If `allowed` is shaped wrong, blazer may ignore it. Take the shape from
   `base/base_v4_test.go`'s `v4AuthJSON`.
-- **Changelog.** Test-only diff: `make changelog-check` passes without an entry.
+- **Changelog.** The #196 diff is test-only, but the default `origin/main` baseline also includes #191's
+  non-test helper files. The requested `make ci` ran and passed every preceding check, then failed with
+  `No changelog entry: run 'make changelog-new' (or label the PR skip-changelog).` Keep that failure
+  visible; changing #191's changelog policy is out of scope. Also run
+  `make ci BASE_REF=test-issue-191-shared-recording-server` to check this stacked change against its
+  dependency. This is a verification adjustment only; the implementation files and requirements are
+  unchanged.
 
 ## Proof
 
