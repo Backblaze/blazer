@@ -15,8 +15,9 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
   `recommendedPartSize` 100000000. A test can replace it like any other call (R5).
 - **R4. Recording.** Every request is recorded in arrival order as a `Request` with: `Seq` (1-based order),
   `Method`, `Path`, `Call` (the last path segment for API calls, e.g. `b2_create_key`; `upload_file` and
-  `upload_part` for upload URLs), `Header` (a copy), `Body` (raw bytes) and `JSON` (`map[string]any`
-  decoded from the body when it is a JSON object, otherwise nil). Recording is safe for concurrent requests.
+  `upload_part` for upload URLs), `Query` (`url.Values` decoded from `r.URL.RawQuery`), `Header` (a copy),
+  `Body` (raw bytes) and `JSON` (`map[string]any` decoded from the body when it is a JSON object, otherwise
+  nil). Recording is safe for concurrent requests.
 - **R5. Scripted responses.** Per call name:
   - `Reply(call string, status int, body string)`: the same response every time;
   - `ReplySequence(call string, rs ...Response)`: successive responses, the last one repeating;
@@ -41,6 +42,8 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
     `int64(5)` and `5.0` compare equal, as do a `[]string` and a `[]any` with the same elements.
   - `AssertNoJSON(t, r Request, path string)`: the field is absent.
   - `AssertHeader(t, r Request, name, want string)`.
+  - `AssertQuery(t, r Request, name, want string)`: reports `<call> query <name>: got X, want Y` (or
+    `missing` when absent).
 
   The helper never computes expected values. Tests supply them from the B2 API docs.
 - **R10. Tests of the helper.** `internal/b2wiretest` has its own tests for R2 to R9, using `net/http`
