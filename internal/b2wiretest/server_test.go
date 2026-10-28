@@ -37,7 +37,11 @@ func get(t *testing.T, url string) *http.Response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { response.Body.Close() })
+	t.Cleanup(func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	})
 	return response
 }
 
@@ -53,7 +57,9 @@ func TestRecordsMethodPathHeadersAndJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.StatusCode)
 	}
@@ -106,7 +112,10 @@ func TestRecordsInArrivalOrderUnderConcurrency(t *testing.T) {
 				errors <- err
 				return
 			}
-			response.Body.Close()
+			if err := response.Body.Close(); err != nil {
+				errors <- err
+				return
+			}
 			if response.StatusCode != http.StatusOK {
 				errors <- fmt.Errorf("status = %d", response.StatusCode)
 			}
@@ -191,7 +200,9 @@ func TestUploadURLsAreServedAndRecorded(t *testing.T) {
 				t.Fatal(err)
 			}
 			data, err := io.ReadAll(posted.Body)
-			posted.Body.Close()
+			if closeErr := posted.Body.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
 			if err != nil || posted.StatusCode != http.StatusOK || string(data) != `{}` {
 				t.Errorf("upload response = %d %q, err %v", posted.StatusCode, data, err)
 			}
@@ -241,7 +252,11 @@ func TestHandleSeesTheRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	t.Cleanup(func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	})
 	if response.StatusCode != 201 {
 		t.Fatalf("status = %d, want 201", response.StatusCode)
 	}
