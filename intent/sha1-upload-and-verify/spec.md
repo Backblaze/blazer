@@ -50,9 +50,9 @@ One new file, `b2/sha1_wire_test.go` (package `b2`), using `internal/b2wiretest`
 
 ## Areas of concern
 
-1. **Stacked on #191.** This branch starts from #191's branch; #191 merges first. Owner: Felipe.
+1. **Stacked on #191.** This branch starts from #191's branch; #191 merges first. Owner: @ffumero2003.
 2. **Small `ChunkSize`.** B2 requires parts of at least 5 MB except the last, and #182 may add that check.
-   If it does, R1 must use larger data. Owner: whoever lands #182 second.
+   If it does, R1 must use larger data. Owner: @ffumero2003, or whoever lands #182 second.
 3. **Range handling.** The reader may send a `Range` header. The fake answers with the whole body for R2,
    R3 and R5, and with the requested slice for R4, following `b2/progress_wire_test.go`. Validating
    `Content-Range` is #175 and #179, not this change.
