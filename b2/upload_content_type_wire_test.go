@@ -62,7 +62,7 @@ func TestWriterSendsContentType(t *testing.T) {
 			payload := []byte("0123456789")
 			if tc.large {
 				writer.ChunkSize = 10
-				payload = bytes.Repeat(payload, 3)
+				payload = append(bytes.Repeat(payload, 2), []byte("01234")...)
 			}
 			if _, err := writer.Write(payload); err != nil {
 				t.Fatal(err)
