@@ -23,7 +23,7 @@ No production file changes (R8). `x/b2sim` is not modified.
    - call it as the first line of `TestOperationLive`, `TestOperationJSONLive` and `TestMutex`.
 
    Run `go test -json ./x/consistent` and confirm three skips.
-2. **Simulator fixture.** In `consistent_sim_test.go`, add `newSimBucket(t)`: `b2sim.New()`,
+2. **Simulator fixture.** In `consistent_sim_test.go`, add `newSimBucket(t, ctx)`: `b2sim.New()`,
    `b2.NewClient(..., b2.Transport(sim))`, `client.NewBucket(ctx, "consistent", nil)`.
 3. **Operate** (R3). An `inc` helper and `TestOperateAppliesSequentialUpdates` (5 calls, expect `"5"`). Read
    the final value with one more `Operate` that returns its input unchanged and captures it. No concurrent

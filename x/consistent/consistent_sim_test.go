@@ -1,6 +1,7 @@
 package consistent
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"testing"
@@ -92,14 +93,26 @@ func TestMutexLockUnlockUncontended(t *testing.T) {
 	g := NewGroup(newSimBucket(t, ctx), "consistent")
 	m := g.Mutex(ctx, "m")
 
-	locked := 0
-	m.Lock()
-	locked++
-	m.Unlock()
-	m.Lock()
-	locked++
-	m.Unlock()
-	if locked != 2 {
-		t.Errorf("critical sections = %d, want 2", locked)
+	// Mutex stores []byte{1} while held and nothing once released.
+	stored := func() []byte {
+		t.Helper()
+		var got []byte
+		if err := g.Operate(ctx, "m", func(b []byte) ([]byte, error) {
+			got = append([]byte(nil), b...)
+			return b, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	for cycle := 1; cycle <= 2; cycle++ {
+		m.Lock()
+		if got := stored(); !bytes.Equal(got, []byte{1}) {
+			t.Fatalf("cycle %d: stored after Lock = %v, want [1]", cycle, got)
+		}
+		m.Unlock()
+		if got := stored(); len(got) != 0 {
+			t.Fatalf("cycle %d: stored after Unlock = %v, want empty", cycle, got)
+		}
 	}
 }
