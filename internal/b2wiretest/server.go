@@ -114,6 +114,7 @@ func copyRequests(requests []Request) []Request {
 		result[i].Header = r.Header.Clone()
 		result[i].Body = append([]byte(nil), r.Body...)
 		if r.JSON != nil {
+			result[i].JSON = nil
 			_ = json.Unmarshal(result[i].Body, &result[i].JSON)
 		}
 	}

@@ -97,6 +97,66 @@ func TestRecordsMethodPathHeadersAndJSON(t *testing.T) {
 	}
 }
 
+func TestCallsReturnsIndependentJSON(t *testing.T) {
+	s := New(t)
+	s.Reply("b2_create_key", http.StatusOK, `{}`)
+	response, err := http.Post(s.URL()+"/b2api/v4/b2_create_key", "application/json", strings.NewReader(`{"keyName":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	call := "b2_create_key"
+	s.Calls(call)[0].JSON["added"] = true
+	if _, ok := s.Calls(call)[0].JSON["added"]; ok {
+		t.Error("returned JSON changed the recorded request")
+	}
+}
+
+func TestHandleAndCallsCanReadJSONConcurrently(t *testing.T) {
+	s := New(t)
+	handlerStarted := make(chan struct{})
+	readJSON := make(chan struct{})
+	s.Handle("b2_create_bucket", func(r Request) Response {
+		close(handlerStarted)
+		<-readJSON
+		for range 10000 {
+			if r.JSON["bucketName"] != "test" {
+				return Response{Status: http.StatusInternalServerError, Body: "wrong request JSON"}
+			}
+		}
+		return Response{Status: http.StatusOK, Body: `{}`}
+	})
+
+	responseDone := make(chan error, 1)
+	go func() {
+		response, err := http.Post(s.URL()+"/b2api/v4/b2_create_bucket", "application/json", strings.NewReader(`{"bucketName":"test"}`))
+		if err == nil {
+			err = response.Body.Close()
+		}
+		responseDone <- err
+	}()
+	<-handlerStarted
+
+	callsStarted := make(chan struct{})
+	callsDone := make(chan struct{})
+	go func() {
+		defer close(callsDone)
+		close(callsStarted)
+		for range 10000 {
+			_ = s.Calls("b2_create_bucket")
+		}
+	}()
+	<-callsStarted
+	close(readJSON)
+	<-callsDone
+	if err := <-responseDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRecordsInArrivalOrderUnderConcurrency(t *testing.T) {
 	s := New(t)
 	s.Reply("b2_list_buckets", http.StatusOK, `{}`)
