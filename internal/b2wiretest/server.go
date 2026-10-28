@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ type Request struct {
 	Method string
 	Path   string
 	Call   string
+	Query  url.Values
 	Header http.Header
 	Body   []byte
 	JSON   map[string]any
@@ -29,6 +31,8 @@ type Response struct {
 	Body   string
 	Header http.Header
 }
+
+const unscriptedResponseBody = `{"status":400,"code":"bad_request","message":"b2wiretest: no response scripted for this call"}`
 
 type script struct {
 	responses []Response
@@ -111,6 +115,12 @@ func copyRequests(requests []Request) []Request {
 	result := make([]Request, len(requests))
 	for i, r := range requests {
 		result[i] = r
+		if r.Query != nil {
+			result[i].Query = make(url.Values, len(r.Query))
+			for name, values := range r.Query {
+				result[i].Query[name] = append([]string(nil), values...)
+			}
+		}
 		result[i].Header = r.Header.Clone()
 		result[i].Body = append([]byte(nil), r.Body...)
 		if r.JSON != nil {
@@ -129,7 +139,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	call := r.URL.Path[strings.LastIndexByte(r.URL.Path, '/')+1:]
-	req := Request{Method: r.Method, Path: r.URL.Path, Call: call, Header: r.Header.Clone(), Body: body}
+	req := Request{Method: r.Method, Path: r.URL.Path, Call: call, Query: r.URL.Query(), Header: r.Header.Clone(), Body: body}
 	if len(body) > 0 {
 		_ = json.Unmarshal(body, &req.JSON)
 	}
@@ -160,8 +170,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok || response.Status == 0 {
 		s.t.Errorf("b2wiretest: no response for %s", call)
-		response = Response{Status: http.StatusBadRequest,
-			Body: fmt.Sprintf(`{"status":400,"code":"bad_request","message":"b2wiretest: no response for %s"}`, call)}
+		response = Response{Status: http.StatusBadRequest, Body: unscriptedResponseBody}
 	}
 	for name, values := range response.Header {
 		for _, value := range values {
