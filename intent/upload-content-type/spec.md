@@ -45,8 +45,8 @@ One new file, `b2/upload_content_type_wire_test.go` (package `b2`), using `inter
 
 ## Areas of concern
 
-1. **Stacked on #191.** This branch starts from #191's branch; #191 merges first. Owner: Felipe.
+1. **Stacked on #191.** This branch starts from #191's branch; #191 merges first. Owner: @ffumero2003.
 2. **Shared fixture with #193.** #193's object-lock tests need the same upload fixture. If both land, the
-   second PR should reuse the first one's fixture rather than keep two copies. Owner: whoever merges second.
+   second PR should reuse the first one's fixture rather than keep two copies. Owner: @ffumero2003, or whoever merges second.
 3. **The issue text** lists SSE-B2 as untested. Update the issue to match this scope before the PR opens.
-   Owner: Felipe.
+   Owner: @ffumero2003.
