@@ -49,6 +49,18 @@ func AssertHeader(t testing.TB, r Request, name, want string) {
 	}
 }
 
+// AssertQuery checks one request query parameter's value.
+func AssertQuery(t testing.TB, r Request, name, want string) {
+	t.Helper()
+	if _, ok := r.Query[name]; !ok {
+		t.Errorf("%s query %s: missing, want %q", r.Call, name, want)
+		return
+	}
+	if got := r.Query.Get(name); got != want {
+		t.Errorf("%s query %s: got %q, want %q", r.Call, name, got, want)
+	}
+}
+
 func jsonPath(root map[string]any, path string) (any, bool) {
 	if path == "" {
 		return nil, false

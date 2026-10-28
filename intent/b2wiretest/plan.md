@@ -11,6 +11,7 @@ internal/b2wiretest/server.go        (new)  R1-R8
 internal/b2wiretest/assert.go        (new)  R9
 internal/b2wiretest/server_test.go   (new)  R10
 b2/update_cors_name_test.go          (edit) R11: TestUpdateBucketSendsCORSRuleName uses the helper
+AGENTS.md, docs/testing.md            (edit) Review finding: direct new wire tests to `internal/b2wiretest`; retain per-feature fakes until rewritten
 intent/b2wiretest/plan.md            (edit only if the implementation departs from this plan)
 ```
 
@@ -34,7 +35,8 @@ are untouched.
    the dotted path (map key or decimal index), compare with `reflect.DeepEqual`, and report
    `<call> body <path>: got <json>, want <json>` (or `missing`). Use `%s` with `json.Marshal` output so
    values print as JSON.
-6. **Helper tests** (R10) in `server_test.go`. Table-driven where it fits, using `net/http` directly:
+6. **Query recording** (R4, R9). Full-depth review finding: copy decoded query parameters and assert them.
+7. **Helper tests** (R10) in `server_test.go`. Table-driven where it fits, using `net/http` directly:
    - `TestRecordsMethodPathHeadersAndJSON`: a POST with a header and a JSON body is recorded with each
      field, `Call` set, and `Seq` 1.
    - `TestRecordsInArrivalOrderUnderConcurrency`: 50 concurrent requests; 50 records with distinct `Seq`
@@ -50,15 +52,15 @@ are untouched.
    - `TestAssertJSONReportsGotAndWant`: the same fake TB; a mismatch reports call, path, got and want; a
      missing path reports `missing`; `int64(5)` matches `5.0`; `[]string{"a"}` matches `[]any{"a"}`.
    - `TestAssertNoJSONAndAssertHeader`.
-7. **Port one test** (R11). Rewrite `TestUpdateBucketSendsCORSRuleName` on the helper: script
+8. **Port one test** (R11). Rewrite `TestUpdateBucketSendsCORSRuleName` on the helper: script
    `b2_create_bucket` and `b2_update_bucket` with the existing `updateBucketJSON`, then use `AssertJSON` on
    `Last(t, "b2_update_bucket")` for `corsRules.0.corsRuleName` = `"browser"` (B2 docs:
    `b2_update_bucket`, `corsRules[].corsRuleName`). Keep `updateAuthJSON` and `updateBucketJSON`, since
    other tests in the file use them. Keep the test name.
-8. **Check and self-review.** `make ci`; then a fresh-context review of the diff (`/code-review`, or a
+9. **Check and self-review.** `make ci`; then a fresh-context review of the diff (`/code-review`, or a
    subagent that did not write it) per `AGENTS.md`, answering each finding.
 
-Steps 1 to 5 are one file pair and run in sequence. Step 6 follows 5. Step 7 depends only on steps 1 to
+Steps 1 to 6 are one file pair and run in sequence. Step 7 follows 6. Step 8 depends only on steps 1 to
 4. There is nothing to run in parallel inside this change.
 
 ## Risks
