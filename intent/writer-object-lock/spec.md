@@ -24,7 +24,7 @@ Fixed values used throughout: retention mode `compliance`, retain-until `time.Un
   - `X-Bz-File-Legal-Hold: on`.
 
   It sends no `b2_start_large_file`. (Kills `b2/writer.go:369`.)
-- **R2. Large object.** The same options with `ChunkSize` set below the data size (two parts) send one
+- **R2. Large object.** The same options with `ChunkSize` set below the data size (more than one part) send one
   `b2_start_large_file` whose body has `fileRetention.mode` `"compliance"`,
   `fileRetention.retainUntilTimestamp` `1767225600000` and `legalHold` `"on"`. The upload then completes
   with `b2_finish_large_file`. (Kills `b2/writer.go:417`.)
