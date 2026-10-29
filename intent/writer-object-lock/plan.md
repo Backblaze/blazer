@@ -33,10 +33,12 @@ No production file changes (R6).
      absence.
 3. **Resume** (R4, R5). `TestWriterResumeChecksTheUnfinishedLock`: script
    `b2_list_unfinished_large_files` with one file named like the object and the documented
-   `b2_get_file_info` Object Lock response shape carrying the mismatched lock (R4) or matching lock
-   (R5), and `b2_list_parts` with no parts (R5).
-   - R4: `Close` errors, and no `upload_part` or `b2_finish_large_file` is recorded.
-   - R5: a `b2_list_parts` request is recorded.
+   `b2_get_file_info` Object Lock response shape for `checkResumedLock` to read through `getFileInfo`.
+   Use the mismatched lock for R4 and matching lock plus `b2_list_parts` with no parts for R5.
+   - R4: `Close` returns the `checkResumedLock` retention error, and no `b2_list_parts`, `upload_part`,
+     or `b2_finish_large_file` is recorded.
+   - R5: a `b2_list_parts` request is recorded, no `b2_start_large_file` is sent, and one
+     `b2_finish_large_file` is recorded.
 
    Follow how `getLargeFile` (`b2/writer.go:403-450`) lists and checks, so the scripted calls match the
    code path. `b2_list_unfinished_large_files` populates the candidate file's cached `FileInfo`, so

@@ -15,6 +15,7 @@ const (
 	writerObjectLockLargeFileJSON           = `{"fileId":"large-1","fileName":"object","action":"upload"}`
 	writerObjectLockMismatchJSON            = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":null,"retainUntilTimestamp":null}},"legalHold":{"isClientAuthorizedToRead":true,"value":"off"}}],"nextFileId":null}`
 	writerObjectLockMatchJSON               = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1767225600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
+	writerObjectLockMismatchError           = `b2: cannot resume "resumed": the unfinished upload does not have the requested retention`
 )
 
 func newObjectLockWire(t *testing.T) (*b2wiretest.Server, *Bucket) {
@@ -59,6 +60,17 @@ func assertNoObjectLockHeaders(t *testing.T, request b2wiretest.Request) {
 		if values, ok := request.Header[http.CanonicalHeaderKey(name)]; ok {
 			t.Errorf("%s header %s = %q, want absent", request.Call, name, values)
 		}
+	}
+}
+
+func assertWriterObjectLockMismatch(t *testing.T, operation string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s succeeded, want %q", operation, writerObjectLockMismatchError)
+		return
+	}
+	if got := err.Error(); got != writerObjectLockMismatchError {
+		t.Errorf("%s error = %q, want %q", operation, got, writerObjectLockMismatchError)
 	}
 }
 
@@ -153,11 +165,10 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 			_, writeErr := writer.Write([]byte("0123456789012345678901234"))
 			closeErr := writer.Close()
 			if tc.wantErr {
-				if writeErr == nil {
-					t.Error("Write succeeded, want a mismatched Object Lock error")
-				}
-				if closeErr == nil {
-					t.Error("Close succeeded, want a mismatched Object Lock error")
+				assertWriterObjectLockMismatch(t, "Write", writeErr)
+				assertWriterObjectLockMismatch(t, "Close", closeErr)
+				if parts := srv.Calls("b2_list_parts"); len(parts) != 0 {
+					t.Errorf("b2_list_parts calls = %d, want 0", len(parts))
 				}
 				if parts := srv.Calls("upload_part"); len(parts) != 0 {
 					t.Errorf("upload_part calls = %d, want 0", len(parts))
@@ -175,6 +186,12 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 			}
 			if parts := srv.Calls("b2_list_parts"); len(parts) == 0 {
 				t.Error("b2_list_parts was not requested after matching Object Lock")
+			}
+			if starts := srv.Calls("b2_start_large_file"); len(starts) != 0 {
+				t.Errorf("b2_start_large_file calls = %d, want 0", len(starts))
+			}
+			if finishes := srv.Calls("b2_finish_large_file"); len(finishes) != 1 {
+				t.Errorf("b2_finish_large_file calls = %d, want 1", len(finishes))
 			}
 		})
 	}

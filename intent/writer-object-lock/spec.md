@@ -31,12 +31,15 @@ Fixed values used throughout: retention mode `compliance`, retain-until `time.Un
 - **R3. No lock asked, none sent.** A `Writer` without the options sends no retention or legal-hold header
   on `upload_file`, and no `fileRetention` or `legalHold` field on `b2_start_large_file`.
 - **R4. Resume refuses a mismatched lock.** With `w.Resume = true`, `WithFileRetention` and
-  `WithLegalHold(LegalHoldOn)`, and B2 reporting one unfinished upload of the same name
-  (`b2_list_unfinished_large_files`) whose `b2_get_file_info` has no retention and legal hold `off`,
-  `Close` returns an error. No `upload_part` and no `b2_finish_large_file` request is recorded.
+  `WithLegalHold(LegalHoldOn)`, B2 reports one unfinished upload of the same name through
+  `b2_list_unfinished_large_files`. `checkResumedLock` reads that candidate's lock through
+  `getFileInfo` (the `b2_get_file_info` response shape): no retention and legal hold `off` cause
+  `Close` to return an error. No `b2_list_parts`, `upload_part`, or `b2_finish_large_file` request is
+  recorded.
   (Kills `b2/writer.go:436`.)
-- **R5. Resume accepts a matching lock.** The same setup, with `b2_get_file_info` reporting the requested
-  retention and legal hold, proceeds past the lock check: a `b2_list_parts` request is recorded.
+- **R5. Resume accepts a matching lock.** The same listed unfinished upload, with `getFileInfo` reporting
+  the requested retention and legal hold, proceeds past the lock check: a `b2_list_parts` request is
+  recorded, no `b2_start_large_file` is sent, and one `b2_finish_large_file` request completes the resume.
 - **R6. Test-only.** No file outside `*_test.go` and `intent/writer-object-lock/` changes. Existing tests
   stay as they are.
 
@@ -50,8 +53,9 @@ One new file, `b2/writer_object_lock_wire_test.go` (package `b2`), using `intern
   `b2_get_upload_part_url` (built in) and `b2_finish_large_file` (a B2 file JSON).
 - R1 to R3 are one table-driven test over {small, large} × {lock, no lock}. "Large" sets `w.ChunkSize` to a
   value smaller than the data, so the `Writer` takes the multipart path.
-- R4 and R5 script `b2_list_unfinished_large_files` with one file named like the object, and
-  `b2_get_file_info` with the mismatched or matching lock; R5 also scripts `b2_list_parts` with no parts.
+- R4 and R5 script `b2_list_unfinished_large_files` with one file named like the object and the
+  `b2_get_file_info` Object Lock response shape for its `getFileInfo` result; R5 also scripts
+  `b2_list_parts` with no parts.
 - Header assertions use `AssertHeader` on `Last(t, "upload_file")`; body assertions use `AssertJSON` and
   `AssertNoJSON` on `Last(t, "b2_start_large_file")`; R4 checks `len(srv.Calls("upload_part")) == 0` and
   `len(srv.Calls("b2_finish_large_file")) == 0`.
