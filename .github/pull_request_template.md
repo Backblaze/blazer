@@ -13,6 +13,9 @@ What changed. If this PR is stacked on another, name it and the merge order.
 Paste the tail of `make ci`. For each behavior this PR adds or fixes, name the test that fails when the
 change is reverted. List any live-B2 checks you ran, and any you could not.
 
+Live test: name the live test this PR adds or extends, or say why it needs none (see "When a PR needs a
+live test" in `docs/testing.md`). Link a manual `test-live` run on this branch if a maintainer ran one.
+
 ## Risk
 
 What could break for existing callers, and whether the request sent to B2 changes. Name the riskiest
@@ -29,5 +32,6 @@ Whether reverting this commit is enough, or whether callers would need to pin th
 - [ ] A fresh-context review (`/code-review`, `/security-review` or a subagent) ran on the diff; findings are fixed or answered below.
 - [ ] A `.changes/unreleased` entry exists (`make changelog-new`), or the PR is labelled `skip-changelog`.
 - [ ] New or changed behavior is pinned by a test that asserts the request sent to B2.
+- [ ] Behavior that depends on B2 has a live test, or the description says why not.
 - [ ] Godoc, README and `AGENTS.md` are updated if needed.
 - [ ] The description matches the final code.
