@@ -533,20 +533,37 @@ func TestSyncUsesRequestedConcurrency(t *testing.T) {
 		active--
 		gate.Unlock()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { _, err := Sync(ctx, bucket, "parallel", root, WithConcurrency(2)); result <- err }()
-	for i := 0; i < 2; i++ {
+	for started := 0; started < 2; started++ {
 		select {
 		case <-entered:
+			gate.Lock()
+			current := active
+			gate.Unlock()
+			if current > 2 {
+				t.Fatalf("third upload started while waiting for two active uploads: active=%d", current)
+			}
 		case <-ctx.Done():
-			t.Fatal("two uploads did not overlap")
+			t.Fatalf("only %d uploads started before the 5-second deadline, want 2", started)
 		}
 	}
+	gate.Lock()
+	current := active
+	gate.Unlock()
+	if current != 2 {
+		t.Fatalf("active uploads before release=%d, want exactly 2", current)
+	}
 	once.Do(func() { close(release) })
-	if err := <-result; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("Sync did not finish after releasing uploads")
 	}
 	gate.Lock()
 	defer gate.Unlock()
