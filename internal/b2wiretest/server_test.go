@@ -62,6 +62,42 @@ func TestNewClosesServerAtCleanup(t *testing.T) {
 	}
 }
 
+type cleanupTB struct {
+	testing.TB
+	cleanup func()
+	ended   bool
+}
+
+func (t *cleanupTB) Cleanup(f func()) {
+	t.cleanup = f
+	t.TB.Cleanup(f)
+}
+
+func (t *cleanupTB) Errorf(format string, args ...any) {
+	if t.ended {
+		panic("Errorf called after test cleanup")
+	}
+	t.TB.Errorf(format, args...)
+}
+
+func TestLateRequestAfterCleanupDoesNotReport(t *testing.T) {
+	fake := &cleanupTB{TB: t}
+	s := New(fake)
+	fake.cleanup()
+	fake.ended = true
+	defer func() {
+		if value := recover(); value != nil {
+			t.Fatalf("late request panicked: %v, want no test report after cleanup", value)
+		}
+	}()
+	response := httptest.NewRecorder()
+	// Invoke the saved handler directly: the closed listener already refuses HTTP requests.
+	s.http.Config.Handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/b2api/v4/late_request", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Errorf("late request status = %d, want 503", response.Code)
+	}
+}
+
 func TestRecordsMethodPathHeadersAndJSON(t *testing.T) {
 	s := New(t)
 	s.Reply("b2_create_key", http.StatusOK, `{}`)
@@ -341,6 +377,36 @@ func TestReplySequenceRepeatsLast(t *testing.T) {
 	}
 }
 
+func TestScriptedZeroStatusDefaultsToOK(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		register func(*Server)
+	}{
+		{"Reply", func(s *Server) { s.Reply("zero", 0, `{"scripted":true}`) }},
+		{"ReplySequence", func(s *Server) { s.ReplySequence("zero", Response{Body: `{"scripted":true}`}) }},
+		{"Handle", func(s *Server) {
+			s.Handle("zero", func(Request) Response { return Response{Body: `{"scripted":true}`} })
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingTB{TB: t}
+			s := New(fake)
+			tc.register(s)
+			response := get(t, s.URL()+"/b2api/v4/zero")
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusOK || string(body) != `{"scripted":true}` {
+				t.Errorf("scripted response = %d %q, want 200 %q", response.StatusCode, body, `{"scripted":true}`)
+			}
+			if reports := fake.errors(); len(reports) != 0 {
+				t.Errorf("scripted response reports = %v, want none", reports)
+			}
+		})
+	}
+}
+
 func TestHandleSeesTheRequest(t *testing.T) {
 	s := New(t)
 	s.Handle("b2_create_bucket", func(r Request) Response {
@@ -405,6 +471,44 @@ func TestUnscriptedCallFails(t *testing.T) {
 	s.Last(missing, "never_called")
 	if messages := missing.errors(); len(messages) != 1 || !strings.Contains(messages[0], "never_called") {
 		t.Errorf("Last failure = %v, want never_called", messages)
+	}
+}
+
+func TestUnscriptedCallDoesNotReflectHTML(t *testing.T) {
+	fake := &recordingTB{TB: t}
+	s := New(fake)
+	const attack = `<img src=x onerror=alert(1)>`
+	response := get(t, s.URL()+"/b2api/v4/"+url.PathEscape(attack))
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"status":400,"code":"bad_request","message":"b2wiretest: no response scripted for this call"}`
+	if response.StatusCode != http.StatusBadRequest || string(body) != want {
+		t.Errorf("unscripted response = %d %q, want 400 %q", response.StatusCode, body, want)
+	}
+	if got := len(s.Calls(attack)); got != 1 {
+		t.Errorf("recorded attack requests = %d, want 1", got)
+	}
+}
+
+func TestJSONAssertionsRejectEmptyPath(t *testing.T) {
+	r := Request{Call: "b2_update_bucket", JSON: map[string]any{"": "empty key"}}
+	for _, tc := range []struct {
+		name   string
+		assert func(testing.TB)
+	}{
+		{"AssertJSON", func(t testing.TB) { AssertJSON(t, r, "", "unused") }},
+		{"AssertNoJSON", func(t testing.TB) { AssertNoJSON(t, r, "") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingTB{TB: t}
+			tc.assert(fake)
+			reports := fake.errors()
+			if len(reports) != 1 || reports[0] != "b2_update_bucket body: empty JSON path" {
+				t.Errorf("empty-path reports = %v, want [b2_update_bucket body: empty JSON path]", reports)
+			}
+		})
 	}
 }
 

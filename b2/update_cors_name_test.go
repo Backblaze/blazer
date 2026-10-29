@@ -44,11 +44,11 @@ func TestUpdateBucketSendsCORSRuleName(t *testing.T) {
 		t.Fatalf("updateBucket: %v", err)
 	}
 	request := srv.Last(t, "b2_update_bucket")
-	rules, ok := request.JSON["corsRules"].([]any)
-	if !ok || len(rules) != 1 {
-		t.Fatalf("update request corsRules = %v, want one rule", request.JSON["corsRules"])
-	}
-	b2wiretest.AssertJSON(t, request, "corsRules.0.corsRuleName", "browser")
+	b2wiretest.AssertJSON(t, request, "corsRules", []map[string]any{{
+		"corsRuleName":      "browser",
+		"allowedOrigins":    []string{"https://example.com"},
+		"allowedOperations": []string{"b2_download_file_by_name"},
+	}})
 }
 
 func TestReadModifyWriteKeepsCORSRuleName(t *testing.T) {
