@@ -75,14 +75,19 @@ func TestStallWaitsForDurationOrContext(t *testing.T) {
 	t.Run("context", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), delay)
 		defer cancel()
-		client := &http.Client{Transport: WithFailures(nil, FailureRate(1), Stall(time.Second))}
+		const stall = time.Second
+		client := &http.Client{Transport: WithFailures(nil, FailureRate(1), Stall(stall))}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/ok", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+		start := time.Now()
 		_, err = client.Do(request)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("error = %v, want context deadline exceeded", err)
+		}
+		if elapsed := time.Since(start); elapsed >= stall/2 {
+			t.Errorf("returned after %v, want before %v when the request context ends", elapsed, stall/2)
 		}
 	})
 }

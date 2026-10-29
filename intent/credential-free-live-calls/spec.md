@@ -24,8 +24,9 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
   With an empty disposition the URL has no `b2ContentDisposition`.
 - **R5. List keys.** `Client.ListKeys(ctx, 10, "")` sends `b2_list_keys` with `accountId` and `maxKeyCount`
   `10` and no `startApplicationKeyId`; a response with two keys and `nextApplicationKeyId` `"k-3"` returns two
-  keys (name, ID, capabilities, expiration from milliseconds) and cursor `"k-3"`; a second call with `"k-3"`
+  keys (name, ID, expiration from milliseconds) and cursor `"k-3"`; a second call with `"k-3"`
   sends `startApplicationKeyId` `"k-3"`. An empty `keys` list returns `io.EOF`.
+  Capabilities mapping is tracked separately in #220.
 - **R6. Delete key.** `Key.Delete` sends `b2_delete_key` with `applicationKeyId`.
 - **R7. Cancel large file.** `Object.Cancel` on an unfinished (`start`) file sends `b2_cancel_large_file`
   with its `fileId`; on an uploaded file it returns an error and sends no cancel.
