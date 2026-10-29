@@ -33,10 +33,9 @@ Fixed test values: secret `"abcdefghijklmnopqrstuvwxyz012345"`, suspension reaso
 One new file, `b2/notification_rules_wire_test.go` (package `b2`), using `internal/b2wiretest`:
 
 - Fixture: authorization (the `updateAuthJSON` shape from `b2/update_cors_name_test.go`), one bucket from
-  `b2_list_buckets`, and `b2_set_bucket_notification_rules` answered with the request's rules (via
-  `Handle`) or a fixed body.
+  `b2_list_buckets`, and `b2_set_bucket_notification_rules` scripted with `Reply` and a fixed body.
 - `TestSetNotificationRulesSendsSigningSecret` (R1, R2): table over {secret, no secret}. Assert with
-  `AssertJSON`/`AssertNoJSON` on `Last(t, "b2_set_bucket_notification_rules")`.
+  `AssertJSON`/`AssertNoJSON` on `Calls("b2_set_bucket_notification_rules")`.
 - `TestNotificationRulesReadsSecretAndSuspension` (R3, R4): `Reply` a literal get response; compare the
   three fields of the returned rule.
 - The get call uses a query string (`?bucketId=...`); the helper records it under
@@ -55,4 +54,7 @@ One new file, `b2/notification_rules_wire_test.go` (package `b2`), using `intern
 ## Areas of concern
 
 1. **Stacked on #191.** This branch starts from #191's branch; #191 merges first. Owner: Felipe.
-2. **Suspension fields on set** (intent open question 1). Not asserted. Owner: @goanpeca.
+2. **Suspension fields on set.** Closed: the
+   [`b2_set_bucket_notification_rules` docs](https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules)
+   say `isSuspended` and `suspensionReason` are "ignored by b2_set_bucket_notification_rules", so they
+   are asserted on get only.

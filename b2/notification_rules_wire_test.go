@@ -81,7 +81,7 @@ func TestSetNotificationRulesSendsSigningSecret(t *testing.T) {
 // https://www.backblaze.com/apidocs/b2-get-bucket-notification-rules
 func TestNotificationRulesReadsSecretAndSuspension(t *testing.T) {
 	srv := b2wiretest.New(t)
-	srv.Reply("b2_get_bucket_notification_rules", http.StatusOK, `{"bucketId":"bid","eventNotificationRules":[{"eventTypes":["b2:ObjectCreated:Upload"],"isEnabled":true,"isSuspended":true,"name":"uploads","objectNamePrefix":"","suspensionReason":"webhook returned 410","targetConfiguration":{"targetType":"webhook","url":"https://example.com/notify","hmacSha256SigningSecret":"abcdefghijklmnopqrstuvwxyz012345"}}]}`)
+	srv.Reply("b2_get_bucket_notification_rules", http.StatusOK, fmt.Sprintf(`{"bucketId":"bid","eventNotificationRules":[{"eventTypes":["b2:ObjectCreated:Upload"],"isEnabled":true,"isSuspended":true,"name":"uploads","objectNamePrefix":"","suspensionReason":"webhook returned 410","targetConfiguration":{"targetType":"webhook","url":"https://example.com/notify","hmacSha256SigningSecret":%q}}]}`, notificationRulesSigningSecret))
 	bucket := newNotificationRulesWireBucket(t, srv)
 
 	rules, err := bucket.NotificationRules(context.Background())

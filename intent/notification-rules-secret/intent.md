@@ -46,8 +46,9 @@ Credential-free tests through the public `Bucket` API that fail if any of the th
 - Credential-free, offline, safe under `go test -race -count=5 -shuffle=on`.
 - Built on the shared recording server from #191; no new private fake.
 
-## Open questions
+## Resolved questions
 
-1. Whether `isSuspended` and `suspensionReason` belong in the set request at all. The B2 docs describe
-   them as values B2 reports. blazer sends them when set (`omitempty`). This intent only checks them on
-   get, and leaves the set behavior unchanged and unasserted. (@goanpeca)
+1. **Closed:** `isSuspended` and `suspensionReason` do not need set assertions. The B2
+   [`b2_set_bucket_notification_rules` docs](https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules)
+   say both fields are "ignored by b2_set_bucket_notification_rules". This intent asserts suspension on
+   get only and leaves set behavior unchanged.
