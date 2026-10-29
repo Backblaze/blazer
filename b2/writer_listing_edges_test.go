@@ -164,7 +164,7 @@ func TestMappingFileInfoEntryLimit(t *testing.T) {
 func TestMappingReadFromChunkBoundary(t *testing.T) {
 	// Writer.ChunkSize documents the simple/large-file boundary; B2 requires at least two parts.
 	// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
-	// The exact ChunkSize boundary is tracked separately (issue number to be added).
+	// The exact ChunkSize boundary is tracked separately in #221.
 	for _, tc := range []struct {
 		name  string
 		size  int
