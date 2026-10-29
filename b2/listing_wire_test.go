@@ -76,17 +76,6 @@ func TestListSendsPrefixAndCursorOnEveryPage(t *testing.T) {
 			},
 			cursor: map[string]string{"startFileName": "logs/c.txt", "startFileId": "id-c"},
 		},
-		{
-			// https://www.backblaze.com/apidocs/b2-list-unfinished-large-files
-			// Prefix handling belongs to #184; this row asserts only the cursor.
-			name: "unfinished", call: "b2_list_unfinished_large_files",
-			opts: []ListOption{ListUnfinished()},
-			pages: [2]string{
-				`{"files":[{"fileName":"logs/a.txt","fileId":"id-a","action":"start"},{"fileName":"logs/b.txt","fileId":"id-b","action":"start"}],"nextFileId":"id-c"}`,
-				`{"files":[{"fileName":"logs/c.txt","fileId":"id-c","action":"start"}],"nextFileId":null}`,
-			},
-			cursor: map[string]string{"startFileId": "id-c"},
-		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -112,10 +101,8 @@ func TestListSendsPrefixAndCursorOnEveryPage(t *testing.T) {
 			for _, r := range calls {
 				b2wiretest.AssertJSON(t, r, "bucketId", "bid")
 				b2wiretest.AssertJSON(t, r, "maxFileCount", 2)
-				if test.name != "unfinished" {
-					b2wiretest.AssertJSON(t, r, "prefix", "logs/")
-					b2wiretest.AssertJSON(t, r, "delimiter", "/")
-				}
+				b2wiretest.AssertJSON(t, r, "prefix", "logs/")
+				b2wiretest.AssertJSON(t, r, "delimiter", "/")
 			}
 			for field, want := range test.cursor {
 				b2wiretest.AssertNoJSON(t, calls[0], field)
@@ -123,6 +110,42 @@ func TestListSendsPrefixAndCursorOnEveryPage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
+	// https://www.backblaze.com/apidocs/b2-list-unfinished-large-files
+	// Add the prefix assertion when #184 makes ListUnfinished send it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := b2wiretest.New(t)
+	const call = "b2_list_unfinished_large_files"
+	pages := [2]string{
+		`{"files":[{"fileName":"logs/a.txt","fileId":"id-a","action":"start"},{"fileName":"logs/b.txt","fileId":"id-b","action":"start"}],"nextFileId":"id-c"}`,
+		`{"files":[{"fileName":"logs/c.txt","fileId":"id-c","action":"start"}],"nextFileId":null}`,
+	}
+	srv.Handle(call, listingPages(pages, map[string]string{"startFileId": "id-c"}))
+	bucket := newListingWireBucket(t, ctx, srv)
+	iter := bucket.List(ctx, ListUnfinished(), ListPageSize(2))
+	var names []string
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Errorf("listing: %v", err)
+	}
+	if want := []string{"logs/a.txt", "logs/b.txt", "logs/c.txt"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("names = %v, want %v", names, want)
+	}
+	calls := srv.Calls(call)
+	if len(calls) != 2 {
+		t.Fatalf("%s requests = %d, want 2", call, len(calls))
+	}
+	for _, r := range calls {
+		b2wiretest.AssertJSON(t, r, "bucketId", "bid")
+		b2wiretest.AssertJSON(t, r, "maxFileCount", 2)
+	}
+	b2wiretest.AssertNoJSON(t, calls[0], "startFileId")
+	b2wiretest.AssertJSON(t, calls[1], "startFileId", "id-c")
 }
 
 func TestListPrefixFromKeyOrCaller(t *testing.T) {

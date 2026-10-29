@@ -26,11 +26,15 @@ No production file changes (R9).
    - the exact expected cursor: page 2;
    - anything else: status 400 with a B2 error body.
 2. **Names, versions, unfinished** (R1, R2, R3, R6). `TestListSendsPrefixAndCursorOnEveryPage`, a table
-   with three rows (current, hidden, unfinished). For each row:
+   with two rows (current, hidden). For each row:
    - iterate to the end;
    - assert the names yielded and `Err() == nil`;
-   - assert `prefix`/`delimiter` on both requests (not for unfinished) and the cursor on request 2,
+   - assert `prefix`/`delimiter` on both requests and the cursor on request 2,
      using `AssertJSON` on `srv.Calls(<call>)[0]` and `[1]`.
+
+   `TestListUnfinishedSendsCursorOnEveryPage` separately checks the same two-page result and the
+   `startFileId` cursor and page size, leaving its prefix assertion to #184. Both use `listingPages`
+   and `newListingWireBucket`.
 3. **Prefix source** (R4, R5). `TestListPrefixFromKeyOrCaller`: rows for {restricted key, no caller
    prefix} and {unrestricted key, caller prefix}, each for names and versions; one page is enough.
 4. **Sync** (R7). `TestSyncListsOnlyTheDestinationPrefix` in package `sync`:
@@ -69,7 +73,7 @@ Steps 2, 3 and 4 are independent once step 1 exists. Step 5 is independent of 2 
 
 ## Proof
 
-Apply each break, run `go test -count=1 ./b2 ./b2/sync -run 'ListSends|ListPrefixFrom|SyncListsOnly'`,
+Apply each break, run `go test -count=1 ./b2 ./b2/sync -run 'ListSends|ListUnfinishedSends|ListPrefixFrom|SyncListsOnly'`,
 record the failing output, revert, record the passing output.
 
 | Req | Break to apply | Test that must fail |
@@ -78,7 +82,7 @@ record the failing output, revert, record the passing output.
 | R5 | `base/base.go:1692`: the same in `ListFileVersions` | `TestListPrefixFromKeyOrCaller` (versions) |
 | R1, R6 | `b2/iterator.go:292`: `c == nil` to `c != nil` in `listCurrentObjects` | `TestListSendsPrefixAndCursorOnEveryPage` (current) |
 | R2, R6 | `b2/iterator.go:254`: the same in `listObjects` | `TestListSendsPrefixAndCursorOnEveryPage` (hidden) |
-| R3, R6 | `b2/iterator.go:325`: the same in `listUnfinishedLargeFiles` | `TestListSendsPrefixAndCursorOnEveryPage` (unfinished) |
+| R3, R6 | `b2/iterator.go:325`: the same in `listUnfinishedLargeFiles` | `TestListUnfinishedSendsCursorOnEveryPage` |
 | R7 | `b2/sync/sync.go:178`: `bucket.List(ctx)` without `ListPrefix(prefix)` | `TestSyncListsOnlyTheDestinationPrefix` |
 
 Also record `go test -race -count=5 -shuffle=on ./b2 ./b2/sync` passing with `B2_APPLICATION_KEY_ID`,
