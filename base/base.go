@@ -2121,10 +2121,11 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 	var keys []*Key
 	for _, key := range b2resp.Keys {
 		keys = append(keys, &Key{
-			Name:    key.Name,
-			ID:      key.ID,
-			Expires: millitime(key.Expires),
-			b2:      b,
+			Name:         key.Name,
+			ID:           key.ID,
+			Capabilities: key.Capabilities,
+			Expires:      millitime(key.Expires),
+			b2:           b,
 		})
 	}
 	return keys, b2resp.Next, nil
