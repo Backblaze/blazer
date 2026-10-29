@@ -17,6 +17,9 @@ failure: it claims coverage it does not give.
 2. Merge the PR onto current `main` locally and run `make ci`. Say what you ran.
 3. For each behavior the PR claims to fix or add, revert that line and confirm a test fails. Name any
    behavior no test pins.
+4. Check that the description says what the author's own fresh-context review (`/code-review`,
+   `/security-review` or a subagent) reported and how each finding was answered. If it is missing, report
+   it under Compliance.
 
 ## Passes
 
@@ -36,6 +39,15 @@ Tag each finding with its pass.
 - **Compliance**: the change matches the issue, `spec.md` and `plan.md`; the PR description matches the
   code; a `.changes/unreleased` entry exists and reads well for users; godoc says what is not supported;
   `AGENTS.md` is updated when the change makes it stale or breaks a convention in it.
+- **Direction**: if the change should not land at all (no linked issue, out of scope, wrong approach), say
+  so once in round 1 instead of leaving line comments on code that will be dropped.
+
+## Sensitive paths
+
+For changes under `.github/workflows/`, to `.changie.yaml`, `RELEASE.md` or `.github/CODEOWNERS`, to
+credential handling, and to `base/` wire or auth code, add a line to the summary that a human code owner
+must review them. It is a note, not a finding, so it has no severity and does not block by itself. An agent
+or Copilot approval never satisfies it.
 
 ## Severity
 
