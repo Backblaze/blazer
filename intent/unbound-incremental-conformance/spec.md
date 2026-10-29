@@ -14,6 +14,8 @@ Sources of truth (cited in the check's DOCS header, as `large.multipart` does):
   - generates a 12,000,000-byte random payload and its SHA-1;
   - writes it through `io.Copy(w, r)` where `r` is the read side of an `io.Pipe` fed by a goroutine, so the
     Writer cannot learn the size; `w.ChunkSize = 5000000`;
+  - wraps `http.DefaultTransport` with `b2.Transport` and asserts one `b2_start_large_file`, at least two
+    `b2_upload_part`, and one `b2_finish_large_file` request after `Close`;
   - after `Close`, reads `Attrs` and asserts `Size == 12000000` and `SHA1 == "none"` (a large file);
   - downloads the object and asserts its bytes equal the payload (compare SHA-1 and length).
   Any mismatch reports `FAIL (<area> -- <one line>)`; success reports `PASS`.
@@ -30,9 +32,10 @@ Sources of truth (cited in the check's DOCS header, as `large.multipart` does):
 ## Design
 
 Copy `large.multipart`, rename the capability, replace the payload/upload section with the pipe-based
-upload, and keep the shared helpers it already has (verdict printing, `tidy_detail`, build and loopback
-guard). Drop the `large_file_sha1` assertions: with an unknown length the whole-file digest is not known when
-`b2_start_large_file` is sent, so B2's recommendation cannot apply.
+upload, count the large-file request paths through a `b2.Transport` wrapper, and keep the shared helpers it
+already has (verdict printing, `tidy_detail`, build and loopback guard). Drop the `large_file_sha1`
+assertions: with an unknown length the whole-file digest is not known when `b2_start_large_file` is sent, so
+B2's recommendation cannot apply.
 
 ## How each constraint is met
 

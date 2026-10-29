@@ -107,9 +107,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/Backblaze/blazer/b2"
 )
@@ -122,7 +124,8 @@ const (
 )
 
 func runCheck(ctx context.Context, target *string) error {
-	client, err := newClient(ctx, *target)
+	rpcs := &largeFileRPCCounter{next: http.DefaultTransport}
+	client, err := newClient(ctx, *target, b2.Transport(rpcs))
 	if err != nil {
 		return err
 	}
@@ -161,6 +164,9 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 	if written != int64(len(payload)) {
 		_ = writer.Close()
+		if err := <-feedDone; err != nil {
+			return classify("upload", err)
+		}
 		return failf("upload", "io.Copy wrote %d bytes, expected %d", written, len(payload))
 	}
 	if err := writer.Close(); err != nil {
@@ -170,6 +176,10 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 	if err := <-feedDone; err != nil {
 		return classify("upload", err)
+	}
+	starts, parts, finishes := rpcs.counts()
+	if starts != 1 || parts < 2 || finishes != 1 {
+		return failf("upload", "large-file RPC counts start=%d upload_part=%d finish=%d; expected 1, at least 2, 1", starts, parts, finishes)
 	}
 
 	attrs, err := object.Attrs(ctx)
@@ -194,6 +204,33 @@ func runCheck(ctx context.Context, target *string) error {
 		return failf("round trip", "download SHA1 %s, expected %s", gotSHA1, wantSHA1)
 	}
 	return nil
+}
+
+type largeFileRPCCounter struct {
+	next http.RoundTripper
+
+	mu                      sync.Mutex
+	starts, parts, finishes int
+}
+
+func (c *largeFileRPCCounter) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	switch {
+	case strings.HasSuffix(req.URL.Path, "/b2_start_large_file"):
+		c.starts++
+	case strings.HasSuffix(req.URL.Path, "/b2_upload_part"):
+		c.parts++
+	case strings.HasSuffix(req.URL.Path, "/b2_finish_large_file"):
+		c.finishes++
+	}
+	c.mu.Unlock()
+	return c.next.RoundTrip(req)
+}
+
+func (c *largeFileRPCCounter) counts() (starts, parts, finishes int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.starts, c.parts, c.finishes
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +354,7 @@ func credentials(target string) (string, string, error) {
 	return "", "", amberf(reasonNoRealm, "blazer checks use only the simulator's fixed test credential")
 }
 
-func newClient(ctx context.Context, target string) (*b2.Client, error) {
+func newClient(ctx context.Context, target string, options ...b2.ClientOption) (*b2.Client, error) {
 	base, err := apiBase(target)
 	if err != nil {
 		return nil, err
@@ -326,7 +363,8 @@ func newClient(ctx context.Context, target string) (*b2.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
+	options = append(options, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
+	client, err := b2.NewClient(ctx, id, key, options...)
 	if err != nil {
 		return nil, classify("authenticate", err)
 	}
