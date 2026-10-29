@@ -60,9 +60,12 @@ jq -r 'select(.Test == null and (.Action == "pass" or .Action == "fail" or .Acti
 
 if [ -n "$failed" ]; then
   echo "::group::Output of failed tests"
-  jq -rs '[.[] | select(.Action == "fail" and .Test != null) | {p: .Package, t: .Test}] as $f
-    | .[] | select(.Action == "output" and .Test != null and ([{p: .Package, t: .Test}] | inside($f)))
-    | .Output' "$in" | head -n 300
+  out=$(mktemp)
+  jq -rjs '[.[] | select(.Action == "fail" and .Test != null) | "\(.Package) \(.Test)"] as $f
+    | .[] | select(.Action == "output" and .Test != null and ("\(.Package) \(.Test)" as $k | $f | index($k)))
+    | .Output' "$in" >"$out"
+  head -n 300 "$out"
+  rm -f "$out"
   echo "::endgroup::"
 fi
 
