@@ -10,7 +10,7 @@ how to run it, and how to show that a test pins the behavior a PR claims.
 | Unit, fake backend | `b2/*_test.go` using the fake in `b2/b2_test.go` | `go test ./...` | Logic inside the `b2` package | What is sent on the wire |
 | Wire | `httptest` server or `RoundTripper` stub through `NewClient` (`*_wire_test.go`) | `go test ./...` | The exact request body, headers and query, and how a response is decoded | That B2 answers that way |
 | Repo-owned SDK harness contract | `.sdkharness/` ([README](../.sdkharness/README.md)) | See below | Behavior against the B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator)), one scenario per capability | Behavior the simulator does not model (encryption keys, retention, replication effects) |
-| Live integration | `b2/integration_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/` | Real B2 behavior for that account on that day | Other accounts, regions or later B2 releases |
+| Live integration | `b2/integration_test.go`, `base/integration_test.go`, `b2/lock_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/` | Real B2 behavior for that account on that day | Other accounts, regions or later B2 releases |
 
 `make ci` runs build, vet, gofmt, tidy, verify, lint, the race tests, b2keys, cross-compiles and the
 changelog check. Cross-compiling proves the code builds for a platform, not that it runs there; native
@@ -72,6 +72,31 @@ The job fails if any test fails or skips, or if any top-level test in `b2/integr
 against B2. A failure on `main` opens (or comments on) the issue "Live integration tests are failing on
 main". Runs are serialized because the tests share bucket names, so rapid merges can share one run; its
 summary lists every commit merged since the last green live run.
+
+## When a PR needs a live test
+
+Wire tests prove what blazer sends; only a live test proves how B2 answers. Add or extend a live test when
+the PR:
+
+- adds a B2 call, or changes the request body, headers or query of an existing one;
+- depends on B2 behavior: encryption, Object Lock and retention, replication, large files and copies,
+  file info, error codes, retries or reauthorization;
+- fixes a bug caused by B2 behaving differently from its docs.
+
+Pure client logic (option validation, redaction, concurrency inside blazer), docs and CI changes need none.
+When a live test is needed but cannot be written (the test key lacks a capability, or the feature needs a
+second account), say so in the PR with what you verified instead; that check is NOT RUN, not PASS.
+
+Writing one:
+
+- Put it in `b2/integration_test.go` (use `startLiveTest`, which skips without credentials, creates a
+  uniquely named bucket and returns a cleanup function) or `base/integration_test.go`. The live workflow
+  requires every top-level test in those files and `b2/lock_test.go` to pass, so a live test anywhere else
+  would not be checked.
+- Keep it short and give it a deadline; the live suite runs serially on every merge.
+- Clean up everything it creates, on a fresh context, even when it fails.
+- Pull requests do not run live tests; a new test first runs after merge, unless a maintainer starts
+  `test-live` on the branch by hand.
 
 ## Reporting what you ran
 
