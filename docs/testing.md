@@ -56,6 +56,10 @@ PRs that each add a row will conflict on those counts; the second to merge sets 
 GitHub CI does not run the simulator contract, so a change can be green in CI and still fail a scenario.
 Run the scenarios for the area you changed before asking for review.
 
+For the shared recording-server change (#205), the simulator contract is **NOT RUN**. The helper is
+imported only by `_test.go` files; no SDK production code, harness scenarios or contract executables
+change, so this test-infrastructure change cannot affect simulator contract behavior.
+
 ## Live integration tests
 
 `b2/integration_test.go` skips unless `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` are set. Use a

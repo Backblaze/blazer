@@ -18,6 +18,7 @@ type Request struct {
 	Seq    int
 	Method string
 	Path   string
+	// Call is the last segment of Path, including for non-API paths; a trailing slash gives "".
 	Call   string
 	Query  url.Values
 	Header http.Header
@@ -26,6 +27,8 @@ type Request struct {
 }
 
 // Response is the status, headers, and body returned for a scripted call.
+// Status 0 means 200. Content-Type defaults to application/json unless Header sets it;
+// X-Content-Type-Options is always nosniff.
 type Response struct {
 	Status int
 	Body   string
@@ -45,28 +48,38 @@ type Server struct {
 	t        testing.TB
 	http     *httptest.Server
 	mu       sync.Mutex
+	closed   bool
 	requests []Request
 	scripts  map[string]*script
 }
 
 // New starts a recording server and closes it when t finishes.
+// Cleanup rejects new requests and waits for active HTTP handlers before returning.
 func New(t testing.TB) *Server {
 	t.Helper()
 	s := &Server{t: t, scripts: make(map[string]*script)}
 	s.http = httptest.NewServer(http.HandlerFunc(s.serve))
-	t.Cleanup(s.http.Close)
+	t.Cleanup(s.close)
 	return s
+}
+
+func (s *Server) close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.http.Close()
 }
 
 // URL returns the server's base URL.
 func (s *Server) URL() string { return s.http.URL }
 
-// Reply registers a response repeated for every request to call.
+// Reply registers a response repeated for every request to call. Status 0 means 200.
 func (s *Server) Reply(call string, status int, body string) {
 	s.ReplySequence(call, Response{Status: status, Body: body})
 }
 
 // ReplySequence registers successive responses; the last response repeats.
+// See Response for status and header defaults.
 func (s *Server) ReplySequence(call string, rs ...Response) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,6 +87,7 @@ func (s *Server) ReplySequence(call string, rs ...Response) {
 }
 
 // Handle registers a response computed from each request. It replaces any earlier script.
+// See Response for status and header defaults.
 func (s *Server) Handle(call string, h func(Request) Response) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,14 +138,21 @@ func copyRequests(requests []Request) []Request {
 		result[i].Header = r.Header.Clone()
 		result[i].Body = append([]byte(nil), r.Body...)
 		if r.JSON != nil {
-			result[i].JSON = nil
-			_ = json.Unmarshal(result[i].Body, &result[i].JSON)
+			result[i].JSON = decodeJSON(result[i].Body)
 		}
 	}
 	return result
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		http.Error(w, "b2wiretest: server closed", http.StatusServiceUnavailable)
+		return
+	}
+	s.mu.Unlock()
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.t.Errorf("b2wiretest: read %s body: %v", r.URL.Path, err)
@@ -141,7 +162,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	call := r.URL.Path[strings.LastIndexByte(r.URL.Path, '/')+1:]
 	req := Request{Method: r.Method, Path: r.URL.Path, Call: call, Query: r.URL.Query(), Header: r.Header.Clone(), Body: body}
 	if len(body) > 0 {
-		_ = json.Unmarshal(body, &req.JSON)
+		req.JSON = decodeJSON(body)
 	}
 
 	s.mu.Lock()
@@ -168,9 +189,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	} else if !ok {
 		response, ok = s.builtin(call)
 	}
-	if !ok || response.Status == 0 {
+	if !ok {
 		s.t.Errorf("b2wiretest: no response for %s", call)
 		response = Response{Status: http.StatusBadRequest, Body: unscriptedResponseBody}
+	}
+	if response.Status == 0 {
+		response.Status = http.StatusOK
 	}
 	for name, values := range response.Header {
 		for _, value := range values {
@@ -200,4 +224,11 @@ func (s *Server) builtin(call string) (Response, bool) {
 	default:
 		return Response{}, false
 	}
+}
+
+// decodeJSON returns body decoded as a JSON object, or nil when it is not one.
+func decodeJSON(body []byte) map[string]any {
+	var decoded map[string]any
+	_ = json.Unmarshal(body, &decoded)
+	return decoded
 }
