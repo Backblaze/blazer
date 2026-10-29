@@ -109,3 +109,20 @@ func TestSyncDryRunAndCancellation(t *testing.T) {
 		t.Fatalf("cancelled sync: %v", err)
 	}
 }
+
+func TestSyncDryRunReturnsRecordedFailure(t *testing.T) {
+	bucket, _ := newSyncWire(t)
+	root := t.TempDir()
+	walkErr := fmt.Errorf("walk failed")
+	walk := func(root string, visit fs.WalkDirFunc) error {
+		return visit(filepath.Join(root, "unreadable"), nil, walkErr)
+	}
+
+	result, err := syncWithLocalIO(context.Background(), bucket, "dry", root, walk, fileSHA1, WithDryRun())
+	if err == nil || err.Error() != "sync: 1 files failed" {
+		t.Fatalf("dry-run error = %v, want %q", err, "sync: 1 files failed")
+	}
+	if result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != "unreadable" || result.Failed[0].Err != walkErr {
+		t.Fatalf("dry-run result = %+v, want one unreadable failure", result)
+	}
+}
