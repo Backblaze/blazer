@@ -21,6 +21,8 @@ Sources of truth (each test links or quotes its source):
   rules, and does not panic.
 - **R3. CORS kept on unrelated update.** A bucket with one CORS rule, updated with only a lifecycle change,
   sends a `b2_update_bucket` whose `corsRules` equals the existing rule (or omits `corsRules`), never `[]`.
+  A subsequent `bucket.Attrs()` still reports the original rule. Removing the CORS guard is equivalent
+  under this contract: the omitted field keeps the server's CORS configuration unchanged.
 - **R4. Reauth waiter survives a cancelled leader.** Two requests hit an expired token at once. The leader's
   context is cancelled while `b2_authorize_account` is in flight (the handler blocks until then). The waiter,
   whose context is live, returns success after reauthorizing itself, not `context.Canceled`. Deterministic:
@@ -39,11 +41,10 @@ Sources of truth (each test links or quotes its source):
   `b2_upload_part` for parts 1 to 103.
 - **R10. No 11th file-info entry.** `fileInfoFromAttrs` with 10 user entries plus `SHA1` and `LastModified`
   returns exactly the 10 user entries; with 9 user entries it adds `large_file_sha1` only.
-- **R11. Exact ChunkSize boundary.** `ReadFrom` with a seekable reader of `ChunkSize - 1`, exactly `ChunkSize`
-  and `ChunkSize + 1` bytes: assert the endpoint sequence and the uploaded bytes for each. B2 requires at least
-  two parts for a large file, so a single part of exactly `ChunkSize` must not finish as a one-part large
-  file. If the `<=` break (Proof) yields identical requests for all three sizes, it is an equivalent mutant:
-  record that in the PR and strike the item on the issue instead of forcing a test.
+- **R11. ChunkSize neighbors.** `ReadFrom` with a seekable reader of `ChunkSize - 1` and `ChunkSize + 1`
+  bytes: assert the endpoint sequence and the uploaded bytes for each. The exact-ChunkSize case exposed
+  a one-part large-file upload and is split into a separate product-bug issue (number to be added), per
+  the owner's direction. The `<` to `<=` break is not provable with these remaining cases.
 - **R12. Test-only.** Only `b2/*_test.go` and `intent/b2-mapping-edges/` change.
 
 ## Design

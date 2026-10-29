@@ -33,7 +33,7 @@ Apply each break, run the named test, record the failure, revert, record the pas
 | --- | --- | --- |
 | R1 | `b2/compose.go:155`: `end-start` → `end+start` | R1 test |
 | R2 | `b2/baseline.go:308`: drop `\|\| source.ReplicationRules != nil` | R2 test |
-| R3 | `b2/baseline.go:412`: remove the `len(attrs.CORSRules) > 0` guard | R3 test |
+| R3 | `b2/baseline.go:412`: remove the `len(attrs.CORSRules) > 0` guard | Equivalent under R3; retain the regression test |
 | R4 | `b2/backend.go:87`: `if flight.leaderContextExpired` → `if false` | R4 test |
 | R5 | `b2/replication.go:134`: remove `\|\| settings.priority > maxReplicationPriority` | R5 test |
 | R6 | `b2/writer.go:485`: `if present && existing != v` → `if false` | R6 test |
@@ -41,6 +41,15 @@ Apply each break, run the named test, record the failure, revert, record the pas
 | R8 | `b2/monitor.go:168`: `== nil` → `!= nil`; then `:190` the same | R8 test (each) |
 | R9 | `b2/writer.go:456`: `len(parts) == 0` → `len(parts) != 0` | R9 test |
 | R10 | `b2/writer.go:788`: `len(info) < maxEntries` → `true` | R10 test |
-| R11 | `b2/writer.go:703`: `size < int64(w.csize)` → `size <= int64(w.csize)` | R11 test |
+| R11 | `b2/writer.go:703`: `size < int64(w.csize)` → `size <= int64(w.csize)` | Not provable after splitting out the exact-boundary bug |
+
+R3 proof update: removing the guard omits `corsRules`, which R3 permits because B2 keeps omitted fields.
+The wire check and a subsequent `bucket.Attrs()` both pass with and without the break: the unchanged
+server response still reports the original rule. Per the owner's direction, record this as an equivalent
+mutant and retain the test as a regression check; do not require resending cached rules.
+
+R11 scope update: the exact-ChunkSize test exposed a one-part large-file upload on current code.
+Per the owner's direction, that product bug and its test are split out (issue number to be added).
+This PR covers only ChunkSize minus one and plus one; the R11 break is not provable with those cases.
 
 Also record `go test -race -count=5 -shuffle=on ./b2/...` passing with the B2 credentials unset, and `make ci`.
