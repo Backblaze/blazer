@@ -1,0 +1,3 @@
+kind: Fixed
+body: Writer.ReadFrom no longer writes to the Writer after a cancelled copy returns (#229).
+time: 2026-10-29T14:52:47.457984-06:00

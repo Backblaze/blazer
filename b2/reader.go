@@ -375,20 +375,44 @@ type onlyWriter struct{ w io.Writer }
 
 func (ow onlyWriter) Write(p []byte) (int, error) { return ow.w.Write(p) }
 
+var errCopyAbandoned = errors.New("b2: copy abandoned")
+
+type guardedCopyWriter struct {
+	mu      sync.Mutex
+	w       io.Writer
+	stopped bool
+}
+
+func (w *guardedCopyWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped {
+		return 0, errCopyAbandoned
+	}
+	return w.w.Write(p)
+}
+
 func copyContext(ctx context.Context, w io.Writer, r io.Reader) (int64, error) {
 	return copyContextWithCloser(ctx, w, r, nil)
 }
 
 // copyContextWithCloser closes a download body on cancellation before waiting
 // for its copy goroutine. A blocked body Read must not outlive Reader.Close.
+// Without a closer, it stops destination writes before returning instead of
+// waiting for a source Read that may never finish.
 func copyContextWithCloser(ctx context.Context, w io.Writer, r io.Reader, closer io.Closer) (int64, error) {
+	if _, ok := w.(*Writer); ok {
+		w = onlyWriter{w}
+	}
+	var guarded *guardedCopyWriter
+	if closer == nil {
+		guarded = &guardedCopyWriter{w: w}
+		w = guarded
+	}
 	var n int64
 	var err error
 	done := make(chan struct{})
 	go func() {
-		if _, ok := w.(*Writer); ok {
-			w = onlyWriter{w}
-		}
 		n, err = io.Copy(w, r)
 		close(done)
 	}()
@@ -399,6 +423,10 @@ func copyContextWithCloser(ctx context.Context, w io.Writer, r io.Reader, closer
 		if closer != nil {
 			_ = closer.Close()
 			<-done
+		} else {
+			guarded.mu.Lock()
+			guarded.stopped = true
+			guarded.mu.Unlock()
 		}
 		return 0, ctx.Err()
 	}
