@@ -93,6 +93,93 @@ func TestCopyPartOnAsLargeFile(t *testing.T) {
 	}
 }
 
+func TestCopyPartReplacementsKeepKnownPartSizes(t *testing.T) {
+	var listCalls, copyCalls int
+	responses := []struct {
+		number int
+		size   int64
+		sha1   string
+	}{
+		{1, 5e6, "one-first"},
+		{2, 6e6, "two-first"},
+		{1, 7e6, "one-replaced"},
+		{2, 8e6, "two-replaced"},
+	}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/b2api/v4/b2_list_parts":
+			listCalls++
+			http.Error(w, "part sizes should be known", http.StatusInternalServerError)
+		case "/b2api/v4/b2_copy_part":
+			if copyCalls == len(responses) {
+				t.Fatal("too many copy-part requests")
+			}
+			response := responses[copyCalls]
+			copyCalls++
+			_, _ = fmt.Fprintf(w, `{"fileId":"large","partNumber":%d,"contentLength":%d,"contentSha1":%q}`, response.number, response.size, response.sha1)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account", "key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := (&File{ID: "large", b2: b}).AsLargeFile()
+	for _, response := range responses {
+		if _, err := large.CopyPart(context.Background(), "source", response.number, fmt.Sprintf("bytes=0-%d", response.size-1), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if listCalls != 0 || copyCalls != len(responses) {
+		t.Fatalf("list calls = %d, copy calls = %d; want 0, %d", listCalls, copyCalls, len(responses))
+	}
+	if large.size != 15e6 || !reflect.DeepEqual(large.partSizes, map[int]int64{1: 7e6, 2: 8e6}) {
+		t.Fatalf("size = %d, part sizes = %v; want 15000000, map[1:7000000 2:8000000]", large.size, large.partSizes)
+	}
+}
+
+func TestCopyPartRejectsZeroSizedPriorPart(t *testing.T) {
+	var listCalls, copyCalls int
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/b2api/v4/b2_list_parts":
+			listCalls++
+			_, _ = fmt.Fprint(w, `{"parts":[{"fileId":"large","partNumber":1,"contentSha1":"old","contentLength":0}],"nextPartNumber":2}`)
+		case "/b2api/v4/b2_copy_part":
+			copyCalls++
+			_, _ = fmt.Fprint(w, `{"fileId":"large","partNumber":1,"contentLength":5000000,"contentSha1":"new"}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account", "key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := (&File{ID: "large", b2: b}).CompileParts(5e6, map[int]string{1: "old"})
+	_, err = large.CopyPart(context.Background(), "source", 1, "bytes=0-4999999", nil)
+	const want = "b2: cannot determine prior size of large-file part 1"
+	if err == nil || err.Error() != want {
+		t.Fatalf("copy-part error = %v; want %q", err, want)
+	}
+	if listCalls != 1 || copyCalls != 0 || large.size != 5e6 || large.hashes[1] != "old" {
+		t.Fatalf("list=%d copy=%d size=%d hashes=%v; want 1, 0, 5000000, map[1:old]", listCalls, copyCalls, large.size, large.hashes)
+	}
+}
+
 func TestCopyPartRetryAfterLostResponseUsesVerifiedOldSize(t *testing.T) {
 	var listCalls, copyCalls int
 	var srv *httptest.Server
@@ -214,14 +301,18 @@ func TestUploadPartReplacementAdjustsSize(t *testing.T) {
 }
 
 func TestCopyPartRejectsInconsistentResponseWithoutRecording(t *testing.T) {
+	// B2 large-file parts have a 5 GB maximum. See
+	// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api.
 	for _, tc := range []struct {
-		name, response string
+		name, response, byteRange string
+		wantErr                   bool
 	}{
-		{"wrong file", `{"fileId":"other","partNumber":1,"contentLength":5,"contentSha1":"sha"}`},
-		{"wrong part", `{"fileId":"large","partNumber":2,"contentLength":5,"contentSha1":"sha"}`},
-		{"missing hash", `{"fileId":"large","partNumber":1,"contentLength":5}`},
-		{"empty part", `{"fileId":"large","partNumber":1,"contentLength":0,"contentSha1":"sha"}`},
-		{"oversized part", `{"fileId":"large","partNumber":1,"contentLength":5000000001,"contentSha1":"sha"}`},
+		{"wrong file", `{"fileId":"other","partNumber":1,"contentLength":5,"contentSha1":"sha"}`, "bytes=0-4", true},
+		{"wrong part", `{"fileId":"large","partNumber":2,"contentLength":5,"contentSha1":"sha"}`, "bytes=0-4", true},
+		{"missing hash", `{"fileId":"large","partNumber":1,"contentLength":5}`, "bytes=0-4", true},
+		{"empty part", `{"fileId":"large","partNumber":1,"contentLength":0,"contentSha1":"sha"}`, "bytes=0-4", true},
+		{"largest allowed part", `{"fileId":"large","partNumber":1,"contentLength":5000000000,"contentSha1":"sha"}`, "bytes=0-4999999999", false},
+		{"oversized part", `{"fileId":"large","partNumber":1,"contentLength":5000000001,"contentSha1":"sha"}`, "bytes=0-5000000000", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var srv *httptest.Server
@@ -242,10 +333,14 @@ func TestCopyPartRejectsInconsistentResponseWithoutRecording(t *testing.T) {
 				t.Fatal(err)
 			}
 			large := (&File{ID: "large", b2: b}).CompileParts(0, nil)
-			if _, err := large.CopyPart(context.Background(), "source", 1, "bytes=0-4", nil); err == nil {
-				t.Fatal("inconsistent copy-part response accepted")
+			part, err := large.CopyPart(context.Background(), "source", 1, tc.byteRange, nil)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("copy-part error = %v; want error %t", err, tc.wantErr)
 			}
-			if len(large.hashes) != 0 || large.size != 0 {
+			if !tc.wantErr && (part == nil || part.Size != 5e9 || large.size != 5e9) {
+				t.Fatalf("largest part = %+v, large file size = %d; want 5000000000", part, large.size)
+			}
+			if tc.wantErr && (len(large.hashes) != 0 || large.size != 0) {
 				t.Fatalf("inconsistent response mutated large file: hashes=%v size=%d", large.hashes, large.size)
 			}
 		})
