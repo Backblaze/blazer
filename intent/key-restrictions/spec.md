@@ -25,12 +25,14 @@ func (k *Key) Prefix() string
 
 - **R1. Accessors.** `*b2.Key` gains `BucketIDs() []string` and `Prefix() string` exactly as above. Both work for keys
   from `Client.CreateKey`, `Bucket.CreateKey` and `Client.ListKeys`.
-- **R2. One representation across versions.** In `base`, a key's bucket IDs are `BucketIDs` when the response has
-  `bucketIds`, otherwise `[]string{BucketID}` when it has a non-empty `bucketId`, otherwise nil. The prefix is
-  `namePrefix`, with null or absent reported as `""`.
+- **R2. One representation across versions.** In `base`, a key's bucket IDs are `BucketIDs` when the response has a
+  non-empty `bucketIds`, otherwise `[]string{BucketID}` when it has a non-empty `bucketId`, otherwise nil. An empty
+  `bucketIds: []` (which decodes to a non-nil empty slice) normalizes to nil. The prefix is `namePrefix`, with null
+  or absent reported as `""`.
 - **R3. Unrestricted keys.** A key with no bucket restriction returns `nil` from `BucketIDs()` (not an empty slice),
   and `""` from `Prefix()`.
-- **R4. Copies.** `BucketIDs()` returns a new slice each call; changing it does not change the key.
+- **R4. Copies.** `BucketIDs()` returns a new slice each call, built so that nil stays nil (for example
+  `append([]string(nil), ids...)`, never `make` plus `copy`); changing it does not change the key.
 - **R5. `base.Key` fields.** `base.Key` gains `BucketIDs []string` and `Prefix string`, filled by
   `doCreateKeyWithState` (v3 and v4 create) and `ListKeys`.
 - **R6. Tests.** Credential-free tests, with literal responses from the B2 docs' shapes:
@@ -39,6 +41,12 @@ func (k *Key) Prefix() string
   - `b2` (recording server): `Client.CreateKey` with `BucketIDs("b1","b2")` and `Prefix("p/")` reads both back;
     `Bucket.CreateKey` reads back its own bucket ID; `Client.ListKeys` returns restricted and unrestricted keys
     correctly; `BucketIDs()` returns a copy.
+  - Both layers: a key whose response has `"bucketIds": []` reports `BucketIDs() == nil` (R3 holds for an empty
+    array, not only for null).
+  - **Live** (credential-gated, skipped without credentials like `TestCreateDeleteKey`): create a key restricted to
+    the test bucket with `Prefix("live-227/")`, assert `BucketIDs()` and `Prefix()` on the created key and on the same
+    key found through `Client.ListKeys`, then delete it. B2's real key responses have differed from the docs before
+    (AGENTS.md lesson 9), so fixtures alone are not enough for this behavior.
 - **R7. Changelog.** An Added entry.
 
 ## Design
@@ -49,6 +57,11 @@ func (k *Key) Prefix() string
 - `b2/backend.go`: `beKeyInterface` and `beKey` gain the same, forwarding.
 - `b2/key.go`: the two public accessors; `BucketIDs` copies.
 - Every test fake that implements these unexported interfaces gains the two methods.
+
+## Deferred
+
+- `options` (for example `["s3"]`), which `b2_list_keys` returns and b2-sdk-python exposes as
+  `ApplicationKey.options`, is not surfaced here. A separate issue can add an accessor.
 
 ## Rejected alternatives
 
