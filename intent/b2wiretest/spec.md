@@ -9,13 +9,15 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
   (an import cycle otherwise).
 - **R2. Lifecycle.** `New(t testing.TB) *Server` starts an `httptest.Server` and registers `t.Cleanup` to
   close it. `(*Server).URL() string` returns its base URL, to pass to `base.SetAPIBase` or `b2.APIBase`.
+  Cleanup marks the server closed before stopping and draining HTTP handlers. Late handler calls
+  return 503 without reporting through the completed test's `testing.TB`.
 - **R3. Authorization.** Without scripting, `b2_authorize_account` on any API version answers with a v4
   response whose `apiUrl`, `downloadUrl` and `s3ApiUrl` are the server URL, authorization token `"test-token"`,
   no bucket or prefix restriction, and part sizes `absoluteMinimumPartSize` 5000000 and
   `recommendedPartSize` 100000000. A test can replace it like any other call (R5).
 - **R4. Recording.** Every request is recorded in arrival order as a `Request` with: `Seq` (1-based order),
-  `Method`, `Path`, `Call` (the last path segment for API calls, e.g. `b2_create_key`; `upload_file` and
-  `upload_part` for upload URLs), `Query` (`url.Values` decoded from `r.URL.RawQuery`), `Header` (a copy),
+  `Method`, `Path`, `Call` (the last path segment for every path, including non-API paths; a trailing
+  slash gives an empty call), `Query` (`url.Values` decoded from `r.URL.RawQuery`), `Header` (a copy),
   `Body` (raw bytes) and `JSON` (`map[string]any` decoded from the body when it is a JSON object, otherwise
   nil). Recording is safe for concurrent requests.
 - **R5. Scripted responses.** Per call name:
@@ -23,11 +25,13 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
   - `ReplySequence(call string, rs ...Response)`: successive responses, the last one repeating;
   - `Handle(call string, h func(Request) Response)`: computed per request.
   `Response` has `Status int`, `Body string` and `Header http.Header`. A later registration for a call
-  replaces the earlier one.
+  replaces the earlier one. Status 0 means 200 for all three scripting methods; it is not an unscripted
+  call. Responses default to `Content-Type: application/json` unless a script sets it, and always set
+  `X-Content-Type-Options: nosniff` (overriding any scripted value for that header).
 - **R6. Unscripted calls fail loudly.** A request to a call with no response registered (other than the
   R3 and R7 built-ins) is recorded, answered with status 400 and a B2-shaped error body
   (`{"status":400,"code":"bad_request","message":"b2wiretest: no response scripted for this call"}`), and reported
-  with `t.Errorf` naming the call.
+  with `t.Errorf` naming the call. The response body is constant and never interpolates request values.
 - **R7. Upload URLs.** Without scripting, `b2_get_upload_url` and `b2_get_upload_part_url` return
   `uploadUrl` = server URL + `/upload_file` or `/upload_part`, and authorization tokens `"upload-token"`
   and `"upload-part-token"`. Requests to those paths are recorded as calls `upload_file` and `upload_part`
@@ -45,12 +49,15 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
   - `AssertQuery(t, r Request, name, want string)`: reports `<call> query <name>: got X, want Y` (or
     `missing` when absent).
 
+  Both JSON assertions report `empty JSON path` for an empty path. Dots always separate segments;
+  literal dots in object keys cannot be escaped or addressed.
   The helper never computes expected values. Tests supply them from the B2 API docs.
 - **R10. Tests of the helper.** `internal/b2wiretest` has its own tests for R2 to R9, using `net/http`
   as the client. Each test fails if the behavior it names is removed.
 - **R11. One existing test ported.** `TestUpdateBucketSendsCORSRuleName` (`b2/update_cors_name_test.go`)
-  is rewritten to use the helper, with the same assertions or stronger. This shows the API fits a real
-  `base` plus `b2` path. No other existing test changes.
+  is rewritten to use the helper, retaining its request-body assertions in `AssertJSON` form. R6's
+  recorded 400 response and test error replace the old `unexpected request path` check. This shows the
+  API fits a real `base` plus `b2` path. No other existing test changes.
 - **R12. Repository rules.** `go.mod` and `go.sum` unchanged; builds with Go 1.26.10; `make ci` passes; no
   exported symbol is added to `base`, `b2` or `x/...`.
 
@@ -59,16 +66,19 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
 ```
 internal/b2wiretest/
 ├── server.go        # Server, New, URL, Reply, ReplySequence, Handle, Requests, Calls, Last
-├── assert.go        # AssertJSON, AssertNoJSON, AssertHeader
+├── assert.go        # AssertJSON, AssertNoJSON, AssertHeader, AssertQuery
 └── server_test.go   # R10
 ```
 
 - The server routes on the path. `/b2api/v<N>/<call>` gives `Call = <call>` for any `<N>`, so the helper
-  works across the API versions blazer uses (v3 and v4 today) without listing them.
+  works across the API versions blazer uses (v3 and v4 today) without listing them. The same last-segment
+  rule applies to all other paths; the helper does not restrict path shapes.
 - One mutex guards the record slice and the response table. Handlers run outside the lock, so a `Handle`
   function may call `Requests()`.
 - The record holds copies (headers cloned, body read fully), so a test can inspect it after the client
   has closed the request.
+- Scripted status 0 defaults to 200. Response headers retain a scripted `Content-Type`, default to
+  `application/json` when absent, and force `X-Content-Type-Options: nosniff`.
 - `AssertJSON` walks maps by key and slices by decimal index. A missing step reports
   `<call> body <path>: missing`.
 - There is no global state. Each test gets its own server, so tests stay safe under `-shuffle=on` and
