@@ -145,6 +145,72 @@ func TestCopyPartReplacementsKeepKnownPartSizes(t *testing.T) {
 	}
 }
 
+func TestCopyPartListPartsSeedsNilPartSizes(t *testing.T) {
+	var listCalls, copyCalls int
+	listed := []struct {
+		number int
+		size   int64
+		sha1   string
+	}{
+		{1, 5e6, "one-old"},
+		{2, 6e6, "two-old"},
+	}
+	replacements := []struct {
+		number int
+		size   int64
+		sha1   string
+	}{
+		{1, 7e6, "one-first"},
+		{2, 8e6, "two-first"},
+		{1, 9e6, "one-replaced"},
+	}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/b2api/v4/b2_list_parts":
+			if listCalls == len(listed) {
+				t.Fatal("unexpected third list-parts request")
+			}
+			part := listed[listCalls]
+			listCalls++
+			_, _ = fmt.Fprintf(w, `{"parts":[{"fileId":"large","partNumber":%d,"contentSha1":%q,"contentLength":%d}],"nextPartNumber":%d}`, part.number, part.sha1, part.size, part.number+1)
+		case "/b2api/v4/b2_copy_part":
+			if copyCalls == len(replacements) {
+				t.Fatal("too many copy-part requests")
+			}
+			part := replacements[copyCalls]
+			copyCalls++
+			_, _ = fmt.Fprintf(w, `{"fileId":"large","partNumber":%d,"contentLength":%d,"contentSha1":%q}`, part.number, part.size, part.sha1)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account", "key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := (&File{ID: "large", b2: b}).AsLargeFile()
+	large.size = 11e6
+	large.hashes = map[int]string{1: "one-old", 2: "two-old"}
+	large.partSizes = nil
+	for _, replacement := range replacements {
+		if _, err := large.CopyPart(context.Background(), "source", replacement.number, "bytes=0-0", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if listCalls != 2 || copyCalls != len(replacements) {
+		t.Fatalf("list calls = %d, copy calls = %d; want 2, %d", listCalls, copyCalls, len(replacements))
+	}
+	if large.size != 17e6 || !reflect.DeepEqual(large.partSizes, map[int]int64{1: 9e6, 2: 8e6}) {
+		t.Fatalf("size = %d, part sizes = %v; want 17000000, map[1:9000000 2:8000000]", large.size, large.partSizes)
+	}
+}
+
 func TestCopyPartRejectsZeroSizedPriorPart(t *testing.T) {
 	var listCalls, copyCalls int
 	var srv *httptest.Server
