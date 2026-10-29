@@ -21,10 +21,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: live-tests
+    permissions:
+      contents: read
+      actions: read # find the last green run, to list the PRs this run covers
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # Runs are serialized and a newer pending run replaces an older one, so one run can cover several merges.
+      - name: List changes covered by this run
+        if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list -R "$GITHUB_REPOSITORY" -w test-live.yml -b main -s success -L 1 --json headSha --jq '.[0].headSha // empty')
+          {
+            echo "## Changes covered"
+            echo
+            if [ -n "$last" ] && git cat-file -e "${last}^{commit}" 2>/dev/null; then
+              echo "Merged since the last green live run (\`${last::7}\`):"
+              echo
+              git log --first-parent --format='- %h %s' "${last}..${GITHUB_SHA}"
+            else
+              echo "No earlier green live run on main to compare against."
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: stable
