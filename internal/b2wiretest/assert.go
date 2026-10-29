@@ -8,9 +8,14 @@ import (
 	"testing"
 )
 
-// AssertJSON checks a dot-separated path in a request's JSON object body.
+// AssertJSON checks a non-empty, dot-separated path in a request's JSON object body.
+// Dots always separate path segments; keys containing literal dots cannot be addressed.
 func AssertJSON(t testing.TB, r Request, path string, want any) {
 	t.Helper()
+	if path == "" {
+		t.Errorf("%s body: empty JSON path", r.Call)
+		return
+	}
 	wantJSON, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("%s body %s: encode want: %v", r.Call, path, err)
@@ -32,9 +37,14 @@ func AssertJSON(t testing.TB, r Request, path string, want any) {
 	}
 }
 
-// AssertNoJSON checks that a dot-separated path is absent from a request body.
+// AssertNoJSON checks that a non-empty, dot-separated path is absent from a request body.
+// It has the same path limitations as AssertJSON.
 func AssertNoJSON(t testing.TB, r Request, path string) {
 	t.Helper()
+	if path == "" {
+		t.Errorf("%s body: empty JSON path", r.Call)
+		return
+	}
 	if got, ok := jsonPath(r.JSON, path); ok {
 		gotJSON, _ := json.Marshal(got)
 		t.Errorf("%s body %s: got %s, want missing", r.Call, path, gotJSON)
