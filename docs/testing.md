@@ -63,6 +63,12 @@ throwaway account or key, never one with production data. The tests create and d
 clean up leftovers with `go run ./internal/bin/cleanup`. Some tests have a one-minute deadline and can
 time out when the network is busy; re-run before treating that as a failure.
 
+In CI, `.github/workflows/test-live.yml` runs them on every push to `main` (each merged PR), weekly, and
+on demand. Pull requests do not run them: they would expose the live key to unreviewed code. The run summary
+lists passed, failed and skipped tests, and the job fails if any live test skipped for missing credentials,
+so a green run means the suite really ran against B2. A failure on `main` opens (or comments on) the issue
+"Live integration tests are failing on main". Rapid merges share one queue, so a run may cover several PRs.
+
 ## Reporting what you ran
 
 In the PR, list each level you ran and its result. A check that did not run is **NOT RUN**, never PASS,

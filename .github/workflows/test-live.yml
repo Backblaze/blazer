@@ -1,6 +1,8 @@
 name: Live integration tests
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   workflow_call:
   schedule:
@@ -46,10 +48,44 @@ jobs:
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
-        run: go test -v -count=1 -timeout 30m ./b2/... ./base/...
+        run: go test -json -count=1 -timeout 30m ./b2/... ./base/... > test.json
+      - name: Report live test results
+        if: ${{ always() && steps.creds.outcome == 'success' }}
+        run: scripts/live-test-report.sh test.json
+      - name: Upload test log
+        if: ${{ always() && steps.creds.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-test-json
+          path: test.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Remove test buckets
         if: ${{ always() && steps.creds.outcome == 'success' }}
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
         run: go run ./internal/bin/cleanup/cleanup.go
+
+  # Keeps one open issue while live tests fail on main, so a red run is never silent.
+  report-failure:
+    needs: test-live
+    if: ${{ failure() && github.repository == 'Backblaze/blazer' && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Live integration tests are failing on main"
+          body="Run $RUN_URL failed (trigger: $GITHUB_EVENT_NAME, commit $GITHUB_SHA). See the run summary for the failing tests."
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
