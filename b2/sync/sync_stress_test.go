@@ -96,17 +96,45 @@ func TestSyncDryRunAndCancellation(t *testing.T) {
 	if gotUploads != uploads {
 		t.Fatalf("dry run over existing file made %d uploads, want %d", gotUploads, uploads)
 	}
+	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type cancelledVisit struct {
+		path string
+		err  error
+	}
+	var cancelledVisits []cancelledVisit
+	cancelled := false
 	walk := func(root string, visit fs.WalkDirFunc) error {
 		return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-			if path != root {
+			if path != root && !cancelled {
 				cancel()
+				cancelled = true
 			}
-			return visit(path, entry, walkErr)
+			err := visit(path, entry, walkErr)
+			if cancelled {
+				cancelledVisits = append(cancelledVisits, cancelledVisit{path: path, err: err})
+			}
+			return err
 		})
 	}
-	if _, err := syncWithLocalIO(ctx, bucket, "cancelled", root, walk, fileSHA1); err != context.Canceled {
+	result, err = syncWithLocalIO(ctx, bucket, "cancelled", root, walk, fileSHA1)
+	if err != context.Canceled {
 		t.Fatalf("cancelled sync: %v", err)
+	}
+	if len(cancelledVisits) != 1 || filepath.Base(cancelledVisits[0].path) != "file.txt" || cancelledVisits[0].err != context.Canceled {
+		t.Fatalf("cancelled visits = %+v, want one context-cancelled file.txt visit", cancelledVisits)
+	}
+	if result == nil || len(result.Uploaded) != 0 || len(result.Skipped) != 0 {
+		t.Fatalf("cancelled result = %+v, want no uploaded or skipped files", result)
+	}
+	wire.mu.Lock()
+	cancelledUploads := len(wire.uploads)
+	wire.mu.Unlock()
+	if cancelledUploads != uploads {
+		t.Fatalf("cancelled sync made %d uploads, want %d", cancelledUploads, uploads)
 	}
 }
 
