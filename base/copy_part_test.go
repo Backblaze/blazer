@@ -132,9 +132,13 @@ func TestCopyPartReplacementsKeepKnownPartSizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	large := (&File{ID: "large", b2: b}).AsLargeFile()
-	for _, response := range responses {
+	large.partSizes = nil
+	for i, response := range responses {
 		if _, err := large.CopyPart(context.Background(), "source", response.number, fmt.Sprintf("bytes=0-%d", response.size-1), nil); err != nil {
 			t.Fatal(err)
+		}
+		if i == 0 && (large.size != response.size || !reflect.DeepEqual(large.partSizes, map[int]int64{response.number: response.size})) {
+			t.Fatalf("initial copy size = %d, part sizes = %v; want %d, map[%d:%d]", large.size, large.partSizes, response.size, response.number, response.size)
 		}
 	}
 	if listCalls != 0 || copyCalls != len(responses) {
