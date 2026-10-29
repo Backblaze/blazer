@@ -236,6 +236,8 @@ type beFileInfo struct {
 type beKeyInterface interface {
 	del(context.Context) error
 	caps() []string
+	bucketIDs() []string
+	prefix() string
 	name() string
 	expires() time.Time
 	secret() string
@@ -1047,11 +1049,13 @@ func (b *beKey) del(ctx context.Context) error {
 	return withBackoff(ctx, b.b2i, f)
 }
 
-func (b *beKey) caps() []string     { return b.k.caps() }
-func (b *beKey) name() string       { return b.k.name() }
-func (b *beKey) expires() time.Time { return b.k.expires() }
-func (b *beKey) secret() string     { return b.k.secret() }
-func (b *beKey) id() string         { return b.k.id() }
+func (b *beKey) caps() []string      { return b.k.caps() }
+func (b *beKey) bucketIDs() []string { return b.k.bucketIDs() }
+func (b *beKey) prefix() string      { return b.k.prefix() }
+func (b *beKey) name() string        { return b.k.name() }
+func (b *beKey) expires() time.Time  { return b.k.expires() }
+func (b *beKey) secret() string      { return b.k.secret() }
+func (b *beKey) id() string          { return b.k.id() }
 
 func withBackoff(ctx context.Context, ri beRootInterface, f func() error) error {
 	return retry.Do(

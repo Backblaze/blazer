@@ -1327,6 +1327,50 @@ func TestCreateDeleteKey(t *testing.T) {
 	}
 }
 
+func TestKeyRestrictionAccessors(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bucket, done := startLiveTest(ctx, t)
+	defer done()
+
+	key, err := bucket.CreateKey(ctx, "key-restrictions-"+uniq, Capabilities("listFiles"), Prefix("live-227/"))
+	if err != nil {
+		t.Fatalf("Bucket.CreateKey: %v", err)
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if err := key.Delete(cleanupCtx); err != nil {
+			t.Errorf("key.Delete: %v", err)
+		}
+	}()
+
+	assertKeyRestrictions(t, key, []string{bucket.ID()}, "live-227/")
+
+	var listed *Key
+	var cursor string
+	for {
+		keys, next, err := bucket.c.ListKeys(ctx, 100, cursor)
+		if err != nil && err != io.EOF {
+			t.Fatalf("ListKeys: %v", err)
+		}
+		for _, candidate := range keys {
+			if candidate.ID() == key.ID() {
+				listed = candidate
+				break
+			}
+		}
+		if listed != nil || err == io.EOF {
+			break
+		}
+		cursor = next
+	}
+	if listed == nil {
+		t.Fatalf("ListKeys did not return key %q", key.ID())
+	}
+	assertKeyRestrictions(t, listed, []string{bucket.ID()}, "live-227/")
+}
+
 func TestListKeys(t *testing.T) {
 	ctx := context.Background()
 	bucket, done := startLiveTest(ctx, t)
