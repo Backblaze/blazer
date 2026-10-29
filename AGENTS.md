@@ -105,3 +105,15 @@ Each line was raised by a reviewer on at least two PRs.
 Run `make ci` and paste the tail of its output. All of build, vet, gofmt, tidy, verify, lint, tests (with
 `-race`), b2keys, cross-compile and changelog-check must pass. If a test fails, fix the code, not the test.
 List any live-B2 checks you ran, and any you could not.
+
+## Testing standard
+
+The full text is [docs/testing-standard.md](docs/testing-standard.md); it extends the rules above, and the
+stricter one applies.
+
+- Five kinds of test: unit, integration, contract, system, security. Say in the PR which you ran and which
+  are NOT RUN.
+- TDD loop: write the test, watch it fail (RED), make the smallest fix (GREEN), refactor, then revert the
+  fix and watch the test fail again (PROVE). Paste both failures. A bug fix starts with a failing test.
+- Never delete, skip, loosen or retire a test to get green. State each new test's evidence level (L1 to L5).
+- Reviewing tests: see "Reviewing tests" in [REVIEW.md](REVIEW.md).

@@ -2,6 +2,7 @@
 
 A green test run is only evidence for what it exercised. This file says what each kind of test proves,
 how to run it, and how to show that a test pins the behavior a PR claims.
+The rules every PR follows (TDD loop, five kinds, evidence) are in [testing-standard.md](testing-standard.md).
 
 ## Test levels
 
