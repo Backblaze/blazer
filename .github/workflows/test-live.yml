@@ -1,6 +1,8 @@
 name: Live integration tests
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   workflow_call:
   schedule:
@@ -19,10 +21,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: live-tests
+    permissions:
+      contents: read
+      actions: read # find the last green run, to list the PRs this run covers
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # Runs are serialized and a newer pending run replaces an older one, so one run can cover several merges.
+      - name: List changes covered by this run
+        if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last=$(gh run list -R "$GITHUB_REPOSITORY" -w test-live.yml -b main -s success -L 1 --json headSha --jq '.[0].headSha // empty')
+          {
+            echo "## Changes covered"
+            echo
+            if [ -n "$last" ] && git cat-file -e "${last}^{commit}" 2>/dev/null; then
+              echo "Merged since the last green live run (\`${last::7}\`):"
+              echo
+              git log --first-parent --format='- %h %s' "${last}..${GITHUB_SHA}"
+            else
+              echo "No earlier green live run on main to compare against."
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: stable
@@ -46,10 +70,40 @@ jobs:
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
-        run: go test -v -count=1 -timeout 30m ./b2/... ./base/...
+        run: go test -json -count=1 -timeout 30m ./b2/... ./base/... > test.json
+      - name: Report live test results
+        if: ${{ always() && steps.creds.outcome == 'success' }}
+        run: scripts/live-test-report.sh test.json
+      - name: Upload test log
+        if: ${{ always() && steps.creds.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-test-json
+          path: test.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Remove test buckets
         if: ${{ always() && steps.creds.outcome == 'success' }}
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
         run: go run ./internal/bin/cleanup/cleanup.go
+
+  # Keeps one open issue while live tests fail on main, so a red run is never silent.
+  report-failure:
+    needs: test-live
+    if: ${{ failure() && github.repository == 'Backblaze/blazer' && github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          scripts/live-failure-issue.sh "Run $RUN_URL failed (trigger: $GITHUB_EVENT_NAME, commit $GITHUB_SHA). See the run summary for the failing tests."
