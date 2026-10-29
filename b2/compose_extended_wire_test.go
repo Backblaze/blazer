@@ -62,6 +62,7 @@ type composeWire struct {
 	starts              []map[string]any
 	calls               []string
 	copies              []map[string]any
+	copyTimes           []time.Time
 	uploads             []composeUpload
 	finishes            []map[string]any
 }
@@ -151,6 +152,7 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 		w.mu.Lock()
 		w.copies = append(w.copies, body)
+		w.copyTimes = append(w.copyTimes, time.Now())
 		w.calls = append(w.calls, fmt.Sprintf("copy:%d", partNumber))
 		fail := w.failCopyPart == partNumber
 		status := w.copyFailStatus
@@ -162,7 +164,7 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.mu.Unlock()
 		if status != 0 {
 			if status == http.StatusTooManyRequests {
-				rw.Header().Set("Retry-After", "1")
+				rw.Header().Set("Retry-After", "2")
 			}
 			rw.WriteHeader(status)
 			code := "service_unavailable"
@@ -765,18 +767,18 @@ func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		status, wantAuth int
+		minRetryWait     time.Duration
 	}{
-		{"expired token", http.StatusUnauthorized, 2},
-		{"request timeout", http.StatusRequestTimeout, 1},
-		{"service unavailable", http.StatusServiceUnavailable, 1},
-		{"gateway timeout", http.StatusGatewayTimeout, 1},
-		{"rate limited", http.StatusTooManyRequests, 1},
+		{"expired token", http.StatusUnauthorized, 2, 0},
+		{"request timeout", http.StatusRequestTimeout, 1, time.Second},
+		{"service unavailable", http.StatusServiceUnavailable, 1, time.Second},
+		{"gateway timeout", http.StatusGatewayTimeout, 1, time.Second},
+		{"rate limited", http.StatusTooManyRequests, 1, 2 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newComposeWire(t)
 			wire.copyFailStatus = tc.status
 			bucket := wire.bucket(t)
-			started := time.Now()
 			_, err := bucket.Compose(context.Background(), "retry-copy", []ComposePart{
 				PartFromCopy("source-one", "bytes=0-4999999"),
 				PartFromCopy("source-two", "bytes=0-2"),
@@ -784,11 +786,16 @@ func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.status != http.StatusUnauthorized && time.Since(started) < time.Second {
-				t.Fatalf("copy_part status %d retry waited %v, want at least 1s", tc.status, time.Since(started))
-			}
 			wire.mu.Lock()
 			defer wire.mu.Unlock()
+			if tc.minRetryWait > 0 {
+				if len(wire.copyTimes) < 2 {
+					t.Fatalf("copy_part status %d attempts = %d, want at least 2", tc.status, len(wire.copyTimes))
+				}
+				if waited := wire.copyTimes[1].Sub(wire.copyTimes[0]); waited < tc.minRetryWait {
+					t.Fatalf("copy_part status %d retry waited %v, want at least %v", tc.status, waited, tc.minRetryWait)
+				}
+			}
 			if len(wire.copies) != 3 || wire.authCalls != tc.wantAuth || !reflect.DeepEqual(wire.calls, []string{"start", "copy:1", "copy:1", "copy:2", "finish"}) {
 				t.Fatalf("copies=%d auth=%d calls=%v", len(wire.copies), wire.authCalls, wire.calls)
 			}

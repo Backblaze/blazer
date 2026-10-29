@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -146,16 +147,155 @@ func sdkHarnessScenarioChecks(script string) error {
 		return true
 	}
 	ast.Inspect(entry.Body, inspect)
-	if !called || !conditional || !asserted {
-		return fmt.Errorf("scenario must be called by main and contain conditions and failure assertions")
+	if !called || !conditional || !asserted || !sdkHarnessResultConsumed(functions["main"], entry) {
+		return fmt.Errorf("scenario must be called by main, consume its result, and contain conditions and failure assertions")
 	}
 	return nil
+}
+
+func sdkHarnessResultConsumed(main, entry *ast.FuncDecl) bool {
+	if main == entry {
+		return true
+	}
+	resultNames := make(map[string]bool)
+	consumed := false
+	ast.Inspect(main.Body, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.AssignStmt:
+			for name := range sdkHarnessEntryResultNames(node, entry.Name.Name) {
+				resultNames[name] = true
+			}
+		case *ast.DeclStmt:
+			for name := range sdkHarnessEntryResultNames(node, entry.Name.Name) {
+				resultNames[name] = true
+			}
+		case *ast.IfStmt:
+			names := sdkHarnessEntryResultNames(node.Init, entry.Name.Name)
+			if sdkHarnessCallsEntry(node.Cond, entry.Name.Name) || len(names) != 0 {
+				consumed = consumed || sdkHarnessReportsFailure(node.Body, names)
+			}
+			if sdkHarnessReferencesResult(node.Cond, resultNames) {
+				consumed = consumed || sdkHarnessReportsFailure(node.Body, resultNames)
+			}
+		case *ast.SwitchStmt:
+			if sdkHarnessReferencesResult(node.Tag, resultNames) {
+				consumed = consumed || sdkHarnessReportsFailure(node.Body, resultNames)
+			}
+		case *ast.TypeSwitchStmt:
+			if sdkHarnessReferencesResult(node.Assign, resultNames) {
+				consumed = consumed || sdkHarnessReportsFailure(node.Body, resultNames)
+			}
+		}
+		return true
+	})
+	return consumed
+}
+
+func sdkHarnessEntryResultNames(node ast.Node, entry string) map[string]bool {
+	names := make(map[string]bool)
+	var lhs, rhs []ast.Expr
+	switch node := node.(type) {
+	case *ast.AssignStmt:
+		lhs, rhs = node.Lhs, node.Rhs
+	case *ast.DeclStmt:
+		declaration, ok := node.Decl.(*ast.GenDecl)
+		if !ok || declaration.Tok != token.VAR || len(declaration.Specs) != 1 {
+			return names
+		}
+		value, ok := declaration.Specs[0].(*ast.ValueSpec)
+		if !ok {
+			return names
+		}
+		lhs = make([]ast.Expr, len(value.Names))
+		for i, name := range value.Names {
+			lhs[i] = name
+		}
+		rhs = value.Values
+	default:
+		return names
+	}
+	for i, value := range rhs {
+		if i >= len(lhs) || !sdkHarnessCallsEntry(value, entry) {
+			continue
+		}
+		if name, ok := lhs[i].(*ast.Ident); ok {
+			names[name.Name] = true
+		}
+	}
+	return names
+}
+
+func sdkHarnessCallsEntry(node ast.Node, entry string) bool {
+	called := false
+	ast.Inspect(node, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name, ok := call.Fun.(*ast.Ident)
+		if ok && name.Name == entry {
+			called = true
+		}
+		return true
+	})
+	return called
+}
+
+func sdkHarnessReferencesResult(node ast.Node, names map[string]bool) bool {
+	if node == nil || len(names) == 0 {
+		return false
+	}
+	referenced := false
+	ast.Inspect(node, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if ok && names[identifier.Name] {
+			referenced = true
+		}
+		return true
+	})
+	return referenced
+}
+
+func sdkHarnessReportsFailure(body *ast.BlockStmt, errors map[string]bool) bool {
+	reported := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.CallExpr:
+			switch name := node.Fun.(type) {
+			case *ast.Ident:
+				reported = reported || name.Name == "fail" || name.Name == "failf"
+			case *ast.SelectorExpr:
+				pkg, ok := name.X.(*ast.Ident)
+				if ok && pkg.Name == "os" && name.Sel.Name == "Exit" && len(node.Args) == 1 {
+					reported = reported || sdkHarnessNonZero(node.Args[0])
+				}
+			}
+		case *ast.ReturnStmt:
+			for _, result := range node.Results {
+				if len(errors) == 0 || sdkHarnessReferencesResult(result, errors) {
+					reported = true
+				}
+			}
+		}
+		return true
+	})
+	return reported
+}
+
+func sdkHarnessNonZero(expression ast.Expr) bool {
+	literal, ok := expression.(*ast.BasicLit)
+	if !ok || literal.Kind != token.INT {
+		return false
+	}
+	value, err := strconv.ParseInt(literal.Value, 0, 64)
+	return err == nil && value != 0
 }
 
 func TestSDKHarnessRejectsNoOpScenario(t *testing.T) {
 	for _, program := range []string{
 		"func main() {}",
 		"func runCheck() error { return nil }; func main() { runCheck() }",
+		"func fail() {}; func runCheck() error { if true { fail() }; return nil }; func main() { runCheck() }",
 		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }; func main() {}`,
 	} {
 		if err := sdkHarnessScenarioChecks("replace github.com/Backblaze/blazer => $REPO_ROOT\npackage main\n" + program); err == nil {
