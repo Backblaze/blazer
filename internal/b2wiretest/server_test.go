@@ -46,6 +46,22 @@ func get(t *testing.T, url string) *http.Response {
 	return response
 }
 
+func TestNewClosesServerAtCleanup(t *testing.T) {
+	var url string
+	t.Run("server", func(t *testing.T) {
+		srv := New(t)
+		url = srv.URL()
+	})
+
+	response, err := http.Get(url + "/b2api/v4/b2_authorize_account")
+	if err == nil {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+		t.Fatal("server still accepts requests after test cleanup")
+	}
+}
+
 func TestRecordsMethodPathHeadersAndJSON(t *testing.T) {
 	s := New(t)
 	s.Reply("b2_create_key", http.StatusOK, `{}`)
