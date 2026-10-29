@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Summarizes a `go test -json` run of the live tests and fails unless they really ran against B2.
 # Usage: scripts/live-test-report.sh test.json
-# Writes a Markdown summary to $GITHUB_STEP_SUMMARY when set. Exit 1 when a test failed, when any test
+# Prints the Markdown summary and the output of failed tests to stdout (the job log) and, when set, also
+# appends the summary to $GITHUB_STEP_SUMMARY. Exit 1 when a test failed, when any test
 # skipped, or when a test defined in a live test file did not pass.
 set -euo pipefail
 
 in=${1:?usage: live-test-report.sh test.json}
-summary=${GITHUB_STEP_SUMMARY:-/dev/stdout}
 module=github.com/Backblaze/blazer
 # Every top-level test in these files must run and pass; there is no other way to tell they reached B2.
 live_files=(b2/integration_test.go b2/lock_test.go base/integration_test.go)
@@ -34,7 +34,7 @@ list() {
   while IFS= read -r line; do echo "- \`${line#"$module"/}\`"; done <<<"$2"
 }
 
-{
+report() {
   echo "## Live integration tests"
   echo
   echo "Commit \`${GITHUB_SHA:-local}\` · trigger \`${GITHUB_EVENT_NAME:-local}\`"
@@ -46,7 +46,25 @@ list() {
   list "Failed packages" "$failed_pkgs"
   list "Skipped (no test may skip in the live run)" "$skipped"
   list "Live tests that did not pass" "$missing"
-} >>"$summary"
+}
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  report | tee -a "$GITHUB_STEP_SUMMARY"
+else
+  report
+fi
+
+# Where the time went, per package, so the log shows what ran.
+jq -r 'select(.Test == null and (.Action == "pass" or .Action == "fail" or .Action == "skip"))
+  | "\(.Action | ascii_upcase) \(.Package) (\(.Elapsed // 0)s)"' "$in" | sed "s#$module/##"
+
+if [ -n "$failed" ]; then
+  echo "::group::Output of failed tests"
+  jq -rs '[.[] | select(.Action == "fail" and .Test != null) | {p: .Package, t: .Test}] as $f
+    | .[] | select(.Action == "output" and .Test != null and ([{p: .Package, t: .Test}] | inside($f)))
+    | .Output' "$in" | head -n 300
+  echo "::endgroup::"
+fi
 
 status=0
 [ -n "$failed" ] && { echo "::error::Tests failed in the live run."; status=1; }
