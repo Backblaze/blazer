@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/Backblaze/blazer/base"
 )
 
 type writerRetryLogRoot struct{ beRootInterface }
@@ -36,6 +40,17 @@ func (c writerRetryLogChunk) uploadPart(context.Context, readResetter, string, i
 		return 0, c.err
 	}
 	return c.size, nil
+}
+
+type writerRetryLogResponseTransport struct{}
+
+func (writerRetryLogResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"status":503,"code":"service_unavailable","message":"server-error-secret"}`)),
+		Request:    req,
+	}, nil
 }
 
 func TestWriterErrorLoggingOmitsErrorText(t *testing.T) {
@@ -70,6 +85,18 @@ func TestWriterRetryLoggingOmitsErrorText(t *testing.T) {
 	}
 
 	var output bytes.Buffer
+	const (
+		secret = "server-error-secret"
+		status = http.StatusServiceUnavailable
+	)
+	_, retryErr := base.AuthorizeAccount(context.Background(), "account", "key", base.Transport(writerRetryLogResponseTransport{}))
+	if retryErr == nil {
+		t.Fatal("AuthorizeAccount returned nil error")
+	}
+	if code, _ := base.Code(retryErr); code != status {
+		t.Fatalf("AuthorizeAccount status = %d, want %d", code, status)
+	}
+
 	log.SetOutput(&output)
 	const size = 4
 	fresh := writerRetryLogChunk{size: size}
@@ -77,15 +104,18 @@ func TestWriterRetryLoggingOmitsErrorText(t *testing.T) {
 		context.Background(),
 		writerRetryLogLarge{chunk: fresh},
 		writerRetryLogRoot{},
-		writerRetryLogChunk{err: errors.New("server-error-secret")},
+		writerRetryLogChunk{err: retryErr},
 		newResetter([]byte("part")),
 		"sha1", size, 1,
 	)
 	if err != nil {
 		t.Fatalf("uploadPartWithReupload: %v", err)
 	}
-	if strings.Contains(output.String(), "server-error-secret") {
+	if strings.Contains(output.String(), secret) {
 		t.Fatal("writer retry logged untrusted error text")
+	}
+	if !strings.Contains(output.String(), "status 503") {
+		t.Fatal("writer retry log did not retain the HTTP status")
 	}
 	if !strings.Contains(output.String(), "b2 upload part") {
 		t.Fatal("writer retry log did not execute")

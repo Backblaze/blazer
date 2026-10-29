@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/blog"
 	"github.com/Backblaze/blazer/internal/retry"
 )
@@ -933,7 +934,8 @@ func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, roo
 			return root.reupload(err)
 		}),
 		retry.OnRetry(func(attempt uint, err error) error {
-			blog.V(1).Infof("b2 upload part: error (%T); retrying", err)
+			code, _ := base.Code(err)
+			blog.V(1).Infof("b2 upload part: error (%T, status %d); retrying", err, code)
 			fresh, err := large.getUploadPartURL(ctx)
 			if err != nil {
 				return err
