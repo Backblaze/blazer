@@ -64,11 +64,14 @@ clean up leftovers with `go run ./internal/bin/cleanup`. Some tests have a one-m
 time out when the network is busy; re-run before treating that as a failure.
 
 In CI, `.github/workflows/test-live.yml` runs them on every push to `main` (each merged PR), weekly, and
-on demand. Pull requests do not run them: they would expose the live key to unreviewed code. The run summary
-lists passed, failed and skipped tests, and the job fails if any live test skipped for missing credentials,
-so a green run means the suite really ran against B2. A failure on `main` opens (or comments on) the issue
-"Live integration tests are failing on main". Runs are serialized because the tests share bucket names, so
-rapid merges can share one run; its summary lists every commit merged since the last green live run.
+on demand. Pull requests do not trigger them, so the live key is not automatically exposed to PR code.
+A manual `workflow_dispatch` run can still target any branch with the key, so anyone with write access
+can run unmerged code against it; restricting the `live-tests` environment to `main` would close that.
+The job fails if any test fails or skips, or if any top-level test in `b2/integration_test.go`,
+`b2/lock_test.go` or `base/integration_test.go` does not pass, so a green run means those tests ran
+against B2. A failure on `main` opens (or comments on) the issue "Live integration tests are failing on
+main". Runs are serialized because the tests share bucket names, so rapid merges can share one run; its
+summary lists every commit merged since the last green live run.
 
 ## Reporting what you ran
 
