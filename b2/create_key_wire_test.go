@@ -163,7 +163,7 @@ func TestBucketCreateKeySendsTheBucketID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bucket: %v", err)
 	}
-	if _, err := bucket.CreateKey(ctx, "k2", Capabilities("readFiles"), Prefix("p/")); err != nil {
+	if _, err := bucket.CreateKey(ctx, "k2", Capabilities("readFiles"), Lifetime(time.Hour), Prefix("p/")); err != nil {
 		t.Fatalf("Bucket.CreateKey: %v", err)
 	}
 
@@ -171,6 +171,9 @@ func TestBucketCreateKeySendsTheBucketID(t *testing.T) {
 	if request.Path != "/b2api/v3/b2_create_key" {
 		t.Errorf("b2_create_key path = %q, want v3", request.Path)
 	}
+	b2wiretest.AssertJSON(t, request, "keyName", "k2")
+	b2wiretest.AssertJSON(t, request, "capabilities", []string{"readFiles"})
+	b2wiretest.AssertJSON(t, request, "validDurationInSeconds", 3600)
 	b2wiretest.AssertJSON(t, request, "bucketId", "bucket-from-list")
 	b2wiretest.AssertJSON(t, request, "namePrefix", "p/")
 	b2wiretest.AssertNoJSON(t, request, "bucketIds")
