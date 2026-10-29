@@ -290,6 +290,47 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 	return bucket, w
 }
 
+func TestSyncWireListsPrefixAcrossPages(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	wire.mu.Lock()
+	for name, id := range map[string]string{
+		"a-outside.txt": "outside",
+		"p/a.txt":       "a",
+		"p/b.txt":       "b",
+	} {
+		wire.files[name] = map[string]interface{}{
+			"fileId": id, "fileName": name, "action": "upload",
+		}
+	}
+	wire.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	iter := bucket.List(ctx, b2.ListPrefix("p/"), b2.ListPageSize(1))
+	var names []string
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(names); got != "[p/a.txt p/b.txt]" {
+		t.Fatalf("listed names = %s, want [p/a.txt p/b.txt]", got)
+	}
+
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	listCalls := 0
+	for _, request := range wire.requests {
+		if request.path == "/b2api/v4/b2_list_file_names" {
+			listCalls++
+		}
+	}
+	if listCalls != 2 {
+		t.Fatalf("list requests = %d, want 2 pages", listCalls)
+	}
+}
+
 func TestSyncContinuesAfterMissingFile(t *testing.T) {
 	bucket, wire := newSyncWire(t)
 	root := t.TempDir()
