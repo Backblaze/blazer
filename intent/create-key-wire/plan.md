@@ -1,24 +1,27 @@
 # Plan: pin the b2_create_key request, response and errors (from intent.md and spec.md)
 
-Branch: `test-issue-192-create-key-wire`, stacked on `test-issue-191-shared-recording-server`. One PR for
-issue #192 carries this folder and the tests. Apply the lean-code ladder from `AGENTS.md`: reuse
-`internal/b2wiretest`, add only what the tests need.
+Branch: `test-issue-192-create-key-wire`, stacked on `test-issue-191-shared-recording-server`. Status: ready
+for review. One PR for issue #192 carries this folder and the tests. Apply the lean-code ladder under
+`AGENTS.md`'s **Things agents get wrong here** heading: reuse `internal/b2wiretest`, add only what the
+tests need.
 
 ## Files that change
 
 ```
-b2/create_key_wire_test.go            (new)  R1-R8
-intent/create-key-wire/plan.md        (edit only if the implementation departs from this plan)
+b2/create_key_wire_test.go            (test) R1-R8
+intent/create-key-wire/intent.md      (status and owner alignment)
+intent/create-key-wire/spec.md        (reviewed assertions)
+intent/create-key-wire/plan.md        (reviewed steps and proof)
 ```
 
 No production file changes (R9).
 
 ## Order of work
 
-0. **Wait for #191's code.** `internal/b2wiretest` must exist on this branch. If it is not here yet, merge
+0. **Wait for #191's code** (R9). `internal/b2wiretest` must exist on this branch. If it is not here yet, merge
    the #191 branch in (`git merge origin/test-issue-191-shared-recording-server`; never rebase). Read its
    `spec.md` for the API: `New`, `URL`, `Reply`, `Handle`, `Calls`, `Last`, `AssertJSON`, `AssertNoJSON`.
-1. **Fixture** (all R). `newCreateKeyWire(t)`: start `b2wiretest.New(t)`, script `b2_authorize_account`
+1. **Fixture** (R1–R8). `newCreateKeyWire(t)`: start `b2wiretest.New(t)`, script `b2_authorize_account`
    with a v4 body whose `accountId` is `"acct-1"` and whose URLs are `srv.URL()` (copy the shape of
    `updateAuthJSON` in `b2/update_cors_name_test.go`), and build the client with `APIBase(srv.URL())`.
    Script `b2_create_key` with a minimal valid key by default.
@@ -30,16 +33,17 @@ No production file changes (R9).
 
    Each row names the expected path (`/b2api/v3/...` or `/b2api/v4/...`), the fields that must be present
    with their literal values, and the fields that must be absent.
-3. **Bucket key** (R5). `TestBucketCreateKeySendsTheBucketID`: script `b2_list_buckets` with one bucket,
-   `bucketId` `"bucket-from-list"`, then `client.Bucket(ctx, name)` and `bucket.CreateKey(...)`. Assert
-   `bucketId` and `namePrefix`.
+3. **Bucket key** (R5). `TestBucketCreateKeySendsTheBucketRestriction` and
+   `TestBucketCreateKeyForwardsFields`: script `b2_list_buckets` with one bucket, `bucketId`
+   `"bucket-from-list"`, then `client.Bucket(ctx, name)` and `bucket.CreateKey(...)`. Assert the bucket
+   restriction separately from the forwarded key fields.
 4. **Response** (R6). `TestCreateKeyReturnsTheResponseFields`: script the response from the spec; assert the
-   five accessors against the same literals.
+   five accessors against the same literals for the client, bucket and v4 multi-bucket paths.
 5. **Errors** (R7). `TestCreateKeyReturnsB2Errors`: table over {400, 403} × {account, one bucket, two
-   buckets, bucket key}; each returns an error and a nil key.
+   buckets, bucket key}; each returns the exact status and B2 code, a nil key, and exactly one request.
 6. **Checks before the request** (R8). `TestCreateKeyRejectsBadOptionsWithoutARequest`: the two invalid
-   combinations return an error, and `srv.Calls("b2_create_key")` is empty.
-7. **Check and self-review.** `make ci`; then a fresh-context review of the diff per `AGENTS.md`, with each
+   combinations return their exact validation errors and `srv.Calls("b2_create_key")` is empty for each.
+7. **Check and self-review** (R1–R9). `make ci`; then a fresh-context review of the diff per `AGENTS.md`, with each
    finding answered.
 
 Steps 2 to 6 are independent once step 1 exists.
@@ -55,12 +59,12 @@ Steps 2 to 6 are independent once step 1 exists.
 
 ## Proof
 
-Each break from `recorded-breaks` for task T2 must make a test fail. Apply it, run
+Each break in this proof table must make a test fail. Apply it, run
 `go test -count=1 ./b2 -run 'CreateKey'`, record the failing output, revert, record the passing output.
 
 | Req | Break to apply | Test that must fail |
 | --- | --- | --- |
-| R5 | `b2/key.go:175`: pass `""` instead of `b.b.id()` | `TestBucketCreateKeySendsTheBucketID` |
+| R5 | `b2/key.go:175`: pass `""` instead of `b.b.id()` | `TestBucketCreateKeySendsTheBucketRestriction` |
 | R7 | `base/base.go:2081`: `err != nil` to `err == nil` | `TestCreateKeyReturnsB2Errors` |
 | R7 | `b2/key.go:128` and `:176`: drop the `if err != nil` return | `TestCreateKeyReturnsB2Errors` |
 | R1–R4 | `internal/b2types/b2types.go:443-448`: rename `keyName`, `capabilities`, `namePrefix` or `validDurationInSeconds` (one at a time) | `TestCreateKeyRequestBody` |

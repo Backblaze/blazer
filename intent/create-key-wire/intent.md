@@ -1,5 +1,5 @@
 # Intent: pin the b2_create_key request, response and errors
-Author: Felipe Fumero. Issue: #192. Parent: #97. Depends on: #191. Status: draft.
+Author: Felipe Fumero. Issue: #192. Parent: #97. Depends on: #191. Status: ready for review.
 
 ## Problem
 
@@ -55,6 +55,6 @@ above:
 ## Open questions
 
 1. Whether the older `base` tests at `base/base_v4_test.go:301,322` should be removed once the new tests
-   cover the same paths more strictly, or kept. This intent keeps them. (@goanpeca)
+   cover the same paths more strictly, or kept. This intent keeps them. Owner: @goanpeca.
 2. `Deadline` turns a time into a lifetime using the current clock, so its exact `validDurationInSeconds`
-   is not stable. This intent covers `Lifetime` and leaves `Deadline` out.
+   is not stable. This intent covers `Lifetime` and leaves `Deadline` out. Owner: @ffumero2003.

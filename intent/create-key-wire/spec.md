@@ -25,17 +25,20 @@ Source of truth for every expected value: the B2 API documentation for `b2_creat
   Prefix("p/"))` sends to v3 with `bucketId` `"bucket-from-list"` and `namePrefix` `"p/"`. (Kills
   `b2/key.go:175`.)
 - **R6. Response.** With a scripted response of `applicationKeyId` `"key-id"`, `applicationKey` `"secret"`,
-  `keyName` `"k1"`, `capabilities` `["readFiles"]` and `expirationTimestamp` `1767225600000`, the returned
-  `Key` has `ID() == "key-id"`, `Secret() == "secret"`, `Name() == "k1"`, `Capabilities() == ["readFiles"]`
-  and `Expires()` equal to `time.UnixMilli(1767225600000)`.
+  `keyName` `"k1"`, `capabilities` `["readFiles"]` and `expirationTimestamp` `1767225600000`, each of
+  `(*Client).CreateKey` without buckets, `(*Bucket).CreateKey`, and `(*Client).CreateKey` with two
+  `BucketIDs` returns a `Key` with `ID() == "key-id"`, `Secret() == "secret"`, `Name() == "k1"`,
+  `Capabilities() == ["readFiles"]` and `Expires()` equal to `time.UnixMilli(1767225600000)`.
 - **R7. Errors.** When B2 answers `b2_create_key` with status 400 (`{"status":400,"code":"bad_request",...}`)
   or 403 (`{"status":403,"code":"access_denied",...}`), each of `(*Client).CreateKey` without buckets, with one bucket, with two buckets,
-  and `(*Bucket).CreateKey` returns a non-nil error and a nil `*Key`. (Kills `base/base.go:2081`,
+  and `(*Bucket).CreateKey` returns a non-nil error and a nil `*Key`, the matching HTTP status from `base.Code`, the matching
+  B2 string code from `base.MsgCode`, and exactly one `b2_create_key` request. (Kills `base/base.go:2081`,
   `b2/key.go:128,176`.) Both statuses map to `Punt` in `base.Action` (`base/base.go:63-101`), so
   no retry hides the error. 401 is out of scope: blazer re-authorizes and replays on any 401 (#101). 5xx
   is out of scope: retry behavior for non-idempotent calls is #172 and #178.
 - **R8. Checks before any request.** `(*Client).CreateKey` with `Prefix` and no bucket, and
-  `(*Bucket).CreateKey` with `BucketIDs`, return an error, and no `b2_create_key` request is recorded.
+  `(*Bucket).CreateKey` with `BucketIDs`, return their exact validation error, a nil `*Key`, and no
+  `b2_create_key` request is recorded.
 - **R9. Test-only.** No file outside `*_test.go` and `intent/create-key-wire/` changes. Existing tests,
   including `base/base_v4_test.go:301,322`, stay as they are.
 
@@ -51,8 +54,10 @@ One new file, `b2/create_key_wire_test.go` (package `b2`), using `internal/b2wir
   recorded `Path`.
 - R5 scripts `b2_list_buckets` with one bucket whose `bucketId` is `"bucket-from-list"`. That makes the id
   come from the listing, independent of the code under test.
-- R6 and R7 script `b2_create_key` with `Reply`; R7 is table-driven over status code and call shape.
-- R8 asserts `len(srv.Calls("b2_create_key")) == 0`.
+- R6 and R7 script `b2_create_key` with `Reply`; R6 covers the client, bucket and v4 multi-bucket paths,
+  and R7 is table-driven over status code and call shape.
+- R8 table-drives the two invalid call shapes, asserting the exact validation message and
+  `len(srv.Calls("b2_create_key")) == 0` for each.
 
 Expected values are literals written from the B2 docs, never derived from blazer's output.
 
@@ -64,11 +69,11 @@ Expected values are literals written from the B2 docs, never derived from blazer
 | Expected values from the B2 docs | Literals in R1–R7, each test links the `b2_create_key` page |
 | Credential-free, race-safe | `b2wiretest` loopback server; run under `-race -count=5 -shuffle=on` |
 | Built on #191 | Design: only `internal/b2wiretest`, no new fake |
-| No new dependency | Test file imports only the standard library and `internal/b2wiretest` |
+| No new dependency | Test file imports the standard library, `base` for its public error accessors, and `internal/b2wiretest` |
 
 ## Areas of concern
 
 1. **Stacked on #191.** This branch starts from #191's branch. #191 merges first; this PR then targets
-   `main`. Owner: Felipe.
+   `main`. Owner: @ffumero2003.
 2. **Overlap with existing `base` tests** (intent open question 1). They are kept; removal can follow if a
    reviewer prefers. Owner: @goanpeca.

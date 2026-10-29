@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
@@ -36,6 +37,26 @@ func newCreateKeyWire(t *testing.T) (*b2wiretest.Server, *Client) {
 		t.Fatal(err)
 	}
 	return srv, client
+}
+
+func createKeyWireBucket(t *testing.T, srv *b2wiretest.Server, client *Client) *Bucket {
+	t.Helper()
+	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"bucket-from-list","bucketName":"bucket","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":1}]}`)
+	bucket, err := client.Bucket(context.Background(), "bucket")
+	if err != nil {
+		t.Fatalf("Bucket: %v", err)
+	}
+	return bucket
+}
+
+func bucketCreateKeyRequest(t *testing.T) b2wiretest.Request {
+	t.Helper()
+	srv, client := newCreateKeyWire(t)
+	bucket := createKeyWireBucket(t, srv, client)
+	if _, err := bucket.CreateKey(context.Background(), "k2", Capabilities("readFiles"), Lifetime(time.Hour), Prefix("p/")); err != nil {
+		t.Fatalf("Bucket.CreateKey: %v", err)
+	}
+	return srv.Last(t, "b2_create_key")
 }
 
 // B2 b2_create_key request fields: https://www.backblaze.com/apidocs/b2-create-key
@@ -154,128 +175,192 @@ func TestCreateKeyRequestBody(t *testing.T) {
 }
 
 // B2 b2_create_key bucket restrictions: https://www.backblaze.com/apidocs/b2-create-key
-func TestBucketCreateKeySendsTheBucketID(t *testing.T) {
-	ctx := context.Background()
-	srv, client := newCreateKeyWire(t)
-	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"bucket-from-list","bucketName":"bucket","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":1}]}`)
-
-	bucket, err := client.Bucket(ctx, "bucket")
-	if err != nil {
-		t.Fatalf("Bucket: %v", err)
-	}
-	if _, err := bucket.CreateKey(ctx, "k2", Capabilities("readFiles"), Lifetime(time.Hour), Prefix("p/")); err != nil {
-		t.Fatalf("Bucket.CreateKey: %v", err)
-	}
-
-	request := srv.Last(t, "b2_create_key")
+func TestBucketCreateKeySendsTheBucketRestriction(t *testing.T) {
+	request := bucketCreateKeyRequest(t)
 	if request.Path != "/b2api/v3/b2_create_key" {
 		t.Errorf("b2_create_key path = %q, want v3", request.Path)
 	}
-	b2wiretest.AssertJSON(t, request, "keyName", "k2")
-	b2wiretest.AssertJSON(t, request, "capabilities", []string{"readFiles"})
-	b2wiretest.AssertJSON(t, request, "validDurationInSeconds", 3600)
 	b2wiretest.AssertJSON(t, request, "bucketId", "bucket-from-list")
 	b2wiretest.AssertJSON(t, request, "namePrefix", "p/")
 	b2wiretest.AssertNoJSON(t, request, "bucketIds")
 }
 
+// B2 b2_create_key request fields: https://www.backblaze.com/apidocs/b2-create-key
+func TestBucketCreateKeyForwardsFields(t *testing.T) {
+	request := bucketCreateKeyRequest(t)
+	b2wiretest.AssertJSON(t, request, "keyName", "k2")
+	b2wiretest.AssertJSON(t, request, "capabilities", []string{"readFiles"})
+	b2wiretest.AssertJSON(t, request, "validDurationInSeconds", 3600)
+}
+
 // B2 b2_create_key error responses: https://www.backblaze.com/apidocs/b2-create-key
 func TestCreateKeyReturnsB2Errors(t *testing.T) {
 	ctx := context.Background()
-	tests := []struct {
-		name   string
+	statuses := []struct {
 		status int
 		code   string
+	}{
+		{status: http.StatusBadRequest, code: "bad_request"},
+		{status: http.StatusForbidden, code: "access_denied"},
+	}
+	shapes := []struct {
+		name   string
 		bucket bool
 		opts   []KeyOption
 	}{
-		{name: "400/account", status: http.StatusBadRequest, code: "bad_request", opts: []KeyOption{Capabilities("readFiles")}},
-		{name: "400/one bucket", status: http.StatusBadRequest, code: "bad_request", opts: []KeyOption{Capabilities("readFiles"), BucketIDs("b-1")}},
-		{name: "400/two buckets", status: http.StatusBadRequest, code: "bad_request", opts: []KeyOption{Capabilities("readFiles"), BucketIDs("b-1", "b-2")}},
-		{name: "400/bucket key", status: http.StatusBadRequest, code: "bad_request", bucket: true},
-		{name: "403/account", status: http.StatusForbidden, code: "access_denied", opts: []KeyOption{Capabilities("readFiles")}},
-		{name: "403/one bucket", status: http.StatusForbidden, code: "access_denied", opts: []KeyOption{Capabilities("readFiles"), BucketIDs("b-1")}},
-		{name: "403/two buckets", status: http.StatusForbidden, code: "access_denied", opts: []KeyOption{Capabilities("readFiles"), BucketIDs("b-1", "b-2")}},
-		{name: "403/bucket key", status: http.StatusForbidden, code: "access_denied", bucket: true},
+		{name: "account", opts: []KeyOption{Capabilities("readFiles")}},
+		{name: "one bucket", opts: []KeyOption{Capabilities("readFiles"), BucketIDs("b-1")}},
+		{name: "two buckets", opts: []KeyOption{Capabilities("readFiles"), BucketIDs("b-1", "b-2")}},
+		{name: "bucket key", bucket: true},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			srv, client := newCreateKeyWire(t)
-			srv.Reply("b2_create_key", test.status, fmt.Sprintf(`{"status":%d,"code":%q,"message":"rejected"}`, test.status, test.code))
+	for _, status := range statuses {
+		for _, shape := range shapes {
+			t.Run(fmt.Sprintf("%d/%s", status.status, shape.name), func(t *testing.T) {
+				srv, client := newCreateKeyWire(t)
+				srv.Reply("b2_create_key", status.status, fmt.Sprintf(`{"status":%d,"code":%q,"message":"rejected"}`, status.status, status.code))
 
-			var (
-				key *Key
-				err error
-			)
-			if test.bucket {
-				srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"bucket-from-list","bucketName":"bucket","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":1}]}`)
-				bucket, bucketErr := client.Bucket(ctx, "bucket")
-				if bucketErr != nil {
-					t.Fatalf("Bucket: %v", bucketErr)
+				var (
+					key *Key
+					err error
+				)
+				if shape.bucket {
+					bucket := createKeyWireBucket(t, srv, client)
+					key, err = bucket.CreateKey(ctx, "k1", Capabilities("readFiles"))
+				} else {
+					key, err = client.CreateKey(ctx, "k1", shape.opts...)
 				}
-				key, err = bucket.CreateKey(ctx, "k1", Capabilities("readFiles"))
-			} else {
-				key, err = client.CreateKey(ctx, "k1", test.opts...)
-			}
-			if err == nil {
-				t.Error("CreateKey error = nil, want B2 error")
-			}
-			if key != nil {
-				t.Errorf("CreateKey key = %#v, want nil", key)
-			}
-		})
+				if err == nil {
+					t.Error("CreateKey error = nil, want B2 error")
+				}
+				if gotStatus, _ := base.Code(err); gotStatus != status.status {
+					t.Errorf("base.Code(err) status = %d, want %d", gotStatus, status.status)
+				}
+				if _, gotCode, _ := base.MsgCode(err); gotCode != status.code {
+					t.Errorf("base.MsgCode(err) code = %q, want %q", gotCode, status.code)
+				}
+				if key != nil {
+					t.Errorf("CreateKey key = %#v, want nil", key)
+				}
+				if calls := srv.Calls("b2_create_key"); len(calls) != 1 {
+					t.Errorf("b2_create_key calls = %d, want 1", len(calls))
+				}
+			})
+		}
 	}
 }
 
 // B2 b2_create_key response fields: https://www.backblaze.com/apidocs/b2-create-key
 func TestCreateKeyReturnsTheResponseFields(t *testing.T) {
 	ctx := context.Background()
-	srv, client := newCreateKeyWire(t)
-	srv.Reply("b2_create_key", http.StatusOK, `{"applicationKeyId":"key-id","applicationKey":"secret","keyName":"k1","capabilities":["readFiles"],"expirationTimestamp":1767225600000}`)
+	tests := []struct {
+		name string
+		path string
+		call func(*testing.T, *b2wiretest.Server, *Client) (*Key, error)
+	}{
+		{
+			name: "client",
+			path: "/b2api/v3/b2_create_key",
+			call: func(_ *testing.T, _ *b2wiretest.Server, client *Client) (*Key, error) {
+				return client.CreateKey(ctx, "k1", Capabilities("readFiles"))
+			},
+		},
+		{
+			name: "bucket",
+			path: "/b2api/v3/b2_create_key",
+			call: func(t *testing.T, srv *b2wiretest.Server, client *Client) (*Key, error) {
+				return createKeyWireBucket(t, srv, client).CreateKey(ctx, "k1", Capabilities("readFiles"))
+			},
+		},
+		{
+			name: "multi-bucket",
+			path: "/b2api/v4/b2_create_key",
+			call: func(_ *testing.T, _ *b2wiretest.Server, client *Client) (*Key, error) {
+				return client.CreateKey(ctx, "k1", Capabilities("readFiles"), BucketIDs("b-1", "b-2"))
+			},
+		},
+	}
 
-	key, err := client.CreateKey(ctx, "k1", Capabilities("readFiles"))
-	if err != nil {
-		t.Fatalf("CreateKey: %v", err)
-	}
-	if key == nil {
-		t.Fatal("CreateKey key = nil, want key")
-	}
-	if key.ID() != "key-id" {
-		t.Errorf("ID = %q, want key-id", key.ID())
-	}
-	if key.Secret() != "secret" {
-		t.Errorf("Secret = %q, want secret", key.Secret())
-	}
-	if key.Name() != "k1" {
-		t.Errorf("Name = %q, want k1", key.Name())
-	}
-	if want := []string{"readFiles"}; !reflect.DeepEqual(key.Capabilities(), want) {
-		t.Errorf("Capabilities = %q, want %q", key.Capabilities(), want)
-	}
-	if want := time.UnixMilli(1767225600000); !key.Expires().Equal(want) {
-		t.Errorf("Expires = %v, want %v", key.Expires(), want)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv, client := newCreateKeyWire(t)
+			srv.Reply("b2_create_key", http.StatusOK, `{"applicationKeyId":"key-id","applicationKey":"secret","keyName":"k1","capabilities":["readFiles"],"expirationTimestamp":1767225600000}`)
+
+			key, err := test.call(t, srv, client)
+			if err != nil {
+				t.Fatalf("CreateKey: %v", err)
+			}
+			if key == nil {
+				t.Fatal("CreateKey key = nil, want key")
+			}
+			calls := srv.Calls("b2_create_key")
+			if len(calls) != 1 {
+				t.Fatalf("b2_create_key calls = %d, want 1", len(calls))
+			}
+			if calls[0].Path != test.path {
+				t.Errorf("b2_create_key path = %q, want %q", calls[0].Path, test.path)
+			}
+			if key.ID() != "key-id" {
+				t.Errorf("ID = %q, want key-id", key.ID())
+			}
+			if key.Secret() != "secret" {
+				t.Errorf("Secret = %q, want secret", key.Secret())
+			}
+			if key.Name() != "k1" {
+				t.Errorf("Name = %q, want k1", key.Name())
+			}
+			if want := []string{"readFiles"}; !reflect.DeepEqual(key.Capabilities(), want) {
+				t.Errorf("Capabilities = %q, want %q", key.Capabilities(), want)
+			}
+			if want := time.UnixMilli(1767225600000); !key.Expires().Equal(want) {
+				t.Errorf("Expires = %v, want %v", key.Expires(), want)
+			}
+		})
 	}
 }
 
 // B2 b2_create_key bucket restriction rules: https://www.backblaze.com/apidocs/b2-create-key
 func TestCreateKeyRejectsBadOptionsWithoutARequest(t *testing.T) {
 	ctx := context.Background()
-	srv, client := newCreateKeyWire(t)
-
-	if key, err := client.CreateKey(ctx, "k1", Prefix("p/")); err == nil || key != nil {
-		t.Errorf("Client.CreateKey(Prefix) = (%#v, %v), want nil key and error", key, err)
+	tests := []struct {
+		name    string
+		bucket  bool
+		wantErr string
+	}{
+		{
+			name:    "client prefix without bucket",
+			wantErr: "Prefix requires at least one bucket; use BucketIDs or create the key via (*Bucket).CreateKey",
+		},
+		{
+			name:    "bucket key with BucketIDs",
+			bucket:  true,
+			wantErr: "BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key",
+		},
 	}
 
-	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"bucket-from-list","bucketName":"bucket","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":1}]}`)
-	bucket, err := client.Bucket(ctx, "bucket")
-	if err != nil {
-		t.Fatalf("Bucket: %v", err)
-	}
-	if key, err := bucket.CreateKey(ctx, "k1", BucketIDs("b-1")); err == nil || key != nil {
-		t.Errorf("Bucket.CreateKey(BucketIDs) = (%#v, %v), want nil key and error", key, err)
-	}
-	if calls := srv.Calls("b2_create_key"); len(calls) != 0 {
-		t.Errorf("b2_create_key calls = %d, want 0", len(calls))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv, client := newCreateKeyWire(t)
+			var (
+				key *Key
+				err error
+			)
+			if test.bucket {
+				key, err = createKeyWireBucket(t, srv, client).CreateKey(ctx, "k1", BucketIDs("b-1"))
+			} else {
+				key, err = client.CreateKey(ctx, "k1", Prefix("p/"))
+			}
+			if err == nil {
+				t.Errorf("CreateKey error = nil, want %q", test.wantErr)
+			} else if err.Error() != test.wantErr {
+				t.Errorf("CreateKey error = %q, want %q", err, test.wantErr)
+			}
+			if key != nil {
+				t.Errorf("CreateKey key = %#v, want nil", key)
+			}
+			if calls := srv.Calls("b2_create_key"); len(calls) != 0 {
+				t.Errorf("b2_create_key calls = %d, want 0", len(calls))
+			}
+		})
 	}
 }
