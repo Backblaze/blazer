@@ -41,6 +41,8 @@ Tag each finding with its pass.
 
 - **Important**: breaks existing callers, sends a wrong request to B2, loses or leaks data or
   credentials, hangs, or leaves resources behind. A claimed behavior with no test pinning it is Important.
+  So is B2-dependent behavior with neither a live test nor a stated reason in the PR
+  ([docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test)).
 - **Nit**: style, naming, comments. At most five per review; summarize the rest as a count.
 - **Pre-existing**: a real bug this PR did not introduce. Report it so it is not lost, but it does not
   block this PR; suggest an issue.

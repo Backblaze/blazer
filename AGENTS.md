@@ -46,6 +46,10 @@ not exercised the wire.
 - Functional options (`WriterOption`, `KeyOption`, ...) for new knobs; never a new positional parameter on
   a public `b2` function. Options that conflict within one call (for example SSE-B2 and SSE-C on the same
   writer) return an error, never "last one wins". A per-call option may still override a client default.
+- A new B2 call, a changed request, or behavior that depends on how B2 answers (encryption, retention,
+  replication, large files, errors) needs a live test in `b2/integration_test.go` or
+  `base/integration_test.go`, or a reason in the PR why not. See
+  [docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test).
 - Comments are short and explain non-obvious decisions. Godoc on every exported identifier, including what
   is not supported.
 - Detail lives in [`docs/`](docs/README.md): B2 facts with sources in `b2-contracts.md`, test levels and
@@ -104,4 +108,5 @@ Each line was raised by a reviewer on at least two PRs.
 
 Run `make ci` and paste the tail of its output. All of build, vet, gofmt, tidy, verify, lint, tests (with
 `-race`), b2keys, cross-compile and changelog-check must pass. If a test fails, fix the code, not the test.
-List any live-B2 checks you ran, and any you could not.
+List any live-B2 checks you ran, and any you could not. Name the live test that covers B2-dependent
+behavior, or say why there is none ([docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test)).
