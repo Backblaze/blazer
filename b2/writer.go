@@ -933,7 +933,7 @@ func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, roo
 			return root.reupload(err)
 		}),
 		retry.OnRetry(func(attempt uint, err error) error {
-			blog.V(1).Infof("b2 upload part: error: %v; retrying", err)
+			blog.V(1).Infof("b2 upload part: error (%T); retrying", err)
 			fresh, err := large.getUploadPartURL(ctx)
 			if err != nil {
 				return err
