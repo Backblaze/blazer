@@ -143,14 +143,29 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 		case strings.HasSuffix(req.URL.Path, "/b2_create_bucket"):
 			write(map[string]interface{}{"bucketId": "bid", "bucketName": "bucket", "bucketType": "allPrivate", "bucketInfo": map[string]string{}, "lifecycleRules": []interface{}{}})
 		case strings.HasSuffix(req.URL.Path, "/b2_list_file_names"):
+			// https://www.backblaze.com/apidocs/b2-list-file-names
+			prefix, _ := body["prefix"].(string)
+			start, _ := body["startFileName"].(string)
+			count, _ := body["maxFileCount"].(float64)
+			if count == 0 {
+				count = 100
+			}
 			w.mu.Lock()
 			files := make([]map[string]interface{}, 0, len(w.files))
 			for _, f := range w.files {
-				files = append(files, f)
+				name := f["fileName"].(string)
+				if strings.HasPrefix(name, prefix) && name >= start {
+					files = append(files, f)
+				}
 			}
 			w.mu.Unlock()
 			sort.Slice(files, func(i, j int) bool { return files[i]["fileName"].(string) < files[j]["fileName"].(string) })
-			write(map[string]interface{}{"files": files})
+			var nextFileName interface{}
+			if len(files) > int(count) {
+				nextFileName = files[int(count)]["fileName"]
+				files = files[:int(count)]
+			}
+			write(map[string]interface{}{"files": files, "nextFileName": nextFileName})
 		case strings.HasSuffix(req.URL.Path, "/b2_get_upload_url"):
 			write(map[string]interface{}{"uploadUrl": w.server.URL + "/upload", "authorizationToken": "t"})
 		case req.URL.Path == "/upload":
@@ -273,6 +288,47 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 		t.Fatal(err)
 	}
 	return bucket, w
+}
+
+func TestSyncWireListsPrefixAcrossPages(t *testing.T) {
+	bucket, wire := newSyncWire(t)
+	wire.mu.Lock()
+	for name, id := range map[string]string{
+		"a-outside.txt": "outside",
+		"p/a.txt":       "a",
+		"p/b.txt":       "b",
+	} {
+		wire.files[name] = map[string]interface{}{
+			"fileId": id, "fileName": name, "action": "upload",
+		}
+	}
+	wire.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	iter := bucket.List(ctx, b2.ListPrefix("p/"), b2.ListPageSize(1))
+	var names []string
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(names); got != "[p/a.txt p/b.txt]" {
+		t.Fatalf("listed names = %s, want [p/a.txt p/b.txt]", got)
+	}
+
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	listCalls := 0
+	for _, request := range wire.requests {
+		if request.path == "/b2api/v4/b2_list_file_names" {
+			listCalls++
+		}
+	}
+	if listCalls != 2 {
+		t.Fatalf("list requests = %d, want 2 pages", listCalls)
+	}
 }
 
 func TestSyncContinuesAfterMissingFile(t *testing.T) {
