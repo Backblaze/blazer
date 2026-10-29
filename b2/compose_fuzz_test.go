@@ -1,6 +1,8 @@
 package b2
 
 import (
+	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,6 +13,20 @@ func TestComposeUploadedPartPlatformSize(t *testing.T) {
 	err := PartFromReader(strings.NewReader(""), 1<<31).validate(false)
 	if (err != nil) != (strconv.IntSize == 32) {
 		t.Fatalf("2 GiB part on %d-bit platform: %v", strconv.IntSize, err)
+	}
+	for _, size := range []uint64{2_147_483_646, 2_147_483_647, 2_147_483_648} {
+		err := validateComposePlatformSize(size, math.MaxInt32)
+		if size <= 2_147_483_647 && err != nil {
+			t.Fatalf("32-bit validation of %d = %v, want nil", size, err)
+		}
+		if size == 2_147_483_648 && (err == nil || err.Error() != "b2: Compose uploaded part exceeds this platform's maximum buffer size") {
+			t.Fatalf("32-bit validation of %d = %v, want platform-size error", size, err)
+		}
+	}
+	// The production call site still supplies the native int bound.
+	err = validateComposePlatformSize(2_147_483_648, uint64(^uint(0)>>1))
+	if (err != nil) != (strconv.IntSize == 32) {
+		t.Fatalf("native limit on %d-bit platform = %v", strconv.IntSize, err)
 	}
 }
 
@@ -29,5 +45,64 @@ func FuzzComposeRange(f *testing.F) {
 		if err := canonical.validate(nonFinal); err != nil {
 			t.Fatal(err)
 		}
+		// The documented 5 MB nonfinal minimum and 5 GB maximum are inclusive.
+		// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
+		for _, invalid := range []struct {
+			value    string
+			nonFinal bool
+		}{
+			{fmt.Sprintf("bytes=%d-%d", n, n+4_999_998), true},
+			{fmt.Sprintf("bytes=%d-%d", n+1, n), nonFinal},
+			{fmt.Sprintf("bytes=%d-%d", n, n+5_000_000_000), nonFinal},
+		} {
+			if err := PartFromCopy("source", invalid.value).validate(invalid.nonFinal); err == nil {
+				t.Fatalf("validate(%q, nonFinal=%t) = nil, want range rejection", invalid.value, invalid.nonFinal)
+			}
+		}
 	})
+}
+
+func TestComposeRejectsZeroUploadedPart(t *testing.T) {
+	err := PartFromReader(strings.NewReader(""), 0).validate(false)
+	if err == nil || err.Error() != "b2: Compose uploaded part needs a positive size and no copy source" {
+		t.Fatalf("validate zero-size part = %v, want positive-size error", err)
+	}
+}
+
+func TestComposeSingleByteRange(t *testing.T) {
+	// https://www.backblaze.com/apidocs/b2-copy-part (inclusive Range endpoints).
+	start, end, err := parseComposeRange("bytes=5-5")
+	if start != 5 || end != 5 || err != nil {
+		t.Fatalf("parseComposeRange = (%d, %d, %v), want (5, 5, nil)", start, end, err)
+	}
+}
+
+func TestComposeRangeOrdering(t *testing.T) {
+	start, end, err := parseComposeRange("bytes=6-5")
+	if start != 0 || end != 0 || err == nil || err.Error() != `b2: Compose invalid copy range "bytes=6-5"` {
+		t.Fatalf("parseComposeRange = (%d, %d, %v), want reversed-range rejection", start, end, err)
+	}
+}
+
+func TestComposeCopiedKnownTotalBoundary(t *testing.T) {
+	// Isolate aggregation from the separate per-part limit: B2's file cap is 10 TB.
+	// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
+	for _, tc := range []struct {
+		rangeEnd string
+		wantSize int64
+		wantErr  bool
+	}{
+		{"5000000000098", 4_999_999_999_999, false},
+		{"5000000000100", 5_000_000_000_001, true},
+	} {
+		part := PartFromCopy("source", "bytes=100-"+tc.rangeEnd)
+		if size, known := part.knownSize(); !known || size != tc.wantSize {
+			t.Fatalf("knownSize = %d, %t; want %d, true", size, known, tc.wantSize)
+		}
+		err := validateComposeTotalSize([]ComposePart{part, part})
+		const want = "b2: Compose part 2 brings the known total over the 10 TB (10,000,000,000,000 bytes) large-file limit"
+		if tc.wantErr && (err == nil || err.Error() != want) || !tc.wantErr && err != nil {
+			t.Fatalf("total error = %v, want over-limit=%t", err, tc.wantErr)
+		}
+	}
 }

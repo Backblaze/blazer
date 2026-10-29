@@ -31,6 +31,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 const composeMinPartSize = 5e6
@@ -287,6 +289,34 @@ func TestComposeRejectsMoreThan10000PartsBeforeStarting(t *testing.T) {
 	calls, _, _, _ := wire.snapshot()
 	if len(calls) != 0 {
 		t.Fatalf("too many parts started an upload: %v", calls)
+	}
+}
+
+func TestComposeAccepts10000PartsValidation(t *testing.T) {
+	// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
+	wire := b2wiretest.New(t)
+	wire.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+	wire.Reply("b2_create_bucket", http.StatusOK, noReplicationBucketJSON)
+	// Stop after validation, avoiding 10000 network copies in this boundary test.
+	wire.Reply("b2_start_large_file", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"validated 10000 parts"}`)
+	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(context.Background(), "n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := make([]ComposePart, 10000)
+	for i := range parts {
+		parts[i] = PartFromCopy("source", "bytes=0-4999999")
+	}
+	_, err = bucket.Compose(context.Background(), "at-limit", parts)
+	if err == nil || err.Error() != "b2_start_large_file: 400: validated 10000 parts" {
+		t.Fatalf("Compose error = %v, want scripted error after successful validation", err)
+	}
+	if got := len(wire.Calls("b2_start_large_file")); got != 1 {
+		t.Fatalf("start requests = %d, want 1", got)
 	}
 }
 
@@ -754,8 +784,8 @@ func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.status == http.StatusTooManyRequests && time.Since(started) < 900*time.Millisecond {
-				t.Fatal("copy_part retry ignored Retry-After: 1")
+			if tc.status != http.StatusUnauthorized && time.Since(started) < time.Second {
+				t.Fatalf("copy_part status %d retry waited %v, want at least 1s", tc.status, time.Since(started))
 			}
 			wire.mu.Lock()
 			defer wire.mu.Unlock()
