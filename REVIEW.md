@@ -44,9 +44,10 @@ Tag each finding with its pass.
 
 ## Sensitive paths
 
-For changes under `.github/workflows/`, `.changie.yaml`, release files, credential handling and `base/`
-wire or auth code, say in the summary that a human code owner must review them. An agent or Copilot
-approval never satisfies that.
+For changes under `.github/workflows/`, to `.changie.yaml`, `RELEASE.md` or `.github/CODEOWNERS`, to
+credential handling, and to `base/` wire or auth code, add a line to the summary that a human code owner
+must review them. It is a note, not a finding, so it has no severity and does not block by itself. An agent
+or Copilot approval never satisfies it.
 
 ## Severity
 
