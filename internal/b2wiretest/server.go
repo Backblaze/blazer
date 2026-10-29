@@ -177,6 +177,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add(name, value)
 		}
 	}
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(response.Status)
 	if _, err := io.WriteString(w, response.Body); err != nil {
 		s.t.Errorf("b2wiretest: write %s response: %v", call, err)

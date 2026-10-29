@@ -315,7 +315,7 @@ func TestUploadURLsAreServedAndRecorded(t *testing.T) {
 
 func TestReplySequenceRepeatsLast(t *testing.T) {
 	s := New(t)
-	s.ReplySequence("b2_copy_file", Response{Status: 503, Body: "retry"}, Response{Status: 200, Body: "ok", Header: http.Header{"X-Test": {"response"}}})
+	s.ReplySequence("b2_copy_file", Response{Status: 503, Body: "retry"}, Response{Status: 200, Body: "ok", Header: http.Header{"Content-Type": {"text/plain"}, "X-Test": {"response"}}})
 	for i, want := range []struct {
 		status int
 		body   string
@@ -330,6 +330,9 @@ func TestReplySequenceRepeatsLast(t *testing.T) {
 		}
 		if i > 0 && response.Header.Get("X-Test") != "response" {
 			t.Errorf("reply %d header = %q", i, response.Header.Get("X-Test"))
+		}
+		if i > 0 && response.Header.Get("Content-Type") != "text/plain" {
+			t.Errorf("reply %d Content-Type = %q, want text/plain", i, response.Header.Get("Content-Type"))
 		}
 	}
 	s.Reply("b2_copy_file", 201, "replacement")
@@ -374,6 +377,12 @@ func TestUnscriptedCallFails(t *testing.T) {
 	response := get(t, s.URL()+"/b2api/v4/b2_unknown")
 	if response.StatusCode != 400 {
 		t.Errorf("status = %d, want 400", response.StatusCode)
+	}
+	if got := response.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	if got := response.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
 	}
 	var body struct {
 		Status  int    `json:"status"`
@@ -434,6 +443,10 @@ func TestAssertNoJSONAndAssertHeader(t *testing.T) {
 func TestAssertQueryReportsGotAndWant(t *testing.T) {
 	r := Request{Call: "b2_get_bucket_notification_rules", Query: url.Values{"bucketId": {"b-1"}}}
 	fake := &recordingTB{TB: t}
+	AssertQuery(fake, r, "bucketId", "b-1")
+	if messages := fake.errors(); len(messages) != 0 {
+		t.Errorf("matching query reported errors: %v", messages)
+	}
 	AssertQuery(fake, r, "bucketId", "other")
 	AssertQuery(fake, r, "missing", "value")
 	messages := fake.errors()
