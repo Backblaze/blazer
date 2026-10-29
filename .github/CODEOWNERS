@@ -2,5 +2,5 @@
 # `area-owner-approvals` check on PRs touching it. The last matching rule wins, so
 # keep the catch-all first and the specific rules after it.
 
-*            @goanpeca @sophiecarreras @ffumero2003
+*            @goanpeca @sophiecarreras @ffumero2003 @david-santacruz-backblaze
 /.github/    @goanpeca @sophiecarreras
