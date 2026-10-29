@@ -297,7 +297,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 			return n, err
 		}
 		left := w.csize - w.w.Len()
-		if len(p) < left {
+		if len(p) <= left {
 			k, err := w.w.Write(p)
 			if err != nil {
 				w.setErr(err)
@@ -700,7 +700,7 @@ func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 		return nb, nil
 	}
 	w.init()
-	if size < int64(w.csize) {
+	if size <= int64(w.csize) {
 		// the magic happens on w.Close()
 		return size, nil
 	}
