@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -96,6 +97,7 @@ func TestWriterRetryLoggingOmitsErrorText(t *testing.T) {
 	if code, _ := base.Code(retryErr); code != status {
 		t.Fatalf("AuthorizeAccount status = %d, want %d", code, status)
 	}
+	errorType := fmt.Sprintf("%T", retryErr)
 
 	log.SetOutput(&output)
 	const size = 4
@@ -113,6 +115,9 @@ func TestWriterRetryLoggingOmitsErrorText(t *testing.T) {
 	}
 	if strings.Contains(output.String(), secret) {
 		t.Fatal("writer retry logged untrusted error text")
+	}
+	if !strings.Contains(output.String(), errorType) {
+		t.Fatalf("writer retry log did not retain error type %q", errorType)
 	}
 	if !strings.Contains(output.String(), "status 503") {
 		t.Fatal("writer retry log did not retain the HTTP status")
