@@ -40,7 +40,7 @@ No production file changes (R13).
 | R5 | `base/base.go` `ListKeys`: send `Next: ""` | R5 test |
 | R6 | `base/base.go` `Key.Delete`: send `KeyID: ""` | R6 test |
 | R7 | `b2/b2.go` `Cancel`: `status == "start"` → `status != "start"` | R7 test |
-| R8 | `base.Action`: return `Retry` (or the non-upload action) for the hang error | R8 test |
+| R8 | `base/base.go` `Action`: remove the `more than one upload using auth token` case; then the `e.code == 0` upload case | R8 test (each) |
 | R11 | `x/transport` `Response`: drop the `Body` message | the `Response`/`Body` test |
 
 Also record `go test -race -count=5 -shuffle=on ./b2 ./base ./x/transport` passing with the B2 credentials

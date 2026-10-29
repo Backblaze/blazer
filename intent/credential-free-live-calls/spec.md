@@ -32,9 +32,14 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
 
 ### base (`httptest`, as the existing `base/*_test.go` do)
 
-- **R8. Upload after a connection hang.** An upload whose transport stalls (`x/transport` `AfterNBytes` with a
-  blocking effect, or a handler that never responds) under a context deadline fails, and `Action(err)` is
-  `AttemptNewUpload`.
+- **R8. Upload after a connection hang.** This mirrors the live `TestUploadAuthAfterConnectionHang`: while one
+  upload on an upload URL is hung, a second upload with the same URL and token is refused by B2 with
+  `400 bad_request` and the message prefix `more than one upload using auth token` (restic/restic#1207).
+  Against an `httptest` server: the first `b2_upload_file` handler blocks (released at test end); the second
+  answers that 400. `Action(err)` for the second upload is `AttemptNewUpload`. Also: an upload whose
+  transport fails before any response (a connection reset, not a context error) yields `AttemptNewUpload`.
+  A context the caller cancelled or let expire is not an upload fault: `Action` is `Punt` (R9 covers the
+  error itself).
 - **R9. Cancellation and deadline.** A request made with an already-cancelled context returns an error that
   `errors.Is(err, context.Canceled)`; a request whose handler blocks past a short deadline returns an error
   that `errors.Is(err, context.DeadlineExceeded)`, and the handler observes its request context done. No sleeps
