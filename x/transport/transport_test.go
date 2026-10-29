@@ -117,6 +117,21 @@ func TestAfterNBytesTriggersOnce(t *testing.T) {
 	}
 }
 
+func TestAfterNBytesDoesNotTriggerForShortBody(t *testing.T) {
+	srv := transportTestServer(t)
+	var calls atomic.Int32
+	client := &http.Client{Transport: WithFailures(nil, AfterNBytes(3, func() {
+		calls.Add(1)
+	}))}
+	resp := transportRequest(t, client, context.Background(), srv.URL+"/upload", strings.NewReader("ab"))
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("effect calls after short body = %d, want 0", got)
+	}
+}
+
 func transportTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

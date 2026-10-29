@@ -41,7 +41,8 @@ func TestObjectHideWire(t *testing.T) {
 func TestBucketRevealWire(t *testing.T) {
 	t.Run("deletes newest hide marker", func(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
-		srv.Reply("b2_list_file_versions", http.StatusOK, `{"files":[{"fileId":"hide-id","fileName":"gone","action":"hide","uploadTimestamp":0}],"nextFileName":"","nextFileId":""}`)
+		// b2_list_file_versions returns versions in newest-first order.
+		srv.Reply("b2_list_file_versions", http.StatusOK, `{"files":[{"fileId":"hide-id","fileName":"gone","action":"hide","uploadTimestamp":2},{"fileId":"upload-id","fileName":"gone","action":"upload","uploadTimestamp":1}],"nextFileName":"","nextFileId":""}`)
 		srv.Reply("b2_delete_file_version", http.StatusOK, `{}`)
 		if err := bucket.Reveal(context.Background(), "gone"); err != nil {
 			t.Fatal(err)
@@ -52,7 +53,8 @@ func TestBucketRevealWire(t *testing.T) {
 	})
 	t.Run("leaves a current upload alone", func(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
-		srv.Reply("b2_list_file_versions", http.StatusOK, `{"files":[{"fileId":"upload-id","fileName":"gone","action":"upload","uploadTimestamp":0}],"nextFileName":"","nextFileId":""}`)
+		// b2_list_file_versions returns versions in newest-first order.
+		srv.Reply("b2_list_file_versions", http.StatusOK, `{"files":[{"fileId":"upload-id","fileName":"gone","action":"upload","uploadTimestamp":2},{"fileId":"hide-id","fileName":"gone","action":"hide","uploadTimestamp":1}],"nextFileName":"","nextFileId":""}`)
 		if err := bucket.Reveal(context.Background(), "gone"); err != nil {
 			t.Fatal(err)
 		}
@@ -84,8 +86,11 @@ func TestBucketAuthTokenWire(t *testing.T) {
 func TestObjectAuthURLWire(t *testing.T) {
 	srv, bucket := liveOnlyBucket(t)
 	srv.Reply("b2_get_download_authorization", http.StatusOK, `{"authorizationToken":"download-token"}`)
-	object := bucket.Object("folder/a b.txt")
-	const disposition = `attachment; filename="a b.txt"`
+	const (
+		objectName  = "folder/a b.txt"
+		disposition = `attachment; filename="a b.txt"`
+	)
+	object := bucket.Object(objectName)
 	u, err := object.AuthURL(context.Background(), time.Hour, disposition)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +102,7 @@ func TestObjectAuthURLWire(t *testing.T) {
 		t.Errorf("b2ContentDisposition = %q, want %q", got, disposition)
 	}
 	request := srv.Last(t, "b2_get_download_authorization")
-	b2wiretest.AssertJSON(t, request, "fileNamePrefix", object.Name())
+	b2wiretest.AssertJSON(t, request, "fileNamePrefix", objectName)
 	b2wiretest.AssertJSON(t, request, "b2ContentDisposition", disposition)
 	u, err = object.AuthURL(context.Background(), time.Hour, "")
 	if err != nil {
