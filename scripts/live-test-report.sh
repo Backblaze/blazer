@@ -58,11 +58,20 @@ fi
 jq -r 'select(.Test == null and (.Action == "pass" or .Action == "fail" or .Action == "skip"))
   | "\(.Action | ascii_upcase) \(.Package) (\(.Elapsed // 0)s)"' "$in" | sed "s#$module/##"
 
-if [ -n "$failed" ]; then
+# Output of failed tests, and of tests a panic or timeout cut off: Go attributes that stack trace to the
+# running test but emits no failure event for it, only one for the package.
+if [ -n "$failed" ] || [ -n "$failed_pkgs" ]; then
   echo "::group::Output of failed tests"
   out=$(mktemp)
-  jq -rjs '[.[] | select(.Action == "fail" and .Test != null) | "\(.Package) \(.Test)"] as $f
-    | .[] | select(.Action == "output" and .Test != null and ("\(.Package) \(.Test)" as $k | $f | index($k)))
+  jq -rjs '
+    def key: "\(.Package) \(.Test)";
+    [.[] | select(.Action == "fail" and .Test == null) | .Package] as $badpkgs
+    | [.[] | select(.Test != null and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | key] as $done
+    | [.[] | select(.Action == "run" and (.Package as $p | $badpkgs | index($p) != null)) | key | select(. as $k | $done | index($k) == null)] as $cut
+    | [.[] | select(.Action == "fail" and .Test != null) | key] as $f
+    | .[] | select(.Action == "output" and (
+        (.Test != null and ((key as $k | $f | index($k) != null) or (key as $k | $cut | index($k) != null)))
+        or (.Test == null and (.Package as $p | $badpkgs | index($p) != null))))
     | .Output' "$in" >"$out"
   head -n 300 "$out"
   rm -f "$out"

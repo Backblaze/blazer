@@ -43,15 +43,34 @@ cp "$tmp/pass.json" "$tmp/fail.json"
 check "prints the output of a failed test" 1 "attrs_test.go:9: boom" "$tmp/fail.json"
 
 # A passing test whose name is a prefix of a failing one must not have its output printed.
-cp "$tmp/fail.json" "$tmp/prefix.json"
+cp "$tmp/pass.json" "$tmp/prefix.json"
 {
-  printf '%s\n' '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestAttrsLong","Output":"PASSING-OUTPUT\n"}'
-  ev pass b2 TestAttrsLong
+  printf '%s\n' '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestAttrs","Output":"PASSING-OUTPUT\n"}'
+  printf '%s\n' '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestAttrsLong","Output":"FAILING-OUTPUT\n"}'
+  ev fail b2 TestAttrsLong
 } >>"$tmp/prefix.json"
 set +e
 out=$(GITHUB_STEP_SUMMARY="$tmp/summary.md" "$here/live-test-report.sh" "$tmp/prefix.json" 2>&1)
 set -e
-if grep -qF PASSING-OUTPUT <<<"$out"; then echo "FAIL prints output of a passing test"; fail=1; else echo "ok   prints only failed tests' output"; fi
+if grep -qF FAILING-OUTPUT <<<"$out" && ! grep -qF PASSING-OUTPUT <<<"$out"; then
+  echo "ok   prints only failed tests' output"
+else
+  echo "FAIL exact test-name matching"; sed 's/^/       /' <<<"$out"; fail=1
+fi
+
+# A timeout: Go attributes the stack trace to the running test and emits only a package failure.
+cp "$tmp/pass.json" "$tmp/timeout.json"
+{
+  printf '%s\n' '{"Action":"run","Package":"github.com/Backblaze/blazer/b2","Test":"TestHangs"}'
+  printf '%s\n' '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestHangs","Output":"panic: test timed out after 30m0s\n"}'
+  printf '%s\n' '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestAttrs","Output":"UNRELATED-OUTPUT\n"}'
+  printf '%s\n' '{"Action":"fail","Package":"github.com/Backblaze/blazer/b2","Elapsed":1800}'
+} >>"$tmp/timeout.json"
+check "prints the timeout reason of a cut-off test" 1 "panic: test timed out after 30m0s" "$tmp/timeout.json"
+set +e
+out=$(GITHUB_STEP_SUMMARY="$tmp/summary.md" "$here/live-test-report.sh" "$tmp/timeout.json" 2>&1)
+set -e
+if grep -qF UNRELATED-OUTPUT <<<"$out"; then echo "FAIL prints output of a passing test in a failed package"; fail=1; else echo "ok   skips finished tests in a failed package"; fi
 
 # More than 300 lines of output must still reach the closing group and the error line.
 cp "$tmp/pass.json" "$tmp/long.json"
