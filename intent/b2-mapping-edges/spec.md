@@ -43,7 +43,7 @@ Sources of truth (each test links or quotes its source):
   returns exactly the 10 user entries; with 9 user entries it adds `large_file_sha1` only.
 - **R11. ChunkSize neighbors.** `ReadFrom` with a seekable reader of `ChunkSize - 1` and `ChunkSize + 1`
   bytes: assert the endpoint sequence and the uploaded bytes for each. The exact-ChunkSize case exposed
-  a one-part large-file upload and is split into a separate product-bug issue (number to be added), per
+  a one-part large-file upload and is split into a separate product-bug issue (#221), per
   the owner's direction. The `<` to `<=` break is not provable with these remaining cases.
 - **R12. Test-only.** Only `b2/*_test.go` and `intent/b2-mapping-edges/` change.
 

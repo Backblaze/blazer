@@ -49,7 +49,7 @@ server response still reports the original rule. Per the owner's direction, reco
 mutant and retain the test as a regression check; do not require resending cached rules.
 
 R11 scope update: the exact-ChunkSize test exposed a one-part large-file upload on current code.
-Per the owner's direction, that product bug and its test are split out (issue number to be added).
+Per the owner's direction, that product bug and its test are split out (#221).
 This PR covers only ChunkSize minus one and plus one; the R11 break is not provable with those cases.
 
 Also record `go test -race -count=5 -shuffle=on ./b2/...` passing with the B2 credentials unset, and `make ci`.
