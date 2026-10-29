@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,9 +77,35 @@ func TestSyncDryRunAndCancellation(t *testing.T) {
 	if n != 0 {
 		t.Fatal("dry run uploaded files")
 	}
+	if _, err := Sync(context.Background(), bucket, "dry", root); err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	uploads := len(wire.uploads)
+	wire.mu.Unlock()
+	result, err = Sync(context.Background(), bucket, "dry", root, WithDryRun())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Uploaded) != 0 || fmt.Sprint(result.Skipped) != "[file.txt]" || result.BytesUploaded != 0 {
+		t.Fatalf("dry existing result=%+v", result)
+	}
+	wire.mu.Lock()
+	gotUploads := len(wire.uploads)
+	wire.mu.Unlock()
+	if gotUploads != uploads {
+		t.Fatalf("dry run over existing file made %d uploads, want %d", gotUploads, uploads)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := Sync(ctx, bucket, "cancelled", root); err != context.Canceled {
+	walk := func(root string, visit fs.WalkDirFunc) error {
+		return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+			if path != root {
+				cancel()
+			}
+			return visit(path, entry, walkErr)
+		})
+	}
+	if _, err := syncWithLocalIO(ctx, bucket, "cancelled", root, walk, fileSHA1); err != context.Canceled {
 		t.Fatalf("cancelled sync: %v", err)
 	}
 }

@@ -533,7 +533,7 @@ func TestSyncUsesRequestedConcurrency(t *testing.T) {
 		active--
 		gate.Unlock()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { _, err := Sync(ctx, bucket, "parallel", root, WithConcurrency(2)); result <- err }()
@@ -552,6 +552,39 @@ func TestSyncUsesRequestedConcurrency(t *testing.T) {
 	defer gate.Unlock()
 	if maximum != 2 {
 		t.Fatalf("maximum simultaneous uploads=%d, want 2", maximum)
+	}
+}
+
+func TestSyncWalkErrorsHandleNilAndDirectoryEntries(t *testing.T) {
+	bucket, _ := newSyncWire(t)
+	root := t.TempDir()
+	walkErr := errors.New("walk failed")
+	dirInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		entry     fs.DirEntry
+		wantVisit error
+	}{
+		{"nil entry", nil, nil},
+		{"directory entry", fs.FileInfoToDirEntry(dirInfo), fs.SkipDir},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var visitErr error
+			walk := func(path string, visit fs.WalkDirFunc) error {
+				visitErr = visit(filepath.Join(path, "unreadable"), test.entry, walkErr)
+				return nil
+			}
+			result, err := syncWithLocalIO(context.Background(), bucket, "p", root, walk, fileSHA1)
+			if visitErr != test.wantVisit {
+				t.Fatalf("walk callback = %v, want %v", visitErr, test.wantVisit)
+			}
+			if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Err != walkErr {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+		})
 	}
 }
 
