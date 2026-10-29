@@ -56,9 +56,10 @@ changelog-check:
 changelog-new:
 	$(CHANGIE) new
 
-# Holds a release while solvable security or quality findings are open (see RELEASE.md).
+# Runs the shell tests for scripts/ (scripts/*_test.sh).
 scripts-test:
 	for t in scripts/*_test.sh; do "$$t" || exit 1; done
 
+# Holds a release while solvable security or quality findings are open (see RELEASE.md).
 release-check:
 	scripts/release-check.sh
