@@ -39,8 +39,11 @@ Sources of truth (each test links or quotes its source):
   `b2_upload_part` for parts 1 to 103.
 - **R10. No 11th file-info entry.** `fileInfoFromAttrs` with 10 user entries plus `SHA1` and `LastModified`
   returns exactly the 10 user entries; with 9 user entries it adds `large_file_sha1` only.
-- **R11. Exact ChunkSize boundary.** `ReadFrom` with a seekable reader of exactly `ChunkSize` bytes sends one
-  `b2_upload_file` and no `b2_start_large_file`; `ChunkSize + 1` bytes starts a large file.
+- **R11. Exact ChunkSize boundary.** `ReadFrom` with a seekable reader of `ChunkSize - 1`, exactly `ChunkSize`
+  and `ChunkSize + 1` bytes: assert the endpoint sequence and the uploaded bytes for each. B2 requires at least
+  two parts for a large file, so a single part of exactly `ChunkSize` must not finish as a one-part large
+  file. If the `<=` break (Proof) yields identical requests for all three sizes, it is an equivalent mutant:
+  record that in the PR and strike the item on the issue instead of forcing a test.
 - **R12. Test-only.** Only `b2/*_test.go` and `intent/b2-mapping-edges/` change.
 
 ## Design
