@@ -98,16 +98,12 @@ jobs:
     permissions:
       issues: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          title="Live integration tests are failing on main"
-          body="Run $RUN_URL failed (trigger: $GITHUB_EVENT_NAME, commit $GITHUB_SHA). See the run summary for the failing tests."
-          n=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$n" ]; then
-            gh issue comment "$n" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body"
-          fi
+          scripts/live-failure-issue.sh "Run $RUN_URL failed (trigger: $GITHUB_EVENT_NAME, commit $GITHUB_SHA). See the run summary for the failing tests."
