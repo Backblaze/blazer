@@ -111,6 +111,12 @@ func (s *Server) Last(t testing.TB, call string) Request {
 	return requests[len(requests)-1]
 }
 
+func decodeJSON(body []byte) map[string]any {
+	var decoded map[string]any
+	_ = json.Unmarshal(body, &decoded)
+	return decoded
+}
+
 func copyRequests(requests []Request) []Request {
 	result := make([]Request, len(requests))
 	for i, r := range requests {
@@ -124,8 +130,7 @@ func copyRequests(requests []Request) []Request {
 		result[i].Header = r.Header.Clone()
 		result[i].Body = append([]byte(nil), r.Body...)
 		if r.JSON != nil {
-			result[i].JSON = nil
-			_ = json.Unmarshal(result[i].Body, &result[i].JSON)
+			result[i].JSON = decodeJSON(result[i].Body)
 		}
 	}
 	return result
@@ -141,7 +146,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	call := r.URL.Path[strings.LastIndexByte(r.URL.Path, '/')+1:]
 	req := Request{Method: r.Method, Path: r.URL.Path, Call: call, Query: r.URL.Query(), Header: r.Header.Clone(), Body: body}
 	if len(body) > 0 {
-		_ = json.Unmarshal(body, &req.JSON)
+		req.JSON = decodeJSON(body)
 	}
 
 	s.mu.Lock()

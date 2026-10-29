@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	wireContentType = "text/html; charset=utf-8"
-	defaultContent  = "application/octet-stream"
+	wireContentType    = "text/html; charset=utf-8"
+	defaultContentType = "application/octet-stream"
 )
 
 type uploadContentTypeWire struct {
@@ -52,15 +52,19 @@ func TestWriterSendsContentType(t *testing.T) {
 		want  string
 	}{
 		{name: "small explicit", opts: []WriterOption{WithAttrsOption(&Attrs{ContentType: wireContentType})}, want: wireContentType},
-		{name: "small default", want: defaultContent},
+		{name: "small default", want: defaultContentType},
 		{name: "large explicit", large: true, opts: []WriterOption{WithAttrsOption(&Attrs{ContentType: wireContentType})}, want: wireContentType},
-		{name: "large default", large: true, want: defaultContent},
+		{name: "large default", large: true, want: defaultContentType},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newUploadContentTypeWire(t)
 			writer := wire.bucket.Object("object").NewWriter(context.Background(), tc.opts...)
 			payload := []byte("0123456789")
 			if tc.large {
+				// 10 is intentionally far below Writer's documented 5 MB minimum part size, used only
+				// to force the multi-part (b2_start_large_file) path in this wire test. The b2wiretest
+				// recording server does not enforce B2's minimum, so this is valid here but not as a
+				// real-world ChunkSize.
 				writer.ChunkSize = 10
 				payload = append(bytes.Repeat(payload, 2), []byte("01234")...)
 			}
