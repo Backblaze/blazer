@@ -115,7 +115,9 @@ func TestCopyPartReplacementsKeepKnownPartSizes(t *testing.T) {
 			http.Error(w, "part sizes should be known", http.StatusInternalServerError)
 		case "/b2api/v4/b2_copy_part":
 			if copyCalls == len(responses) {
-				t.Fatal("too many copy-part requests")
+				t.Errorf("too many copy-part requests")
+				http.Error(w, "too many copy-part requests", http.StatusInternalServerError)
+				return
 			}
 			response := responses[copyCalls]
 			copyCalls++
@@ -175,14 +177,18 @@ func TestCopyPartListPartsSeedsNilPartSizes(t *testing.T) {
 			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
 		case "/b2api/v4/b2_list_parts":
 			if listCalls == len(listed) {
-				t.Fatal("unexpected third list-parts request")
+				t.Errorf("unexpected third list-parts request")
+				http.Error(w, "unexpected third list-parts request", http.StatusInternalServerError)
+				return
 			}
 			part := listed[listCalls]
 			listCalls++
 			_, _ = fmt.Fprintf(w, `{"parts":[{"fileId":"large","partNumber":%d,"contentSha1":%q,"contentLength":%d}],"nextPartNumber":%d}`, part.number, part.sha1, part.size, part.number+1)
 		case "/b2api/v4/b2_copy_part":
 			if copyCalls == len(replacements) {
-				t.Fatal("too many copy-part requests")
+				t.Errorf("too many copy-part requests")
+				http.Error(w, "too many copy-part requests", http.StatusInternalServerError)
+				return
 			}
 			part := replacements[copyCalls]
 			copyCalls++
