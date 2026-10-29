@@ -54,7 +54,8 @@ type Writer struct {
 
 	// ChunkSize is the size, in bytes, of each individual part, when writing
 	// large files, and also when determining whether to upload a file normally
-	// or when to split it into parts.  The default is 100M (1e8)  The minimum is
+	// or when to split it into parts: an upload of at most ChunkSize bytes is
+	// sent as a single file.  The default is 100M (1e8)  The minimum is
 	// 5M (5e6); values less than this are not an error, but will fail.  The
 	// maximum is 5GB (5e9).
 	ChunkSize int
