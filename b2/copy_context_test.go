@@ -141,7 +141,7 @@ func TestWriterReadFromCancellationStopsWriteAfterClose(t *testing.T) {
 	}
 	// ErrClosed or context.Canceled here would come from Writer.Write itself:
 	// the abandoned copy must reject the call before it can reach that method.
-	if source.n != 0 || source.err == nil || source.err.Error() != "b2: copy abandoned" {
+	if source.n != 0 || !errors.Is(source.err, errCopyAbandoned) {
 		t.Errorf("delayed Write after Close = (%d, %v), want (0, b2: copy abandoned)", source.n, source.err)
 	}
 }

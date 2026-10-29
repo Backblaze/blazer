@@ -644,6 +644,12 @@ func (w *Writer) sendChunk() error {
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
+// If the Writer's context is cancelled while ReadFrom is waiting on a
+// non-seekable r, ReadFrom returns the context error at once, but a Read on r
+// that is already in progress may still finish later. Nothing it returns is
+// written to w. Do not reuse r until that Read has returned (for example, close
+// r first if it supports it).
+//
 // With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
 // its remaining length supplies the progress total.
 func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
