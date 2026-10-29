@@ -19,6 +19,8 @@ passed=$(jq -r 'select(.Action == "pass" and .Test != null) | "\(.Package) \(.Te
 missing=$(comm -23 <(echo "$required") <(echo "$passed"))
 skipped=$(jq -r 'select(.Action == "skip" and .Test != null) | "\(.Package) \(.Test)"' "$in" | sort -u)
 failed=$(jq -r 'select(.Action == "fail" and .Test != null) | "\(.Package) \(.Test)"' "$in" | sort -u)
+# A package that crashes or times out fails with no Test field and may leave no failed test behind.
+failed_pkgs=$(jq -r 'select(.Action == "fail" and .Test == null) | .Package' "$in" | sort -u)
 
 # Top-level tests only; subtests contain a slash.
 top() { jq -c "select(.Test != null and (.Test | contains(\"/\") | not) and .Action == \"$1\")" "$in" | grep -c . || true; }
@@ -41,12 +43,14 @@ list() {
   echo "| --- | --- | --- | --- |"
   echo "| $nlive of $nreq | $(top pass) | $(top fail) | $(top skip) |"
   list "Failed" "$failed"
+  list "Failed packages" "$failed_pkgs"
   list "Skipped (no test may skip in the live run)" "$skipped"
   list "Live tests that did not pass" "$missing"
 } >>"$summary"
 
 status=0
 [ -n "$failed" ] && { echo "::error::Tests failed in the live run."; status=1; }
+[ -n "$failed_pkgs" ] && { echo "::error::Packages failed in the live run (crash, timeout or build error)."; status=1; }
 [ -n "$skipped" ] && { echo "::error::Tests skipped in the live run; a skipped live test did not reach B2."; status=1; }
 [ -n "$missing" ] && { echo "::error::$((nreq - nlive)) of $nreq live tests did not pass."; status=1; }
 [ "$nreq" -eq 0 ] && { echo "::error::No live tests found in ${live_files[*]}."; status=1; }
