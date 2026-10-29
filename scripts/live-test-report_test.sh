@@ -55,9 +55,8 @@ if grep -qF PASSING-OUTPUT <<<"$out"; then echo "FAIL prints output of a passing
 
 # More than 300 lines of output must still reach the closing group and the error line.
 cp "$tmp/pass.json" "$tmp/long.json"
-for i in $(seq 1 1000); do
-  printf '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestAttrs","Output":"line %s\\n"}\n' "$i"
-done >>"$tmp/long.json"
+# Enough output to fill the pipe, so a `head` that exits early would SIGPIPE the writer.
+awk 'BEGIN { pad = sprintf("%80s", ""); for (i = 1; i <= 5000; i++) printf "{\"Action\":\"output\",\"Package\":\"github.com/Backblaze/blazer/b2\",\"Test\":\"TestAttrs\",\"Output\":\"line %d%s\\n\"}\n", i, pad }' >>"$tmp/long.json"
 ev fail b2 TestAttrs >>"$tmp/long.json"
 check "keeps the error line after long failure output" 1 "::error::Tests failed in the live run." "$tmp/long.json"
 
