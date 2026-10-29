@@ -208,12 +208,12 @@ func TestAccountInfoConcurrency(t *testing.T) {
 		{name: "file", store: NewAccountInfoFile(filePath), path: filePath},
 	}
 	for _, store := range stores {
-		store := store
 		t.Run(store.name, func(t *testing.T) {
 			written := make(map[string]string, 8)
 			for i := 0; i < 8; i++ {
 				written[fmt.Sprintf("account-%d", i)] = fmt.Sprintf("token-%d", i)
 			}
+			// This deliberately does not assert which concurrent write wins, only that reads and the final value are complete pairs.
 			check := func(got AuthData, ok bool) {
 				wantToken, found := written[got.AccountID]
 				if !ok || !found || got.AuthToken != wantToken {
