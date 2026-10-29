@@ -27,6 +27,7 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go mod tidy -diff
       - run: go mod verify
+      - run: make scripts-test
 
   lint:
     name: lint

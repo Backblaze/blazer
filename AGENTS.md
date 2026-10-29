@@ -24,6 +24,7 @@ coding agents and new contributors; `CLAUDE.md` points here. Keep it under about
 | `b2/` | Public, high-level API (`Client`, `Bucket`, `Object`, `Writer`, `Reader`). Users import this. |
 | `base/` | Low-level wire layer: one function per B2 call, request/response JSON, retry and reauth. |
 | `internal/b2types/` | JSON request/response structs shared by `base`. Wire-shape changes start here. |
+| `internal/b2wiretest/` | Recording `httptest` B2 server for wire tests; imported only from `_test.go`. |
 | `internal/retry/`, `internal/blog/` | Backoff helpers and debug logging. |
 | `x/` | Experimental packages (`consistent`, `transport`, `window`); weaker compatibility promise. |
 | `bin/b2keys/` | Key-management CLI, its own module. |
@@ -46,6 +47,10 @@ not exercised the wire.
 - Functional options (`WriterOption`, `KeyOption`, ...) for new knobs; never a new positional parameter on
   a public `b2` function. Options that conflict within one call (for example SSE-B2 and SSE-C on the same
   writer) return an error, never "last one wins". A per-call option may still override a client default.
+- A new B2 call, a changed request, or behavior that depends on how B2 answers (encryption, retention,
+  replication, large files, errors) needs a live test in `b2/integration_test.go` or
+  `base/integration_test.go`, or a reason in the PR why not. See
+  [docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test).
 - Comments are short and explain non-obvious decisions. Godoc on every exported identifier, including what
   is not supported.
 - Detail lives in [`docs/`](docs/README.md): B2 facts with sources in `b2-contracts.md`, test levels and
@@ -59,6 +64,7 @@ Each line was raised by a reviewer on at least two PRs.
 2. **Tests that do not pin the fix.** Revert the change and the new test must fail. Prove it in the PR.
    Assert the request body sent on the wire (`httptest` server or `RoundTripper` stub through `NewClient`),
    not only the fake backend or a decoded response.
+   New wire tests use `internal/b2wiretest`; existing per-feature fakes stay until a test is rewritten.
 3. **Read-modify-write on `b2_update_bucket`.** Omit fields the caller did not change (`lifecycleRules`,
    `defaultRetention`, `defaultServerSideEncryption`, `replicationConfiguration`). Sending cached values
    needs extra capabilities and can regenerate rule IDs. Test two updates in a row on the same handle.
@@ -104,4 +110,5 @@ Each line was raised by a reviewer on at least two PRs.
 
 Run `make ci` and paste the tail of its output. All of build, vet, gofmt, tidy, verify, lint, tests (with
 `-race`), b2keys, cross-compile and changelog-check must pass. If a test fails, fix the code, not the test.
-List any live-B2 checks you ran, and any you could not.
+List any live-B2 checks you ran, and any you could not. Name the live test that covers B2-dependent
+behavior, or say why there is none ([docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test)).
