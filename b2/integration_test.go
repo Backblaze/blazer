@@ -899,8 +899,8 @@ func TestAttrsNoRoundtrip(t *testing.T) {
 	obj := iter.Object()
 
 	var trips int
-	for range bucket.c.Status().table()["1m"] {
-		trips++
+	for _, counts := range bucket.c.Status().table() {
+		trips += counts["1m"]
 	}
 	attrs, err := obj.Attrs(ctx)
 	if err != nil {
@@ -911,8 +911,8 @@ func TestAttrsNoRoundtrip(t *testing.T) {
 	}
 
 	var newTrips int
-	for range bucket.c.Status().table()["1m"] {
-		newTrips++
+	for _, counts := range bucket.c.Status().table() {
+		newTrips += counts["1m"]
 	}
 	if trips != newTrips {
 		t.Errorf("Attrs() should not have caused any net traffic, but it did: old %d, new %d", trips, newTrips)

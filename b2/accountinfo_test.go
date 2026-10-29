@@ -198,23 +198,57 @@ func TestNewClientReauthorizesIncompleteSession(t *testing.T) {
 }
 
 func TestAccountInfoConcurrency(t *testing.T) {
-	stores := []AccountInfo{&InMemoryAccountInfo{}, NewAccountInfoFile(filepath.Join(t.TempDir(), "private", "account.json"))}
+	filePath := filepath.Join(t.TempDir(), "private", "account.json")
+	stores := []struct {
+		name  string
+		store AccountInfo
+		path  string
+	}{
+		{name: "memory", store: &InMemoryAccountInfo{}},
+		{name: "file", store: NewAccountInfoFile(filePath), path: filePath},
+	}
 	for _, store := range stores {
-		t.Run(fmt.Sprintf("%T", store), func(t *testing.T) {
+		store := store
+		t.Run(store.name, func(t *testing.T) {
+			written := make(map[string]string, 8)
+			for i := 0; i < 8; i++ {
+				written[fmt.Sprintf("account-%d", i)] = fmt.Sprintf("token-%d", i)
+			}
+			check := func(got AuthData, ok bool) {
+				wantToken, found := written[got.AccountID]
+				if !ok || !found || got.AuthToken != wantToken {
+					t.Errorf("AuthData() = %+v, ok=%t; want one complete written value", got, ok)
+				}
+			}
 			var wg sync.WaitGroup
 			for i := 0; i < 8; i++ {
+				data := AuthData{AccountID: fmt.Sprintf("account-%d", i), AuthToken: fmt.Sprintf("token-%d", i)}
 				wg.Add(1)
-				go func() {
+				go func(data AuthData) {
 					defer wg.Done()
 					for j := 0; j < 20; j++ {
-						store.Set(sampleAuthData())
-						store.AuthData()
+						store.store.Set(data)
+						got, ok := store.store.AuthData()
+						check(got, ok)
 					}
-				}()
+				}(data)
 			}
 			wg.Wait()
-			if f, ok := store.(*AccountInfoFile); ok && f.Err() != nil {
+			final, ok := store.store.AuthData()
+			check(final, ok)
+			if f, ok := store.store.(*AccountInfoFile); ok && f.Err() != nil {
 				t.Fatal(f.Err())
+			}
+			if store.path != "" {
+				reloaded := NewAccountInfoFile(store.path)
+				got, ok := reloaded.AuthData()
+				if err := reloaded.Err(); err != nil {
+					t.Fatal(err)
+				}
+				check(got, ok)
+				if got.AccountID != final.AccountID || got.AuthToken != final.AuthToken {
+					t.Errorf("reloaded AuthData() = %+v, want %+v", got, final)
+				}
 			}
 		})
 	}
