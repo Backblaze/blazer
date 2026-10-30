@@ -50,12 +50,21 @@ type Reducer func(i, j interface{}) interface{}
 // given resolution.  Windows with tight resolution (i.e., small values for
 // that argument) will be more accurate, at the cost of some memory.
 //
-// A size of 0 means "forever"; old events will never be removed.
+// A size of 0 means "forever"; old events will never be removed. Finite
+// windows require a positive resolution and panic otherwise. When size is
+// less than resolution, New uses one bucket.
 func New(size, resolution time.Duration, r Reducer) *Window {
 	if size > 0 {
+		if resolution <= 0 {
+			panic("window: resolution must be positive for a finite window")
+		}
+		buckets := size / resolution
+		if size%resolution != 0 {
+			buckets++
+		}
 		return &Window{
 			res:    resolution,
-			events: make([]interface{}, size/resolution),
+			events: make([]interface{}, buckets),
 			reduce: r,
 		}
 	}
