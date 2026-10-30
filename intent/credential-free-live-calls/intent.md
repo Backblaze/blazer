@@ -1,5 +1,5 @@
 # Intent: credential-free tests for calls only covered by live tests
-Author: Felipe Fumero. Issue: #203. Parent: #97. Status: draft.
+Author: Felipe Fumero. Issue: #203. Parent: #97. Status: ready for review.
 
 ## Problem
 

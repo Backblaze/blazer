@@ -115,6 +115,19 @@ func TestAfterNBytesTriggersOnce(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Errorf("effect calls = %d, want 1", got)
 	}
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	resp = transportRequest(t, client, ctx, srv.URL+"/upload", strings.NewReader("abcdef"))
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("second status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("effect calls after second upload and both responses = %d, want 1", got)
+	}
 }
 
 func TestAfterNBytesDoesNotTriggerForShortBody(t *testing.T) {
@@ -129,6 +142,16 @@ func TestAfterNBytesDoesNotTriggerForShortBody(t *testing.T) {
 	}
 	if got := calls.Load(); got != 0 {
 		t.Errorf("effect calls after short body = %d, want 0", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Errorf("response body = %q, want %q", body, "ok")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("effect calls after short body and response = %d, want 1", got)
 	}
 }
 

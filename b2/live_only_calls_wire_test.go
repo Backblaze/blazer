@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
@@ -32,8 +33,12 @@ func TestObjectHideWire(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
 		srv.Handle("gone", liveOnlyHead("file-id", "gone"))
 		srv.Reply("b2_hide_file", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"cannot hide"}`)
-		if err := bucket.Object("gone").Hide(context.Background()); err == nil {
-			t.Fatal("Hide succeeded after a scripted 400")
+		err := bucket.Object("gone").Hide(context.Background())
+		if status, code, message := base.MsgCode(err); status != 400 || code != "bad_request" || message != "cannot hide" {
+			t.Errorf("Hide error = %v (status=%d code=%q message=%q), want 400 bad_request: cannot hide", err, status, code, message)
+		}
+		if calls := srv.Calls("b2_hide_file"); len(calls) != 1 {
+			t.Errorf("b2_hide_file calls = %d, want 1", len(calls))
 		}
 	})
 }
@@ -55,9 +60,15 @@ func TestBucketRevealWire(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
 		// b2_list_file_versions returns versions in newest-first order.
 		srv.Reply("b2_list_file_versions", http.StatusOK, `{"files":[{"fileId":"upload-id","fileName":"gone","action":"upload","uploadTimestamp":2},{"fileId":"hide-id","fileName":"gone","action":"hide","uploadTimestamp":1}],"nextFileName":"","nextFileId":""}`)
+		srv.Reply("b2_delete_file_version", http.StatusOK, `{}`)
 		if err := bucket.Reveal(context.Background(), "gone"); err != nil {
 			t.Fatal(err)
 		}
+		calls := srv.Calls("b2_list_file_versions")
+		if len(calls) != 1 {
+			t.Fatalf("b2_list_file_versions calls = %d, want 1", len(calls))
+		}
+		b2wiretest.AssertJSON(t, calls[0], "prefix", "gone")
 		if calls := srv.Calls("b2_delete_file_version"); len(calls) != 0 {
 			t.Fatalf("b2_delete_file_version calls = %d, want 0", len(calls))
 		}
@@ -121,7 +132,7 @@ func TestClientListKeysAndDeleteWire(t *testing.T) {
 	srv := b2wiretest.New(t)
 	client := liveOnlyClient(t, srv)
 	srv.ReplySequence("b2_list_keys",
-		b2wiretest.Response{Status: http.StatusOK, Body: `{"keys":[{"applicationKeyId":"k-1","keyName":"first","capabilities":["listBuckets"],"expirationTimestamp":1700000000123},{"applicationKeyId":"k-2","keyName":"second","capabilities":["readFiles"],"expirationTimestamp":0}],"nextApplicationKeyId":"k-3"}`},
+		b2wiretest.Response{Status: http.StatusOK, Body: `{"keys":[{"applicationKeyId":"k-1","keyName":"first","capabilities":["listBuckets"],"expirationTimestamp":1700000000123},{"applicationKeyId":"k-2","keyName":"second","capabilities":["readFiles"],"expirationTimestamp":null}],"nextApplicationKeyId":"k-3"}`},
 		b2wiretest.Response{Status: http.StatusOK, Body: `{"keys":[]}`},
 	)
 	srv.Reply("b2_delete_key", http.StatusOK, `{}`)
@@ -136,8 +147,8 @@ func TestClientListKeysAndDeleteWire(t *testing.T) {
 	if keys[0].ID() != "k-1" || keys[0].Name() != "first" || keys[0].Expires().UnixMilli() != 1700000000123 {
 		t.Errorf("first key = id=%q name=%q expires=%d", keys[0].ID(), keys[0].Name(), keys[0].Expires().UnixMilli())
 	}
-	if keys[1].ID() != "k-2" || keys[1].Name() != "second" || keys[1].Expires().UnixMilli() != 0 {
-		t.Errorf("second key = id=%q name=%q expires=%v", keys[1].ID(), keys[1].Name(), keys[1].Expires())
+	if keys[1].ID() != "k-2" || keys[1].Name() != "second" {
+		t.Errorf("second key = id=%q name=%q, want k-2, second", keys[1].ID(), keys[1].Name())
 	}
 	request := srv.Last(t, "b2_list_keys")
 	b2wiretest.AssertJSON(t, request, "accountId", "a")
@@ -174,12 +185,14 @@ func TestObjectCancelWire(t *testing.T) {
 	t.Run("uploaded file", func(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
 		srv.Reply("b2_list_file_names", http.StatusOK, `{"files":[{"fileId":"upload-id","fileName":"complete","action":"upload","uploadTimestamp":0}],"nextFileName":""}`)
+		srv.Reply("b2_cancel_large_file", http.StatusOK, `{}`)
 		iter := bucket.List(context.Background())
 		if !iter.Next() {
 			t.Fatalf("current list returned no object: %v", iter.Err())
 		}
-		if err := iter.Object().Cancel(context.Background()); err == nil {
-			t.Fatal("Cancel succeeded for an uploaded object")
+		const want = "complete is not an unfinished large file: upload"
+		if err := iter.Object().Cancel(context.Background()); err == nil || err.Error() != want {
+			t.Errorf("Cancel uploaded file error = %v, want %q", err, want)
 		}
 		if calls := srv.Calls("b2_cancel_large_file"); len(calls) != 0 {
 			t.Fatalf("b2_cancel_large_file calls = %d, want 0", len(calls))

@@ -24,9 +24,10 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
   With an empty disposition the URL has no `b2ContentDisposition`.
 - **R5. List keys.** `Client.ListKeys(ctx, 10, "")` sends `b2_list_keys` with `accountId` and `maxKeyCount`
   `10` and no `startApplicationKeyId`; a response with two keys and `nextApplicationKeyId` `"k-3"` returns two
-  keys (name, ID, expiration from milliseconds) and cursor `"k-3"`; a second call with `"k-3"`
+  keys (name, ID, non-null expiration from milliseconds) and cursor `"k-3"`; a second call with `"k-3"`
   sends `startApplicationKeyId` `"k-3"`. An empty `keys` list returns `io.EOF`.
-  Capabilities mapping is tracked separately in #220.
+  A key with no expiry uses `expirationTimestamp: null`; its name and ID are asserted, while its expiry
+  mapping is deferred (see Areas of concern). Capabilities mapping is tracked separately in #220.
 - **R6. Delete key.** `Key.Delete` sends `b2_delete_key` with `applicationKeyId`.
 - **R7. Cancel large file.** `Object.Cancel` on an unfinished (`start`) file sends `b2_cancel_large_file`
   with its `fileId`; on an uploaded file it returns an error and sends no cancel.
@@ -55,7 +56,9 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
   requests through; `FailureRate(0)` never fails and `FailureRate(1)` always fails; `MatchPathSubstring`
   fails only matching paths; `Response(503)` with `Body("msg")` returns status 503 and body `msg`; `Stall`
   returns no earlier than its duration or when the request context ends, whichever is first; `AfterNBytes`
-  calls its effect exactly once after roughly n body bytes; `Trigger(ctx)` fails every request after `ctx` is
+  calls its effect exactly once across requests after roughly n body bytes, counting request and response
+  bodies; a short request alone must not call the effect, but its response can cross the threshold.
+  `Trigger(ctx)` fails every request after `ctx` is
   cancelled. If the `Trigger` test fails under `-race`, drop it and note #176 in the PR.
 
 ### Coverage
@@ -85,3 +88,13 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
    put the newest version first, as B2 does. Owner: @ffumero2003.
 2. **R10 error type.** Go wraps TLS failures in `*url.Error`; assert with `errors.As`, not string matching.
    Owner: @ffumero2003.
+3. **R11 Trigger is limited by #176.** A temporary `TestTriggerAfterCancellationRaceRepro` run with
+   `go test -race -count=20 -run '^TestTriggerAfterCancellationRaceRepro$' ./x/transport` reports a write in
+   `Trigger.func1.1` at `transport.go:159` racing with a read in `(*options).RoundTrip` at `transport.go:70`.
+   The cancellation-trigger assertion remains deferred to #176; the diagnostic test was removed so the
+   committed tests stay race-clean. This does not limit the separate `AfterNBytes` one-shot assertion.
+   Owner: @ffumero2003.
+4. **R5 null expiry mapping needs a separate issue.** The documented `expirationTimestamp: null` currently
+   produces `1970-01-01T00:00:00Z` (`IsZero=false`) through `Key.Expires()`. Do not pin that value as correct.
+   The fixture uses null and asserts the key's name and ID; propose a separate production fix to preserve
+   the absence of an expiry. Owner: @ffumero2003.
