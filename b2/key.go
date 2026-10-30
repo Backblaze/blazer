@@ -32,6 +32,15 @@ type Key struct {
 // key.
 func (k *Key) Capabilities() []string { return k.k.caps() }
 
+// BucketIDs returns the IDs of the buckets this application key is restricted to,
+// or nil if the key is not restricted to any bucket. A key created with a single
+// bucket reports one ID. The returned slice is a copy.
+func (k *Key) BucketIDs() []string { return append([]string(nil), k.k.bucketIDs()...) }
+
+// Prefix returns the file-name prefix this application key is restricted to, or
+// "" if it has none.
+func (k *Key) Prefix() string { return k.k.prefix() }
+
 // Name returns the user-supplied name of this application key.  Key names are
 // useless.
 func (k *Key) Name() string { return k.k.name() }

@@ -734,7 +734,7 @@ func TestDownloadFileByIDWithSSECWire(t *testing.T) {
 	assertNoSSECWireHeaders(t, requests[1].headers)
 }
 
-func TestSSECReadRejectsMissingAndWrongKeys(t *testing.T) {
+func TestSSECReadSendsRequestedKeyAndPropagatesRejection(t *testing.T) {
 	wire := newSSECPublicWire(t)
 	bucket := wire.newBucket(t)
 	ctx := context.Background()
@@ -750,9 +750,11 @@ func TestSSECReadRejectsMissingAndWrongKeys(t *testing.T) {
 	}{
 		{"missing", func() *Reader { return bucket.Object("encrypted").NewReader(ctx) }, "SSE-C key required"},
 		{"wrong", func() *Reader { return bucket.Object("encrypted").NewReader(ctx, wrong) }, "SSE-C key required"},
-		{"nil", func() *Reader { return bucket.Object("encrypted").NewReader(ctx, nil) }, "SSE-C key is nil"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			wire.mu.Lock()
+			before := len(wire.requests)
+			wire.mu.Unlock()
 			reader := tc.newReader()
 			_, err := io.ReadAll(reader)
 			if closeErr := reader.Close(); err == nil {
@@ -761,7 +763,43 @@ func TestSSECReadRejectsMissingAndWrongKeys(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("read error = %v, want %q", err, tc.want)
 			}
+			// The server rejects these keys; the SDK must send the requested
+			// headers and propagate that response, not implement its own key check.
+			wire.mu.Lock()
+			requests := append([]ssecPublicRequest(nil), wire.requests[before:]...)
+			wire.mu.Unlock()
+			if len(requests) != 1 || requests[0].method != http.MethodGet || requests[0].path != "/file/bucket/encrypted" {
+				t.Fatalf("download requests = %+v, want one GET /file/bucket/encrypted", requests)
+			}
+			if tc.name == "missing" {
+				assertNoSSECWireHeaders(t, requests[0].headers)
+			} else {
+				raw := []byte("abcdef0123456789abcdef0123456789")
+				digest := md5.Sum(raw)
+				assertSSECWireHeaders(t, requests[0].headers, base64.StdEncoding.EncodeToString(raw), base64.StdEncoding.EncodeToString(digest[:]))
+			}
 		})
+	}
+}
+
+func TestSSECReadRejectsExplicitNilKeyBeforeRequest(t *testing.T) {
+	wire := newSSECPublicWire(t)
+	bucket := wire.newBucket(t)
+	wire.mu.Lock()
+	before := len(wire.requests)
+	wire.mu.Unlock()
+	reader := bucket.Object("encrypted").NewReader(context.Background(), nil)
+	_, err := io.ReadAll(reader)
+	if err == nil || err.Error() != "b2: SSE-C key is nil" {
+		t.Fatalf("read error = %v, want explicit nil-key error", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	if got := len(wire.requests) - before; got != 0 {
+		t.Fatalf("nil key caused %d requests, want 0", got)
 	}
 }
 
