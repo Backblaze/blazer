@@ -124,6 +124,8 @@ type b2FilePartInterface interface {
 type b2KeyInterface interface {
 	del(context.Context) error
 	caps() []string
+	bucketIDs() []string
+	prefix() string
 	name() string
 	expires() time.Time
 	secret() string
@@ -857,6 +859,8 @@ func (b *b2FilePart) size() int64  { return b.b.Size }
 
 func (b *b2Key) del(ctx context.Context) error { return b.b.Delete(ctx) }
 func (b *b2Key) caps() []string                { return b.b.Capabilities }
+func (b *b2Key) bucketIDs() []string           { return b.b.BucketIDs }
+func (b *b2Key) prefix() string                { return b.b.Prefix }
 func (b *b2Key) name() string                  { return b.b.Name }
 func (b *b2Key) expires() time.Time            { return b.b.Expires }
 func (b *b2Key) secret() string                { return b.b.Secret }
