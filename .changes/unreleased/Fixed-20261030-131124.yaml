@@ -1,3 +1,3 @@
 kind: Fixed
-body: Window.New handles sub-resolution sizes and rejects invalid finite resolutions (#176).
+body: window.New handles sub-resolution sizes and panics when a finite window's resolution is <= 0 (#176).
 time: 2026-10-30T13:11:24.269983-06:00
