@@ -1,0 +1,3 @@
+kind: Fixed
+body: An upload of exactly Writer.ChunkSize bytes is now sent as a single file instead of a one-part large file (#221).
+time: 2026-10-29T11:43:04.007037-06:00
