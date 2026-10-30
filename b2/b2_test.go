@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -1677,6 +1678,7 @@ func TestWriterReturnsError(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	want := testError{}
 
 	client := &Client{
 		backend: &beRoot{
@@ -1685,13 +1687,13 @@ func TestWriterReturnsError(t *testing.T) {
 				errs: &errCont{
 					errMap: map[string]map[int]error{
 						"uploadPart": {
-							0: testError{},
-							1: testError{},
-							2: testError{},
-							3: testError{},
-							4: testError{},
-							5: testError{},
-							6: testError{},
+							0: want,
+							1: want,
+							2: want,
+							3: want,
+							4: want,
+							5: want,
+							6: want,
 						},
 					},
 				},
@@ -1707,8 +1709,8 @@ func TestWriterReturnsError(t *testing.T) {
 	r := io.LimitReader(zReader{}, 1e7)
 	w.ChunkSize = 1e4
 	w.ConcurrentUploads = 4
-	if _, err := io.Copy(w, r); err == nil {
-		t.Fatalf("io.Copy: should have returned an error")
+	if _, err := io.Copy(w, r); !errors.Is(err, want) {
+		t.Fatalf("io.Copy error = %v, want %v", err, want)
 	}
 }
 
