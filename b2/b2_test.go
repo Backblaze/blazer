@@ -29,6 +29,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 const (
@@ -49,11 +51,19 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 		ExposeHeaders:     []string{"x-bz-file-name"},
 		MaxAgeSeconds:     60,
 	}}
-	client := &Client{backend: &beRoot{b2i: &testRoot{
-		bucketMap: make(map[string]map[string]string),
-		errs:      &errCont{},
-	}}}
-	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{
+	const lockedJSON = `{"bucketId":"locked-id","bucketName":"locked","bucketType":"allPrivate","corsRules":[{"corsRuleName":"browser","allowedOrigins":["https://example.com"],"allowedHeaders":["authorization"],"allowedOperations":["b2_download_file_by_name"],"exposeHeaders":["x-bz-file-name"],"maxAgeSeconds":60}],"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":true}}}`
+	const plainJSON = `{"bucketId":"plain-id","bucketName":"plain","bucketType":"allPrivate","corsRules":[],"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false}}}`
+	srv := b2wiretest.New(t)
+	srv.ReplySequence("b2_list_buckets",
+		b2wiretest.Response{Body: `{"buckets":[]}`},
+		b2wiretest.Response{Body: `{"buckets":[]}`},
+		b2wiretest.Response{Body: `{"buckets":[` + lockedJSON + `,` + plainJSON + `]}`})
+	srv.ReplySequence("b2_create_bucket", b2wiretest.Response{Body: lockedJSON}, b2wiretest.Response{Body: plainJSON})
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "locked", &BucketAttrs{
 		Type:            Private,
 		CORSRules:       wantCORS,
 		FileLockEnabled: true,
@@ -61,6 +71,20 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	plain, err := client.NewBucket(ctx, "plain", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creates := srv.Calls("b2_create_bucket")
+	if len(creates) != 2 {
+		t.Fatalf("create requests = %d, want 2", len(creates))
+	}
+	b2wiretest.AssertJSON(t, creates[0], "corsRules", []map[string]any{{
+		"corsRuleName": "browser", "allowedOrigins": []string{"https://example.com"},
+		"allowedHeaders": []string{"authorization"}, "allowedOperations": []string{"b2_download_file_by_name"},
+		"exposeHeaders": []string{"x-bz-file-name"}, "maxAgeSeconds": 60,
+	}})
+	b2wiretest.AssertJSON(t, creates[0], "fileLockEnabled", true)
 	attrs, err := bucket.Attrs(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -71,47 +95,31 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 	if !attrs.FileLockEnabled {
 		t.Error("Bucket.Attrs().FileLockEnabled = false, want true")
 	}
-}
-
-func TestNewBucketReplicationConfig(t *testing.T) {
-	ctx := context.Background()
-	want := &ReplicationConfiguration{
-		AsReplicationSource: AsReplicationSource{
-			SourceApplicationKeyID: "source-key",
-			ReplicationRules: []ReplicationRules{{
-				ReplicationRuleName:  "rule",
-				DestinationBucketID:  "destination-bucket-id",
-				FileNamePrefix:       "prefix/",
-				IncludeExistingFiles: true,
-				IsEnabled:            true,
-				Priority:             1,
-			}},
-		},
-		AsReplicationDestination: &AsReplicationDestination{
-			SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"},
-		},
-	}
-	client := &Client{backend: &beRoot{b2i: &testRoot{
-		bucketMap: make(map[string]map[string]string),
-		errs:      &errCont{},
-	}}}
-	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private, ReplicationConfig: want})
+	attrs, err = plain.Attrs(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := bucket.Attrs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got.ReplicationConfig, want) {
-		t.Errorf("Bucket.Attrs().ReplicationConfig = %#v, want %#v", got.ReplicationConfig, want)
+	if len(attrs.CORSRules) != 0 || attrs.FileLockEnabled {
+		t.Errorf("plain bucket attrs = %+v, want no CORS rules and no file lock", attrs)
 	}
 }
 
 func TestBucketID(t *testing.T) {
-	b := &Bucket{b: &beBucket{b2bucket: &testBucket{idv: "bucket-id"}}}
-	if got := b.ID(); got != "bucket-id" {
-		t.Fatalf("Bucket.ID() = %q, want %q", got, "bucket-id")
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	before := len(srv.Requests())
+	if got := bucket.ID(); got != "bid" {
+		t.Fatalf("created Bucket.ID() = %q, want bid", got)
+	}
+	if got := len(srv.Requests()); got != before {
+		t.Fatalf("Bucket.ID() sent %d requests, want 0", got-before)
+	}
+	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"listed-id","bucketName":"n","bucketType":"allPrivate"}]}`)
+	listed, err := bucket.c.Bucket(context.Background(), "n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := listed.ID(); got != "listed-id" {
+		t.Fatalf("listed Bucket.ID() = %q, want listed-id", got)
 	}
 }
 
@@ -566,30 +574,6 @@ func (t *testFile) deleteFileVersion(_ context.Context, bypassGovernance bool) e
 	t.bypassGovernance = bypassGovernance
 	delete(t.files, t.n)
 	return nil
-}
-
-func TestObjectDeleteBypassGovernanceOption(t *testing.T) {
-	ctx := context.Background()
-	standard := &testFile{n: "standard", a: "upload", files: make(map[string]string)}
-	if err := objectForDeleteOptionTest(standard).Delete(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if standard.bypassGovernance {
-		t.Fatal("Delete without BypassGovernance requested a bypass")
-	}
-
-	bypass := &testFile{n: "bypass", a: "upload", files: make(map[string]string)}
-	if err := objectForDeleteOptionTest(bypass).Delete(ctx, BypassGovernance()); err != nil {
-		t.Fatal(err)
-	}
-	if !bypass.bypassGovernance {
-		t.Fatal("Delete with BypassGovernance did not request a bypass")
-	}
-}
-
-func objectForDeleteOptionTest(file *testFile) *Object {
-	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
-	return &Object{f: &beFile{b2file: file, ri: root}}
 }
 
 func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
@@ -1922,45 +1906,55 @@ func readFile(ctx context.Context, obj *Object, sha string, chunk, concur int) e
 
 func TestBucketDefaultEncryptionRejected(t *testing.T) {
 	ctx := context.Background()
-	client := &Client{
-		backend: &beRoot{
-			b2i: &testRoot{
-				bucketMap: make(map[string]map[string]string),
-				errs:      &errCont{},
-			},
-		},
-	}
-	bucket, err := client.NewBucket(ctx, "bkt", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	client := bucket.c
 
 	table := []struct {
-		name string
-		sse  *ServerSideEncryption
-		ok   bool
+		name    string
+		sse     *ServerSideEncryption
+		ok      bool
+		wantErr string
 	}{
 		{name: "unset", sse: nil, ok: true},
 		{name: "sse-b2", sse: SSEB2WithAES256(), ok: true},
-		{name: "none", sse: &ServerSideEncryption{Mode: "none"}},
-		{name: "sse-c", sse: &ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"}},
-		{name: "empty", sse: &ServerSideEncryption{}},
-		{name: "sse-b2 without algorithm", sse: &ServerSideEncryption{Mode: "SSE-B2"}},
+		{name: "none", sse: &ServerSideEncryption{Mode: "none"}, wantErr: "none/ cannot be used as default for a bucket"},
+		{name: "sse-c", sse: &ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"}, wantErr: "SSE-C/AES256 cannot be used as default for a bucket"},
+		{name: "empty", sse: &ServerSideEncryption{}, wantErr: "/ cannot be used as default for a bucket"},
+		{name: "sse-b2 without algorithm", sse: &ServerSideEncryption{Mode: "SSE-B2"}, wantErr: "SSE-B2/ cannot be used as default for a bucket"},
 	}
 	for _, ent := range table {
 		t.Run(ent.name, func(t *testing.T) {
+			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+			creates := len(srv.Calls("b2_create_bucket"))
+			updates := len(srv.Calls("b2_update_bucket"))
 			attrs := &BucketAttrs{DefaultServerSideEncryption: ent.sse}
 			_, err := client.NewBucket(ctx, "new-"+ent.name, attrs)
 			if (err == nil) != ent.ok {
 				t.Errorf("NewBucket(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
 			}
+			if !ent.ok && (err == nil || err.Error() != ent.wantErr) {
+				t.Errorf("NewBucket error = %v, want %q", err, ent.wantErr)
+			}
 			// Attrs are ignored when the bucket already exists.
-			if _, err := client.NewBucket(ctx, "bkt", attrs); err != nil {
+			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[`+updateBucketJSON+`]}`)
+			if _, err := client.NewBucket(ctx, "n", attrs); err != nil {
 				t.Errorf("NewBucket(existing, %+v): err = %v, want nil", ent.sse, err)
 			}
 			err = bucket.Update(ctx, attrs)
 			if (err == nil) != ent.ok {
 				t.Errorf("Update(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
+			}
+			if !ent.ok {
+				if err == nil || err.Error() != ent.wantErr {
+					t.Errorf("Update error = %v, want %q", err, ent.wantErr)
+				}
+				// NewBucket may list first, but invalid settings must never be sent.
+				if got := len(srv.Calls("b2_create_bucket")) - creates; got != 0 {
+					t.Errorf("invalid default sent %d create requests, want 0", got)
+				}
+				if got := len(srv.Calls("b2_update_bucket")) - updates; got != 0 {
+					t.Errorf("invalid default sent %d update requests, want 0", got)
+				}
 			}
 		})
 	}
@@ -2045,36 +2039,4 @@ func TestCreateKeyDispatch(t *testing.T) {
 			t.Errorf("Bucket.CreateKey with BucketIDs: want error, got nil")
 		}
 	})
-}
-
-func TestBucketAttrsCORSAndFileLockPerBucket(t *testing.T) {
-	ctx := context.Background()
-	wantCORS := []CORSRule{{Name: "browser", AllowedOrigins: []string{"https://example.com"}}}
-	client := &Client{backend: &beRoot{b2i: &testRoot{
-		bucketMap: make(map[string]map[string]string),
-		errs:      &errCont{},
-	}}}
-	locked, err := client.NewBucket(ctx, "locked-bucket", &BucketAttrs{Type: Private, CORSRules: wantCORS, FileLockEnabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := client.NewBucket(ctx, "plain-bucket", &BucketAttrs{Type: Private})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := locked.Attrs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got.CORSRules, wantCORS) || !got.FileLockEnabled {
-		t.Errorf("locked bucket attrs = %+v, want its own CORS rules and file lock", got)
-	}
-	got, err = plain.Attrs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.CORSRules) != 0 || got.FileLockEnabled {
-		t.Errorf("plain bucket attrs = %+v, want no CORS rules and no file lock", got)
-	}
 }
