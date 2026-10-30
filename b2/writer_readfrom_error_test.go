@@ -170,11 +170,12 @@ func TestWriterReadFromStreamingCallerContextWithRecordedTransportError(t *testi
 			var cancel context.CancelFunc
 			var cancelWithCause context.CancelCauseFunc
 			if tc.deadline {
+				var cause error
 				if tc.customCause {
-					ctx, cancel = context.WithTimeoutCause(context.Background(), 3*time.Second, customCause)
-				} else {
-					ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+					cause = customCause
 				}
+				delayed := newDelayedTimeoutCauseContext(100*time.Millisecond, cause)
+				ctx, cancel = delayed, delayed.cancel
 			} else if tc.customCause {
 				ctx, cancelWithCause = context.WithCancelCause(context.Background())
 				cancel = func() { cancelWithCause(nil) }
@@ -234,7 +235,10 @@ func TestWriterReadFromStreamingCallerContextWithRecordedTransportError(t *testi
 			releaseStartOnce.Do(func() { close(releaseStart) })
 			waitReadFromEvent(t, partEntered, "part upload")
 			waitReadFromEvent(t, bufferEntered, "next buffer")
-			if !tc.deadline {
+			if tc.deadline {
+				delayed := ctx.(*delayedTimeoutCauseContext)
+				delayed.start()
+			} else {
 				if tc.customCause {
 					cancelWithCause(customCause)
 				} else {
@@ -318,4 +322,83 @@ func (c *readFromFailureChunk) uploadPart(ctx context.Context, _ readResetter, _
 		<-ctx.Done()
 	}
 	return 0, c.failure
+}
+
+// delayedTimeoutCauseContext starts its timeout only after a test has reached
+// the controlled upload state. Value forwards the timed context's cause to
+// Writer's derived context.
+type delayedTimeoutCauseContext struct {
+	mu       sync.Mutex
+	ctx      context.Context
+	timeout  time.Duration
+	cause    error
+	done     chan struct{}
+	err      error
+	started  bool
+	cancelFn context.CancelFunc
+}
+
+func newDelayedTimeoutCauseContext(timeout time.Duration, cause error) *delayedTimeoutCauseContext {
+	return &delayedTimeoutCauseContext{
+		ctx:     context.Background(),
+		timeout: timeout,
+		cause:   cause,
+		done:    make(chan struct{}),
+	}
+}
+
+func (c *delayedTimeoutCauseContext) Deadline() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ctx.Deadline()
+}
+
+func (c *delayedTimeoutCauseContext) Done() <-chan struct{} { return c.done }
+
+func (c *delayedTimeoutCauseContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *delayedTimeoutCauseContext) Value(key any) any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ctx.Value(key)
+}
+
+func (c *delayedTimeoutCauseContext) start() {
+	c.mu.Lock()
+	if c.started || c.err != nil {
+		c.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), c.timeout, c.cause)
+	c.ctx, c.cancelFn, c.started = ctx, cancel, true
+	c.mu.Unlock()
+	go func() {
+		<-ctx.Done()
+		c.finish(ctx.Err())
+	}()
+}
+
+func (c *delayedTimeoutCauseContext) cancel() {
+	c.mu.Lock()
+	cancel := c.cancelFn
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		return
+	}
+	c.finish(context.Canceled)
+}
+
+func (c *delayedTimeoutCauseContext) finish(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return
+	}
+	c.err = err
+	close(c.done)
 }
