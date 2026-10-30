@@ -148,7 +148,9 @@ func Response(status int) FailureOption {
 }
 
 // Stall simulates a network connection failure by stalling for the given
-// duration.
+// duration. If the request context ends during the stall, RoundTrip closes the
+// request body, returns ctx.Err() (context.Canceled or context.DeadlineExceeded),
+// and does not call the wrapped RoundTripper.
 func Stall(dur time.Duration) FailureOption {
 	return func(o *options) {
 		o.stall = dur
