@@ -140,6 +140,11 @@ type chunk struct {
 	buf writeBuffer
 }
 
+type writerCause struct{ err error }
+
+func (c writerCause) Error() string { return c.err.Error() }
+func (c writerCause) Unwrap() error { return c.err }
+
 func (w *Writer) setErr(err error) {
 	if err == nil || err == io.EOF {
 		return
@@ -151,7 +156,7 @@ func (w *Writer) setErr(err error) {
 	}
 	blog.V(1).Infof("error writing object: %T", err)
 	w.err = err
-	w.cancel(err)
+	w.cancel(writerCause{err})
 	w.emux.Unlock()
 	if w.ctxf == nil || w.file == nil {
 		return
@@ -653,9 +658,10 @@ func (w *Writer) sendChunk() error {
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
-// On every path, ReadFrom returns the Writer's error when an upload fails, or
-// the caller's context error when the caller cancels. If the Writer's context
-// is cancelled while copying from a non-seekable r, ReadFrom returns without
+// On every path, ReadFrom returns the Writer's error when it cancels itself;
+// caller cancellation returns context.Canceled or context.DeadlineExceeded,
+// even if the caller supplied a custom cause. If the Writer's context is
+// cancelled while copying from a non-seekable r, ReadFrom returns without
 // waiting for a Read on r that is already in progress.
 // Once ReadFrom has returned, nothing more from r is written to w; data read
 // before cancellation may already have been written. That pending Read may
@@ -667,8 +673,9 @@ func (w *Writer) sendChunk() error {
 func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 	defer func() {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if cause := context.Cause(w.ctx); cause != nil {
-				err = cause
+			var cause writerCause
+			if errors.As(context.Cause(w.ctx), &cause) {
+				err = cause.err
 			}
 		}
 	}()
