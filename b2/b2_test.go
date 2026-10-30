@@ -164,8 +164,9 @@ func (t *testRoot) retryAfter(d time.Duration) <-chan time.Time {
 }
 
 type testAfter struct {
-	calls uint32
-	ready chan time.Time
+	ready  chan time.Time
+	mu     sync.Mutex
+	delays []time.Duration
 }
 
 func newTestAfter() *testAfter {
@@ -174,13 +175,23 @@ func newTestAfter() *testAfter {
 	return &testAfter{ready: ready}
 }
 
-func (a *testAfter) wait(time.Duration) <-chan time.Time {
-	atomic.AddUint32(&a.calls, 1)
+func (a *testAfter) wait(d time.Duration) <-chan time.Time {
+	a.mu.Lock()
+	a.delays = append(a.delays, d)
+	a.mu.Unlock()
 	return a.ready
 }
 
 func (a *testAfter) count() int {
-	return int(atomic.LoadUint32(&a.calls))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.delays)
+}
+
+func (a *testAfter) durations() []time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]time.Duration(nil), a.delays...)
 }
 
 type testBucketSettings struct {
@@ -821,8 +832,9 @@ func TestBackoff(t *testing.T) {
 	defer cancel()
 
 	table := []struct {
-		root *testRoot
-		want int
+		root   *testRoot
+		want   int
+		delays [][2]time.Duration
 	}{
 		{
 			root: &testRoot{
@@ -836,7 +848,8 @@ func TestBackoff(t *testing.T) {
 					},
 				},
 			},
-			want: 2,
+			want:   2,
+			delays: [][2]time.Duration{{time.Second, time.Second}, {2 * time.Second, 2 * time.Second}},
 		},
 		{
 			root: &testRoot{
@@ -849,7 +862,8 @@ func TestBackoff(t *testing.T) {
 					},
 				},
 			},
-			want: 1,
+			want:   1,
+			delays: [][2]time.Duration{{1010 * time.Millisecond, 1030 * time.Millisecond}},
 		},
 	}
 
@@ -874,7 +888,12 @@ func TestBackoff(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := timer.count(); got != ent.want {
-			t.Errorf("got %d calls, wanted %d", got, ent.want)
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
+		}
+		for i, got := range timer.durations() {
+			if want := ent.delays[i]; got < want[0] || got > want[1] {
+				t.Errorf("wait %d = %v, want [%v, %v]", i+1, got, want[0], want[1])
+			}
 		}
 	}
 }
@@ -892,8 +911,14 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 		errs: &errCont{
 			errMap: map[string]map[int]error{
 				"createBucket": {
-					0: testError{retry: true, maxRetries: 5},
-					1: testError{retry: true, maxRetries: 5},
+					0: testError{retry: true, maxRetries: 8},
+					1: testError{retry: true, maxRetries: 8},
+					2: testError{retry: true, maxRetries: 8},
+					3: testError{retry: true, maxRetries: 8},
+					4: testError{retry: true, maxRetries: 8},
+					5: testError{retry: true, maxRetries: 8},
+					6: testError{retry: true, maxRetries: 8},
+					7: testError{retry: true, maxRetries: 8},
 				},
 			},
 		},
@@ -906,8 +931,25 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err != nil {
 		t.Errorf("bucket should not err, got %v", err)
 	}
-	if got := timer.count(); got != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", got)
+	if got := timer.count(); got != 8 {
+		t.Fatalf("wrong number of calls; got %d, want 8", got)
+	}
+	// Literal bounds allow jitter without measuring elapsed wall-clock time.
+	// The last two waits must return to the 30-second backoff cap, plus jitter.
+	want := [][2]time.Duration{
+		{1010 * time.Millisecond, 1030 * time.Millisecond},
+		{2040 * time.Millisecond, 2122 * time.Millisecond},
+		{4 * time.Second, 4600 * time.Millisecond},
+		{8 * time.Second, 9300 * time.Millisecond},
+		{16 * time.Second, 20 * time.Second},
+		{32 * time.Second, 40 * time.Second},
+		{30 * time.Second, 32 * time.Second},
+		{30 * time.Second, 32 * time.Second},
+	}
+	for i, got := range timer.durations() {
+		if got < want[i][0] || got > want[i][1] {
+			t.Errorf("wait %d = %v, want [%v, %v]", i+1, got, want[i][0], want[i][1])
+		}
 	}
 }
 
@@ -963,6 +1005,12 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 		}
 		if got := timer.count(); got != ent.want {
 			t.Fatalf("got %d calls, wanted %d", got, ent.want)
+		}
+		want := [][2]time.Duration{{1010 * time.Millisecond, 1030 * time.Millisecond}, {2040 * time.Millisecond, 2122 * time.Millisecond}}
+		for i, got := range timer.durations() {
+			if got < want[i][0] || got > want[i][1] {
+				t.Errorf("wait %d = %v, want [%v, %v]", i+1, got, want[i][0], want[i][1])
+			}
 		}
 	}
 }
@@ -1448,12 +1496,15 @@ func TestReaderDoubleClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := o.NewReader(ctx)
-	// Read to EOF, and then read some more.
-	if _, err := io.Copy(ioutil.Discard, r); err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { _ = r.Close() })
+	if err := r.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
 	}
-	if _, err := io.Copy(ioutil.Discard, r); err != nil {
-		t.Fatal(err)
+	if err := r.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if n, err := r.Read(make([]byte, 1)); n != 0 || err == nil {
+		t.Fatalf("Read after Close = %d, %v; want 0 and an error or EOF", n, err)
 	}
 }
 
@@ -1717,24 +1768,19 @@ func TestWriterLimitNewUploadAttempts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	concurrentUploads := 4
-	retryCount := 5
-	errorCount := concurrentUploads * (retryCount + 1)
-
-	errorMap := make(map[int]error, errorCount)
-	for i := 0; i < errorCount; i++ {
-		errorMap[i] = testError{reupload: true}
+	// One worker makes the per-part attempt count independent of scheduling.
+	errorMap := make(map[int]error)
+	for i := 0; i < 7; i++ {
+		errorMap[i] = testError{reupload: true, maxReuploads: 5}
 	}
+	errs := &errCont{errMap: map[string]map[int]error{"uploadPart": errorMap}}
 
 	client := &Client{
 		backend: &beRoot{
 			b2i: &testRoot{
 				bucketMap: make(map[string]map[string]string),
-				errs: &errCont{
-					errMap: map[string]map[int]error{
-						"uploadPart": errorMap,
-					},
-				},
+				errs:      errs,
+				afterFunc: newTestAfter().wait,
 			},
 		},
 	}
@@ -1746,9 +1792,17 @@ func TestWriterLimitNewUploadAttempts(t *testing.T) {
 	w := bucket.Object("test").NewWriter(ctx)
 	r := io.LimitReader(zReader{}, 1e7)
 	w.ChunkSize = 1e4
-	w.ConcurrentUploads = concurrentUploads
+	w.ConcurrentUploads = 1
 	if _, err := io.Copy(w, r); err == nil {
 		t.Fatalf("io.Copy: should have returned an error")
+	}
+	w.wg.Wait()
+	count, ok := errs.opMap.Load("uploadPart")
+	if !ok {
+		t.Fatal("uploadPart attempts = 0, want 6 (initial attempt plus five reuploads)")
+	}
+	if got := atomic.LoadUint32(count.(*uint32)); got != 6 {
+		t.Fatalf("uploadPart attempts = %d, want 6 (initial attempt plus five reuploads)", got)
 	}
 }
 
