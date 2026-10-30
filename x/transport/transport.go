@@ -87,7 +87,6 @@ func (o *options) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	if o.status > 0 {
 		if req.Body != nil {
-			_, _ = io.Copy(io.Discard, req.Body)
 			_ = req.Body.Close()
 		}
 		resp := &http.Response{
