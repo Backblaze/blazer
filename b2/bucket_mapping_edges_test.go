@@ -59,12 +59,19 @@ func TestMappingReauthWaiterSurvivesCancelledLeader(t *testing.T) {
 	defer cancelLeader()
 	srv := b2wiretest.New(t)
 	leaderAuthorizing := make(chan struct{})
+	// The leader's reauthorization never gets an answer while the test runs, so
+	// the leader can only end through its cancelled context. Answering it after
+	// the cancel would race: a stale token could count as a successful refresh.
+	// Registered after b2wiretest.New, so it runs before the server's cleanup,
+	// which waits for this handler to return.
+	releaseLeaderAuth := make(chan struct{})
+	t.Cleanup(func() { close(releaseLeaderAuth) })
 	var authCalls atomic.Int64
 	srv.Handle("b2_authorize_account", func(b2wiretest.Request) b2wiretest.Response {
 		call := authCalls.Add(1)
 		if call == 2 {
 			close(leaderAuthorizing)
-			<-leaderCtx.Done()
+			<-releaseLeaderAuth
 		}
 		body := fmt.Sprintf(updateAuthJSON, srv.URL())
 		if call > 2 {

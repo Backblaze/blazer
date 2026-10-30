@@ -1753,26 +1753,31 @@ func TestWriterLimitNewUploadAttempts(t *testing.T) {
 }
 
 func TestFileBuffer(t *testing.T) {
-	r := io.LimitReader(zReader{}, 1e8)
+	input := bytes.Repeat([]byte("0123456789"), 1_000_000)
 	w, err := newFileBuffer("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	if _, err := io.Copy(w, r); err != nil {
-		t.Fatal(err)
+	if n, err := w.Write(input); err != nil || n != len(input) {
+		t.Fatalf("Write = %d, %v; want %d, nil", n, err, len(input))
+	}
+	if got := w.Len(); got != 10_000_000 {
+		t.Errorf("Len() = %d, want 10000000", got)
+	}
+	if got := w.Hash(); got != "71a0f071f6603f3c0b3a52d340cd713f0fe15a97" {
+		t.Errorf("Hash() = %q, want 71a0f071f6603f3c0b3a52d340cd713f0fe15a97", got)
 	}
 	bReader, err := w.Reader()
 	if err != nil {
 		t.Fatal(err)
 	}
-	hsh := sha1.New()
-	if _, err := io.Copy(hsh, bReader); err != nil {
+	got, err := io.ReadAll(bReader)
+	if err != nil {
 		t.Fatal(err)
 	}
-	hshText := fmt.Sprintf("%x", hsh.Sum(nil))
-	if hshText != w.Hash() {
-		t.Errorf("hashes are not equal: bufferWriter is %q, read buffer is %q", w.Hash(), hshText)
+	if !bytes.Equal(got, input) {
+		t.Error("Reader() bytes differ from the input")
 	}
 }
 

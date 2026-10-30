@@ -49,9 +49,20 @@ type defaultRetentionResponseTransport struct {
 
 func (t defaultRetentionResponseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.t.Helper()
+	var body []byte
+	if req.Body != nil {
+		var err error
+		body, err = io.ReadAll(req.Body)
+		if err != nil {
+			t.t.Fatal(err)
+		}
+	}
 
-	switch req.Header.Get("X-Blazer-Method") {
-	case "b2_authorize_account":
+	switch req.URL.Path {
+	case "/b2api/v4/b2_authorize_account":
+		if string(body) != "" {
+			t.t.Fatalf("authorize account body = %q; want empty", body)
+		}
 		return defaultRetentionHTTPResponse(req, `{
 			"accountId": "account-id",
 			"authorizationToken": "authorization-token",
@@ -63,12 +74,20 @@ func (t defaultRetentionResponseTransport) RoundTrip(req *http.Request) (*http.R
 				}
 			}
 		}`), nil
-	case "b2_create_bucket":
+	case "/b2api/v4/b2_create_bucket":
+		wantBody := `{"accountId":"account-id","bucketName":"bucket-name","bucketType":"allPrivate","bucketInfo":null,"lifecycleRules":null}`
+		if string(body) != wantBody {
+			t.t.Fatalf("create bucket body = %q; want %q", body, wantBody)
+		}
 		return defaultRetentionHTTPResponse(req, defaultRetentionBucketResponse), nil
-	case "b2_list_buckets":
+	case "/b2api/v4/b2_list_buckets":
+		wantBody := `{"accountId":"account-id","bucketName":"bucket-name"}`
+		if string(body) != wantBody {
+			t.t.Fatalf("list buckets body = %q; want %q", body, wantBody)
+		}
 		return defaultRetentionHTTPResponse(req, `{"buckets":[`+defaultRetentionBucketResponse+`]}`), nil
 	default:
-		t.t.Fatalf("unexpected B2 method %q", req.Header.Get("X-Blazer-Method"))
+		t.t.Fatalf("unexpected request path %q", req.URL.Path)
 		return nil, nil
 	}
 }
