@@ -14,15 +14,23 @@ import (
 // https://www.backblaze.com/apidocs/b2-create-bucket
 func TestNewBucketAttributesWire(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		attrs *BucketAttrs
-		info  any
-		rules any
+		name      string
+		attrs     *BucketAttrs
+		info      any
+		rules     any
+		response  string
+		wantInfo  map[string]string
+		wantRules []LifecycleRule
 	}{
-		{name: "no-attrs"},
+		{
+			name:     "no-attrs",
+			response: `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":1}`,
+		},
 		{
 			name: "only-info", attrs: &BucketAttrs{Info: map[string]string{"this": "that", "other": "thing"}},
-			info: map[string]string{"this": "that", "other": "thing"},
+			info:     map[string]string{"this": "that", "other": "thing"},
+			response: `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{"this":"that","other":"thing"},"lifecycleRules":[],"revision":1}`,
+			wantInfo: map[string]string{"this": "that", "other": "thing"},
 		},
 		{
 			name: "only-rules",
@@ -34,12 +42,32 @@ func TestNewBucketAttributesWire(t *testing.T) {
 				{"fileNamePrefix": "whee/", "daysFromHidingToDeleting": 30},
 				{"fileNamePrefix": "whoa/", "daysFromUploadingToHiding": 1},
 			},
+			response:  `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[{"fileNamePrefix":"whee/","daysFromHidingToDeleting":30},{"fileNamePrefix":"whoa/","daysFromUploadingToHiding":1}],"revision":1}`,
+			wantRules: []LifecycleRule{{Prefix: "whee/", DaysHiddenUntilDeleted: 30}, {Prefix: "whoa/", DaysNewUntilHidden: 1}},
+		},
+		{
+			name: "info-and-rules",
+			attrs: &BucketAttrs{
+				Info:           map[string]string{"this": "that", "other": "thing"},
+				LifecycleRules: []LifecycleRule{{Prefix: "whee/", DaysHiddenUntilDeleted: 30}, {Prefix: "whoa/", DaysNewUntilHidden: 1}},
+			},
+			info: map[string]string{"this": "that", "other": "thing"},
+			rules: []map[string]any{
+				{"fileNamePrefix": "whee/", "daysFromHidingToDeleting": 30},
+				{"fileNamePrefix": "whoa/", "daysFromUploadingToHiding": 1},
+			},
+			response:  `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{"this":"that","other":"thing"},"lifecycleRules":[{"fileNamePrefix":"whee/","daysFromHidingToDeleting":30},{"fileNamePrefix":"whoa/","daysFromUploadingToHiding":1}],"revision":1}`,
+			wantInfo:  map[string]string{"this": "that", "other": "thing"},
+			wantRules: []LifecycleRule{{Prefix: "whee/", DaysHiddenUntilDeleted: 30}, {Prefix: "whoa/", DaysNewUntilHidden: 1}},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			srv := b2wiretest.New(t)
-			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
-			srv.Reply("b2_create_bucket", http.StatusOK, updateBucketJSON)
+			srv.ReplySequence("b2_list_buckets",
+				b2wiretest.Response{Status: http.StatusOK, Body: `{"buckets":[]}`},
+				b2wiretest.Response{Status: http.StatusOK, Body: `{"buckets":[` + test.response + `]}`},
+			)
+			srv.Reply("b2_create_bucket", http.StatusOK, test.response)
 			ctx := context.Background()
 			client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 			if err != nil {
@@ -63,6 +91,33 @@ func TestNewBucketAttributesWire(t *testing.T) {
 			b2wiretest.AssertJSON(t, request, "bucketInfo", test.info)
 			b2wiretest.AssertJSON(t, request, "lifecycleRules", test.rules)
 			b2wiretest.AssertNoJSON(t, request, "defaultServerSideEncryption")
+			attrs, err := bucket.Attrs(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(attrs.Info) != len(test.wantInfo) {
+				t.Errorf("Attrs Info has %d entries, want %d", len(attrs.Info), len(test.wantInfo))
+			}
+			for key, want := range test.wantInfo {
+				if got := attrs.Info[key]; got != want {
+					t.Errorf("Attrs Info[%q] = %q, want %q", key, got, want)
+				}
+			}
+			if len(attrs.LifecycleRules) != len(test.wantRules) {
+				t.Fatalf("Attrs LifecycleRules = %d rules, want %d", len(attrs.LifecycleRules), len(test.wantRules))
+			}
+			for i, want := range test.wantRules {
+				got := attrs.LifecycleRules[i]
+				if got.Prefix != want.Prefix {
+					t.Errorf("Attrs LifecycleRules[%d].Prefix = %q, want %q", i, got.Prefix, want.Prefix)
+				}
+				if got.DaysNewUntilHidden != want.DaysNewUntilHidden {
+					t.Errorf("Attrs LifecycleRules[%d].DaysNewUntilHidden = %d, want %d", i, got.DaysNewUntilHidden, want.DaysNewUntilHidden)
+				}
+				if got.DaysHiddenUntilDeleted != want.DaysHiddenUntilDeleted {
+					t.Errorf("Attrs LifecycleRules[%d].DaysHiddenUntilDeleted = %d, want %d", i, got.DaysHiddenUntilDeleted, want.DaysHiddenUntilDeleted)
+				}
+			}
 		})
 	}
 }
