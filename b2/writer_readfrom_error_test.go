@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
@@ -107,4 +108,192 @@ func TestWriterReadFromCallerContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWriterReadFromReturnsInjectedUploadError(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		seekable bool
+		resume   bool
+	}{
+		{name: "non-seekable"},
+		{name: "seekable resume", seekable: true, resume: true},
+		{name: "seekable streaming", seekable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			injected := errors.New("permanent part upload failure")
+			bucket := newProgressReviewBucket(t)
+			bucket.b = &readFromFailureBucket{beBucketInterface: bucket.b, failure: injected}
+			writer := bucket.Object("injected-error").NewWriter(context.Background())
+			writer.ChunkSize = 3
+			writer.ConcurrentUploads = 1
+			writer.Resume = tc.resume
+			payload := bytes.Repeat([]byte("x"), 128)
+			var source io.Reader
+			if tc.seekable {
+				source = struct{ io.ReadSeeker }{bytes.NewReader(payload)}
+			} else {
+				source = io.LimitReader(bytes.NewReader(payload), int64(len(payload)))
+			}
+			_, err := io.Copy(writer, source)
+			if !errors.Is(err, injected) {
+				t.Errorf("io.Copy error = %v, want injected upload error", err)
+			}
+			if err := writer.Close(); !errors.Is(err, injected) {
+				t.Errorf("Close error = %v, want injected upload error", err)
+			}
+		})
+	}
+}
+
+// A transport can flatten a caller-cancelled request into a non-context error.
+// Hold the streaming producer until that error is recorded, then let it observe
+// the cancelled context. The caller's cancellation must still win.
+func TestWriterReadFromStreamingCallerContextWithRecordedTransportError(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deadline bool
+		want     error
+	}{
+		{name: "cancel", want: context.Canceled},
+		{name: "deadline", deadline: true, want: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if tc.deadline {
+				ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+			} else {
+				ctx, cancel = context.WithCancel(context.Background())
+			}
+			defer cancel()
+
+			startEntered := make(chan struct{})
+			releaseStart := make(chan struct{})
+			partEntered := make(chan struct{})
+			bufferEntered := make(chan struct{})
+			releaseBuffer := make(chan struct{})
+			recorded := make(chan struct{})
+			flattened := errors.New("flattened transport error")
+			bucket := newProgressReviewBucket(t)
+			bucket.b = &readFromFailureBucket{
+				beBucketInterface: bucket.b,
+				startEntered:      startEntered,
+				releaseStart:      releaseStart,
+				partEntered:       partEntered,
+				failure:           flattened,
+			}
+			writer := bucket.Object("caller-context-streaming").NewWriter(ctx,
+				WithCancelOnError(func() context.Context { return context.Background() }, func(error) { close(recorded) }))
+			writer.ChunkSize = 3
+			writer.ConcurrentUploads = 1
+			done := make(chan error, 1)
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				_, err := io.Copy(writer, struct{ io.ReadSeeker }{bytes.NewReader(bytes.Repeat([]byte("x"), 128))})
+				done <- err
+			}()
+			var releaseStartOnce, releaseBufferOnce sync.Once
+			unblock := func() {
+				releaseStartOnce.Do(func() { close(releaseStart) })
+				releaseBufferOnce.Do(func() { close(releaseBuffer) })
+			}
+			t.Cleanup(func() {
+				cancel()
+				unblock()
+				select {
+				case <-finished:
+				case <-time.After(5 * time.Second):
+					t.Error("streaming copy did not finish")
+				}
+				_ = writer.Close()
+			})
+			waitReadFromEvent(t, startEntered, "large-file start")
+			originalBuffer := writer.newBuffer
+			writer.newBuffer = func() (writeBuffer, error) {
+				close(bufferEntered)
+				<-releaseBuffer
+				return originalBuffer()
+			}
+			releaseStartOnce.Do(func() { close(releaseStart) })
+			waitReadFromEvent(t, partEntered, "part upload")
+			waitReadFromEvent(t, bufferEntered, "next buffer")
+			if !tc.deadline {
+				cancel()
+			}
+			waitReadFromEvent(t, recorded, "recorded transport error")
+			if err := writer.getErr(); !errors.Is(err, flattened) {
+				t.Fatalf("recorded error = %v, want flattened transport error", err)
+			}
+			releaseBufferOnce.Do(func() { close(releaseBuffer) })
+			select {
+			case err := <-done:
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("io.Copy error = %v, want caller's %v", err, tc.want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("streaming copy did not return")
+			}
+		})
+	}
+}
+
+func waitReadFromEvent(t *testing.T, event <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-event:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
+type readFromFailureBucket struct {
+	beBucketInterface
+	startEntered, releaseStart, partEntered chan struct{}
+	failure                                 error
+}
+
+func (b *readFromFailureBucket) startLargeFile(ctx context.Context, name, contentType string, info map[string]string, retention *FileRetention, legalHold LegalHold, encryption *uploadEncryption) (beLargeFileInterface, error) {
+	file, err := b.beBucketInterface.startLargeFile(ctx, name, contentType, info, retention, legalHold, encryption)
+	if err != nil {
+		return nil, err
+	}
+	if b.startEntered != nil {
+		close(b.startEntered)
+		<-b.releaseStart
+	}
+	return &readFromFailureFile{beLargeFileInterface: file, partEntered: b.partEntered, failure: b.failure}, nil
+}
+
+func (b *readFromFailureBucket) listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error) {
+	return nil, "", nil
+}
+
+type readFromFailureFile struct {
+	beLargeFileInterface
+	partEntered chan struct{}
+	failure     error
+}
+
+func (f *readFromFailureFile) getUploadPartURL(ctx context.Context) (beFileChunkInterface, error) {
+	chunk, err := f.beLargeFileInterface.getUploadPartURL(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &readFromFailureChunk{beFileChunkInterface: chunk, partEntered: f.partEntered, failure: f.failure}, nil
+}
+
+type readFromFailureChunk struct {
+	beFileChunkInterface
+	partEntered chan struct{}
+	failure     error
+}
+
+func (c *readFromFailureChunk) uploadPart(ctx context.Context, _ readResetter, _ string, _, _ int) (int, error) {
+	if c.partEntered != nil {
+		close(c.partEntered)
+		<-ctx.Done()
+	}
+	return 0, c.failure
 }
