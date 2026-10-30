@@ -49,7 +49,8 @@ func TestObjectLockUpdateInvalidatesCachedInfo(t *testing.T) {
 
 func TestObjectDeleteRejectsFolderStatus(t *testing.T) {
 	file := &testFile{n: "folder", a: "folder", files: map[string]string{"folder": "present"}}
-	object := objectForDeleteOptionTest(file)
+	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
+	object := &Object{f: &beFile{b2file: file, ri: root}}
 	if err := object.Delete(context.Background()); err == nil || !strings.Contains(err.Error(), "not a regular file or hide marker") {
 		t.Fatalf("Delete(folder) error = %v, want non-regular-file rejection", err)
 	}
