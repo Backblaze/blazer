@@ -35,4 +35,4 @@ Test code only.
 
 ## Open questions
 
-None.
+Key.Expires() maps a null expiration to 1970 (#244, fixed by #250); this change doesn't assert that mapping.

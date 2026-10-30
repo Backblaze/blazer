@@ -27,7 +27,7 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
   keys (name, ID, non-null expiration from milliseconds) and cursor `"k-3"`; a second call with `"k-3"`
   sends `startApplicationKeyId` `"k-3"`. An empty `keys` list returns `io.EOF`.
   A key with no expiry uses `expirationTimestamp: null`; its name and ID are asserted, while its expiry
-  mapping is deferred (see Areas of concern). Capabilities mapping is tracked separately in #220.
+  mapping is fixed by #250 (#244); this test does not assert it. Capabilities mapping is tracked separately in #220.
 - **R6. Delete key.** `Key.Delete` sends `b2_delete_key` with `applicationKeyId`.
 - **R7. Cancel large file.** `Object.Cancel` on an unfinished (`start`) file sends `b2_cancel_large_file`
   with its `fileId`; on an uploaded file it returns an error and sends no cancel.
@@ -94,7 +94,5 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
    The cancellation-trigger assertion remains deferred to #176; the diagnostic test was removed so the
    committed tests stay race-clean. This does not limit the separate `AfterNBytes` one-shot assertion.
    Owner: @ffumero2003.
-4. **R5 null expiry mapping needs a separate issue.** The documented `expirationTimestamp: null` currently
-   produces `1970-01-01T00:00:00Z` (`IsZero=false`) through `Key.Expires()`. Do not pin that value as correct.
-   The fixture uses null and asserts the key's name and ID; propose a separate production fix to preserve
-   the absence of an expiry. Owner: @ffumero2003.
+4. **R5 null expiry mapping.** #244's `expirationTimestamp: null` mapping is fixed by #250. The fixture
+   uses null and asserts the key's name and ID, but does not assert the expiry mapping. Owner: @ffumero2003.
