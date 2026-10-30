@@ -239,8 +239,12 @@ func runCheck(ctx context.Context, target *string) error {
 }
 
 // waitForCompletedPart polls blazer's pull-model writer status until one chunk
-// reports a ratio of 1: the first part is on the wire and the large file has
-// been started.
+// reports a ratio of 1 AND a b2_upload_part call has returned. The ratio is
+// bytes read from the request body over the part size, so it reaches 1 when the
+// last byte is written, before the server has committed the part. Cancelling on
+// the ratio alone can abort the part in flight and leave nothing committed, and
+// a correct resume then re-sends every part. Blazer counts an RPC when it
+// returns, so a counted b2_upload_part means a part is on the server.
 func waitForCompletedPart(client *b2.Client, within time.Duration) bool {
 	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
@@ -251,7 +255,7 @@ func waitForCompletedPart(client *b2.Client, within time.Duration) bool {
 					continue
 				}
 				for _, ratio := range writer.Progress {
-					if ratio >= 1 {
+					if ratio >= 1 && callsMatching(map[string]int{}, rpcCounts(client), "b2_upload_part", statusWindows(client)) >= 1 {
 						return true
 					}
 				}
