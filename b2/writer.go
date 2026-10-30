@@ -83,7 +83,7 @@ type Writer struct {
 
 	csize       int
 	ctx         context.Context
-	cancel      context.CancelFunc // cancels ctx
+	cancel      context.CancelCauseFunc // cancels ctx with the first Writer error
 	ctxf        func() context.Context
 	errf        func(error)
 	ready       chan chunk
@@ -151,7 +151,7 @@ func (w *Writer) setErr(err error) {
 	}
 	blog.V(1).Infof("error writing object: %T", err)
 	w.err = err
-	w.cancel()
+	w.cancel(err)
 	w.emux.Unlock()
 	if w.ctxf == nil || w.file == nil {
 		return
@@ -653,9 +653,10 @@ func (w *Writer) sendChunk() error {
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
-// If the Writer's context is cancelled while ReadFrom is copying from a
-// non-seekable r, ReadFrom returns the recorded Writer error, if any, or the
-// context error without waiting for a Read on r that is already in progress.
+// On every path, ReadFrom returns the Writer's error when an upload fails, or
+// the caller's context error when the caller cancels. If the Writer's context
+// is cancelled while copying from a non-seekable r, ReadFrom returns without
+// waiting for a Read on r that is already in progress.
 // Once ReadFrom has returned, nothing more from r is written to w; data read
 // before cancellation may already have been written. That pending Read may
 // still finish later, so do not reuse r until it has returned (for example,
@@ -666,8 +667,8 @@ func (w *Writer) sendChunk() error {
 func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 	defer func() {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if recorded := w.getErr(); recorded != nil && !errors.Is(recorded, err) {
-				err = recorded
+			if cause := context.Cause(w.ctx); cause != nil {
+				err = cause
 			}
 		}
 	}()
