@@ -157,6 +157,9 @@ func TestWriterCloseWaitsForErrorCallback(t *testing.T) {
 	cancelEntered := make(chan struct{})
 	cancelRelease := make(chan struct{})
 	releaseCancel := sync.OnceFunc(func() { close(cancelRelease) })
+	callbackEntered := make(chan struct{})
+	callbackRelease := make(chan struct{})
+	releaseCallback := sync.OnceFunc(func() { close(callbackRelease) })
 	callbackDone := make(chan struct{})
 	callbackResult := make(chan error, 1)
 	srv := b2wiretest.New(t)
@@ -180,12 +183,15 @@ func TestWriterCloseWaitsForErrorCallback(t *testing.T) {
 	}
 	writer := bucket.Object("cancelled").NewWriter(ctx, WithCancelOnError(context.Background, func(err error) {
 		callbackResult <- err
-		close(callbackDone) // No wait on Close or on any other channel.
+		close(callbackEntered)
+		<-callbackRelease // Test-controlled gate; never waits on Close.
+		close(callbackDone)
 	}))
 	// The recording server does not enforce B2's minimum part size.
 	writer.ChunkSize = 3
 	t.Cleanup(func() {
 		releaseCancel()
+		releaseCallback()
 		workersDone := make(chan struct{})
 		go func() { writer.wg.Wait(); close(workersDone) }()
 		select {
@@ -208,12 +214,18 @@ func TestWriterCloseWaitsForErrorCallback(t *testing.T) {
 	go func() {
 		closed <- writer.Close()
 	}()
+	releaseCancel()
+	select {
+	case <-callbackEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("errf did not start after cancel_large_file completed")
+	}
 	select {
 	case err := <-closed:
-		t.Fatalf("Close returned before cancel_large_file was released: %v", err)
-	default:
+		t.Fatalf("Close returned while errf was blocked: %v", err)
+	case <-time.After(200 * time.Millisecond):
 	}
-	releaseCancel()
+	releaseCallback()
 	select {
 	case err := <-closed:
 		select {
