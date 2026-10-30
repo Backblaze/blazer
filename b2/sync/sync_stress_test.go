@@ -99,6 +99,18 @@ func TestSyncDryRunAndCancellation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "later.txt"), []byte("later"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	preCancelled, cancelPreCancelled := context.WithCancel(context.Background())
+	cancelPreCancelled()
+	if _, err := Sync(preCancelled, bucket, "precancelled", root); err != context.Canceled {
+		t.Fatalf("pre-cancelled sync: %v, want %v", err, context.Canceled)
+	}
+	wire.mu.Lock()
+	preCancelledUploads := len(wire.uploads)
+	wire.mu.Unlock()
+	if preCancelledUploads != uploads {
+		t.Fatalf("pre-cancelled sync made %d uploads, want %d", preCancelledUploads, uploads)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	type cancelledVisit struct {
