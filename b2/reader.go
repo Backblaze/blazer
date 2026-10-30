@@ -385,9 +385,16 @@ type guardedCopyWriter struct {
 
 func (w *guardedCopyWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	unlock := sync.OnceFunc(w.mu.Unlock)
+	defer unlock()
 	if w.stopped {
 		return 0, errCopyAbandoned
+	}
+	if writer, ok := w.w.(*Writer); ok {
+		return writer.write(p, func(err error) {
+			unlock()
+			writer.setErr(err)
+		})
 	}
 	return w.w.Write(p)
 }
@@ -401,13 +408,13 @@ func copyContext(ctx context.Context, w io.Writer, r io.Reader) (int64, error) {
 // Without a closer, it stops destination writes before returning instead of
 // waiting for a source Read that may never finish.
 func copyContextWithCloser(ctx context.Context, w io.Writer, r io.Reader, closer io.Closer) (int64, error) {
-	if _, ok := w.(*Writer); ok {
-		w = onlyWriter{w}
-	}
 	var guarded *guardedCopyWriter
 	if closer == nil {
 		guarded = &guardedCopyWriter{w: w}
 		w = guarded
+	}
+	if _, ok := w.(*Writer); ok {
+		w = onlyWriter{w}
 	}
 	var n int64
 	var err error

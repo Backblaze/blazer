@@ -145,13 +145,14 @@ func (w *Writer) setErr(err error) {
 		return
 	}
 	w.emux.Lock()
-	defer w.emux.Unlock()
 	if w.err != nil {
+		w.emux.Unlock()
 		return
 	}
 	blog.V(1).Infof("error writing object: %T", err)
 	w.err = err
 	w.cancel()
+	w.emux.Unlock()
 	if w.ctxf == nil || w.file == nil {
 		return
 	}
@@ -282,6 +283,12 @@ func (w *Writer) checkObjectLock() error {
 
 // Write satisfies the io.Writer interface.
 func (w *Writer) Write(p []byte) (int, error) {
+	return w.write(p, w.setErr)
+}
+
+// write calls setErr only on terminal error paths, after its last buffer write.
+// A guarded copy can release its write lock there before error cleanup blocks.
+func (w *Writer) write(p []byte, setErr func(error)) (int, error) {
 	w.closeWrite.RLock()
 	defer w.closeWrite.RUnlock()
 	if w.closed {
@@ -302,18 +309,18 @@ func (w *Writer) Write(p []byte) (int, error) {
 		if len(p) <= left {
 			k, err := w.w.Write(p)
 			if err != nil {
-				w.setErr(err)
+				setErr(err)
 			}
 			return n + k, err
 		}
 		i, err := w.w.Write(p[:left])
 		n += i
 		if err != nil {
-			w.setErr(err)
+			setErr(err)
 			return n, err
 		}
 		if err := w.sendChunk(); err != nil {
-			w.setErr(err)
+			setErr(err)
 			return n, w.getErr()
 		}
 		p = p[left:]
@@ -729,6 +736,8 @@ func (w *Writer) Close() error {
 	w.done.Do(func() {
 		w.closeWrite.Lock()
 		defer w.closeWrite.Unlock()
+		// Error exits must also wait for worker-owned cancellation callbacks.
+		defer w.wg.Wait()
 		if !w.everStarted {
 			w.init()
 			w.setErr(w.simpleWriteFile())
