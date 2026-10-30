@@ -368,6 +368,9 @@ func millitime(t int64) time.Time {
 	return time.Unix(t/1000, t%1000*1e6)
 }
 
+// b2_create_key and b2_list_keys return null expirationTimestamp for keys that
+// never expire; it decodes as zero, which must map to the zero time. Keep
+// millitime unchanged because it also converts file timestamps.
 func keyExpiration(t int64) time.Time {
 	if t == 0 {
 		return time.Time{}
