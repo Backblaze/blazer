@@ -45,6 +45,10 @@ func TestUploadHangRequestsNewUploadURL(t *testing.T) {
 					_, _ = fmt.Fprint(w, `{"fileId":"first","fileName":"name","contentLength":7,"uploadTimestamp":0,"action":"upload"}`)
 				case 2:
 					w.WriteHeader(http.StatusBadRequest)
+					// B2 limits an upload URL/token to one thread, and its integration guide says to
+					// get a new pair after a broken connection. See https://github.com/restic/restic/issues/1207,
+					// https://www.backblaze.com/docs/cloud-storage-upload-files-with-the-native-api, and
+					// https://www.backblaze.com/docs/cloud-storage-integration-checklist.
 					_, _ = fmt.Fprint(w, `{"status":400,"code":"bad_request","message":"more than one upload using auth token: upload-token"}`)
 				default:
 					t.Errorf("unexpected upload call %d", call)

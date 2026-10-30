@@ -52,9 +52,17 @@ func TestBucketRevealWire(t *testing.T) {
 		if err := bucket.Reveal(context.Background(), "gone"); err != nil {
 			t.Fatal(err)
 		}
-		request := srv.Last(t, "b2_delete_file_version")
-		b2wiretest.AssertJSON(t, request, "fileId", "hide-id")
-		b2wiretest.AssertJSON(t, request, "fileName", "gone")
+		listCalls := srv.Calls("b2_list_file_versions")
+		if len(listCalls) != 1 {
+			t.Fatalf("b2_list_file_versions calls = %d, want 1", len(listCalls))
+		}
+		b2wiretest.AssertJSON(t, listCalls[0], "prefix", "gone")
+		deleteCalls := srv.Calls("b2_delete_file_version")
+		if len(deleteCalls) != 1 {
+			t.Fatalf("b2_delete_file_version calls = %d, want 1", len(deleteCalls))
+		}
+		b2wiretest.AssertJSON(t, deleteCalls[0], "fileId", "hide-id")
+		b2wiretest.AssertJSON(t, deleteCalls[0], "fileName", "gone")
 	})
 	t.Run("leaves a current upload alone", func(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
@@ -122,6 +130,9 @@ func TestObjectAuthURLWire(t *testing.T) {
 	if _, ok := u.Query()["b2ContentDisposition"]; ok {
 		t.Errorf("empty disposition URL query = %q, want b2ContentDisposition omitted", u.RawQuery)
 	}
+	if got := u.Query().Get("Authorization"); got != "download-token" {
+		t.Errorf("empty disposition Authorization = %q, want %q", got, "download-token")
+	}
 	request = srv.Last(t, "b2_get_download_authorization")
 	b2wiretest.AssertNoJSON(t, request, "b2ContentDisposition")
 }
@@ -131,6 +142,7 @@ func TestObjectAuthURLWire(t *testing.T) {
 func TestClientListKeysAndDeleteWire(t *testing.T) {
 	srv := b2wiretest.New(t)
 	client := liveOnlyClient(t, srv)
+	// #244's null expiry mapping is fixed by #250; this test does not assert it.
 	srv.ReplySequence("b2_list_keys",
 		b2wiretest.Response{Status: http.StatusOK, Body: `{"keys":[{"applicationKeyId":"k-1","keyName":"first","capabilities":["listBuckets"],"expirationTimestamp":1700000000123},{"applicationKeyId":"k-2","keyName":"second","capabilities":["readFiles"],"expirationTimestamp":null}],"nextApplicationKeyId":"k-3"}`},
 		b2wiretest.Response{Status: http.StatusOK, Body: `{"keys":[]}`},
