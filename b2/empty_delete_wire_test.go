@@ -55,12 +55,13 @@ func TestZeroByteObjectWire(t *testing.T) {
 			}
 			b2wiretest.AssertJSON(t, srv.Last(t, "b2_get_file_info"), "fileId", "empty-id")
 			reader := bucket.Object("empty").NewReader(ctx)
-			defer reader.Close()
+			defer func() {
+				if err := reader.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			data, err := io.ReadAll(reader)
 			if err != nil {
-				t.Fatal(err)
-			}
-			if err := reader.Close(); err != nil {
 				t.Fatal(err)
 			}
 			if len(data) != 0 {
