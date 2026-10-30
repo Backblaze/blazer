@@ -85,6 +85,10 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 		"exposeHeaders": []string{"x-bz-file-name"}, "maxAgeSeconds": 60,
 	}})
 	b2wiretest.AssertJSON(t, creates[0], "fileLockEnabled", true)
+	// b2_create_bucket documents corsRules as optional and fileLockEnabled as
+	// false by default, so a plain bucket omits both fields.
+	b2wiretest.AssertNoJSON(t, creates[1], "corsRules")
+	b2wiretest.AssertNoJSON(t, creates[1], "fileLockEnabled")
 	attrs, err := bucket.Attrs(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +105,14 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 	}
 	if len(attrs.CORSRules) != 0 || attrs.FileLockEnabled {
 		t.Errorf("plain bucket attrs = %+v, want no CORS rules and no file lock", attrs)
+	}
+	lists := srv.Calls("b2_list_buckets")
+	if len(lists) != 4 {
+		t.Fatalf("list requests = %d, want 4", len(lists))
+	}
+	for i, name := range []string{"locked", "plain"} {
+		b2wiretest.AssertJSON(t, lists[i+2], "bucketName", name)
+		b2wiretest.AssertNoJSON(t, lists[i+2], "bucketId")
 	}
 }
 
@@ -139,6 +151,7 @@ func (t testError) Error() string {
 type errCont struct {
 	errMap map[string]map[int]error
 	opMap  sync.Map
+	onCall func(name string, attempt uint32)
 }
 
 func (e *errCont) getError(name string) error {
@@ -147,6 +160,9 @@ func (e *errCont) getError(name string) error {
 	}
 	val, _ := e.opMap.LoadOrStore(name, new(uint32))
 	newVal := atomic.AddUint32(val.(*uint32), 1)
+	if e.onCall != nil {
+		e.onCall(name, newVal)
+	}
 	return e.errMap[name][int(newVal-1)]
 }
 
@@ -1746,45 +1762,95 @@ func TestWriterReturnsError(t *testing.T) {
 }
 
 func TestWriterLimitNewUploadAttempts(t *testing.T) {
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	// One worker makes the per-part attempt count independent of scheduling.
-	errorMap := make(map[int]error)
-	for i := 0; i < 7; i++ {
-		errorMap[i] = testError{reupload: true, maxReuploads: 5}
-	}
-	errs := &errCont{errMap: map[string]map[int]error{"uploadPart": errorMap}}
-
-	client := &Client{
-		backend: &beRoot{
-			b2i: &testRoot{
+	for _, uploads := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d workers", uploads), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			const attempts = 6 // one initial attempt plus five reuploads
+			errorMap := make(map[string]map[int]error)
+			for part := 1; part <= uploads; part++ {
+				retries := make(map[int]error)
+				for attempt := 0; attempt < attempts+1; attempt++ {
+					retries[attempt] = testError{reupload: true, maxReuploads: attempts - 1}
+				}
+				errorMap[fmt.Sprintf("uploadPart:%d", part)] = retries
+			}
+			errs := &errCont{errMap: errorMap}
+			started := make(chan string, uploads)
+			release := make(chan struct{})
+			if uploads > 1 {
+				errs.onCall = func(name string, attempt uint32) {
+					if attempt == 1 && strings.HasPrefix(name, "uploadPart:") {
+						started <- name
+						<-release
+					}
+				}
+			}
+			client := &Client{backend: &beRoot{b2i: &testRoot{
 				bucketMap: make(map[string]map[string]string),
 				errs:      errs,
 				afterFunc: newTestAfter().wait,
-			},
-		},
-	}
-
-	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := bucket.Object("test").NewWriter(ctx)
-	r := io.LimitReader(zReader{}, 1e7)
-	w.ChunkSize = 1e4
-	w.ConcurrentUploads = 1
-	if _, err := io.Copy(w, r); err == nil {
-		t.Fatalf("io.Copy: should have returned an error")
-	}
-	w.wg.Wait()
-	count, ok := errs.opMap.Load("uploadPart")
-	if !ok {
-		t.Fatal("uploadPart attempts = 0, want 6 (initial attempt plus five reuploads)")
-	}
-	if got := atomic.LoadUint32(count.(*uint32)); got != 6 {
-		t.Fatalf("uploadPart attempts = %d, want 6 (initial attempt plus five reuploads)", got)
+			}}}
+			bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := bucket.Object("test").NewWriter(ctx)
+			w.ChunkSize = 1e4
+			w.ConcurrentUploads = uploads
+			copyDone := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(w, io.LimitReader(zReader{}, 1e7))
+				copyDone <- err
+			}()
+			if uploads > 1 {
+				parts := map[string]bool{}
+				for range uploads {
+					select {
+					case part := <-started:
+						parts[part] = true
+					case <-ctx.Done():
+						t.Fatal("concurrent uploads did not both start:", ctx.Err())
+					}
+				}
+				if got := len(parts); got != uploads {
+					t.Fatalf("concurrent upload parts = %d, want %d", got, uploads)
+				}
+				close(release)
+			}
+			select {
+			case err := <-copyDone:
+				if err == nil {
+					t.Fatal("io.Copy: should have returned an error")
+				}
+			case <-ctx.Done():
+				t.Fatal("io.Copy did not return:", ctx.Err())
+			}
+			w.wg.Wait()
+			seen := 0
+			reachedCap := false
+			errs.opMap.Range(func(key, value any) bool {
+				name := key.(string)
+				if !strings.HasPrefix(name, "uploadPart:") {
+					return true
+				}
+				got := atomic.LoadUint32(value.(*uint32))
+				if got > attempts {
+					t.Errorf("%s attempts = %d, want at most %d", name, got, attempts)
+				}
+				if got == attempts {
+					reachedCap = true
+				}
+				seen++
+				return true
+			})
+			if seen < uploads {
+				t.Fatalf("upload parts with attempts = %d, want at least %d", seen, uploads)
+			}
+			if !reachedCap {
+				t.Fatalf("no part reached %d attempts", attempts)
+			}
+		})
 	}
 }
 
@@ -1923,20 +1989,44 @@ func TestBucketDefaultEncryptionRejected(t *testing.T) {
 	for _, ent := range table {
 		t.Run(ent.name, func(t *testing.T) {
 			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+			lists := len(srv.Calls("b2_list_buckets"))
 			creates := len(srv.Calls("b2_create_bucket"))
 			updates := len(srv.Calls("b2_update_bucket"))
 			attrs := &BucketAttrs{DefaultServerSideEncryption: ent.sse}
 			_, err := client.NewBucket(ctx, "new-"+ent.name, attrs)
+			if got := len(srv.Calls("b2_list_buckets")) - lists; got != 1 {
+				t.Errorf("NewBucket listed %d times, want 1", got)
+			}
 			if (err == nil) != ent.ok {
 				t.Errorf("NewBucket(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
 			}
 			if !ent.ok && (err == nil || err.Error() != ent.wantErr) {
 				t.Errorf("NewBucket error = %v, want %q", err, ent.wantErr)
 			}
+			if !ent.ok {
+				if got := len(srv.Calls("b2_create_bucket")) - creates; got != 0 {
+					t.Errorf("invalid default sent %d create requests, want 0", got)
+				}
+				if got := len(srv.Calls("b2_update_bucket")) - updates; got != 0 {
+					t.Errorf("invalid default sent %d update requests, want 0", got)
+				}
+			}
 			// Attrs are ignored when the bucket already exists.
 			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[`+updateBucketJSON+`]}`)
+			lists = len(srv.Calls("b2_list_buckets"))
+			creates = len(srv.Calls("b2_create_bucket"))
+			updates = len(srv.Calls("b2_update_bucket"))
 			if _, err := client.NewBucket(ctx, "n", attrs); err != nil {
 				t.Errorf("NewBucket(existing, %+v): err = %v, want nil", ent.sse, err)
+			}
+			if got := len(srv.Calls("b2_list_buckets")) - lists; got != 1 {
+				t.Errorf("NewBucket(existing) listed %d times, want 1", got)
+			}
+			if got := len(srv.Calls("b2_create_bucket")) - creates; got != 0 {
+				t.Errorf("NewBucket(existing) sent %d create requests, want 0", got)
+			}
+			if got := len(srv.Calls("b2_update_bucket")) - updates; got != 0 {
+				t.Errorf("NewBucket(existing) sent %d update requests, want 0", got)
 			}
 			err = bucket.Update(ctx, attrs)
 			if (err == nil) != ent.ok {
@@ -1945,10 +2035,6 @@ func TestBucketDefaultEncryptionRejected(t *testing.T) {
 			if !ent.ok {
 				if err == nil || err.Error() != ent.wantErr {
 					t.Errorf("Update error = %v, want %q", err, ent.wantErr)
-				}
-				// NewBucket may list first, but invalid settings must never be sent.
-				if got := len(srv.Calls("b2_create_bucket")) - creates; got != 0 {
-					t.Errorf("invalid default sent %d create requests, want 0", got)
 				}
 				if got := len(srv.Calls("b2_update_bucket")) - updates; got != 0 {
 					t.Errorf("invalid default sent %d update requests, want 0", got)
