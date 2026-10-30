@@ -654,15 +654,23 @@ func (w *Writer) sendChunk() error {
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
 // If the Writer's context is cancelled while ReadFrom is copying from a
-// non-seekable r, ReadFrom returns the context error without waiting for a
-// Read on r that is already in progress. Once ReadFrom has returned, nothing
-// more from r is written to w; data read before the cancellation may already
-// have been written. That pending Read may still finish later, so do not reuse
-// r until it has returned (for example, close r first if it supports it).
+// non-seekable r, ReadFrom returns the recorded Writer error, if any, or the
+// context error without waiting for a Read on r that is already in progress.
+// Once ReadFrom has returned, nothing more from r is written to w; data read
+// before cancellation may already have been written. That pending Read may
+// still finish later, so do not reuse r until it has returned (for example,
+// close r first if it supports it).
 //
 // With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
 // its remaining length supplies the progress total.
-func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
+func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
+	defer func() {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if recorded := w.getErr(); recorded != nil && !errors.Is(recorded, err) {
+				err = recorded
+			}
+		}
+	}()
 	rs, ok := r.(io.ReadSeeker)
 	if !ok {
 		return copyContext(w.ctx, w, r)
