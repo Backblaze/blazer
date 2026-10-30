@@ -663,6 +663,9 @@ func (w *Writer) sendChunk() error {
 // even if the caller supplied a custom cause. If the Writer's context is
 // cancelled while copying from a non-seekable r, ReadFrom returns without
 // waiting for a Read on r that is already in progress.
+// When the Writer cancels itself, ReadFrom returns the same first recorded
+// error as Close, so errors.Is and errors.As work and io.Copy sees it rather
+// than context.Canceled.
 // Once ReadFrom has returned, nothing more from r is written to w; data read
 // before cancellation may already have been written. That pending Read may
 // still finish later, so do not reuse r until it has returned (for example,
