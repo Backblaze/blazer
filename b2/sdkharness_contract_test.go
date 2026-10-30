@@ -85,6 +85,7 @@ func TestSDKHarnessContract(t *testing.T) {
 // Inspect the embedded Go entry point, rather than accepting shell boilerplate
 // as evidence of a scenario. This structural gate does not replace running it.
 func sdkHarnessScenarioChecks(script string) error {
+	script = strings.ReplaceAll(script, "\r\n", "\n")
 	_, program, ok := strings.Cut(script, "\npackage main\n")
 	if !ok {
 		return fmt.Errorf("no embedded Go program")
@@ -171,7 +172,7 @@ func sdkHarnessResultConsumed(main, entry *ast.FuncDecl) bool {
 			}
 		case *ast.IfStmt:
 			names := sdkHarnessEntryResultNames(node.Init, entry.Name.Name)
-			if sdkHarnessCallsEntry(node.Cond, entry.Name.Name) || len(names) != 0 {
+			if sdkHarnessCallsEntry(node.Cond, entry.Name.Name) || sdkHarnessReferencesResult(node.Cond, names) {
 				consumed = consumed || sdkHarnessReportsFailure(node.Body, names)
 			}
 			if sdkHarnessReferencesResult(node.Cond, resultNames) {
@@ -291,12 +292,33 @@ func sdkHarnessNonZero(expression ast.Expr) bool {
 	return err == nil && value != 0
 }
 
+func TestSDKHarnessAcceptsScenario(t *testing.T) {
+	const script = "replace github.com/Backblaze/blazer => $REPO_ROOT\npackage main\n" +
+		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }
+func main() { if err := runCheck(); err != nil { os.Exit(1) } }
+__EOF_GO__
+`
+	for _, tc := range []struct {
+		name, script string
+	}{
+		{name: "LF", script: script},
+		{name: "CRLF", script: strings.ReplaceAll(script, "\n", "\r\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := sdkHarnessScenarioChecks(tc.script); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestSDKHarnessRejectsNoOpScenario(t *testing.T) {
 	for _, program := range []string{
 		"func main() {}",
 		"func runCheck() error { return nil }; func main() { runCheck() }",
 		"func fail() {}; func runCheck() error { if true { fail() }; return nil }; func main() { runCheck() }",
 		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }; func main() {}`,
+		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }; func main() { if err := runCheck(); false { fmt.Println(err); os.Exit(1) } }`,
 	} {
 		if err := sdkHarnessScenarioChecks("replace github.com/Backblaze/blazer => $REPO_ROOT\npackage main\n" + program); err == nil {
 			t.Fatalf("accepted no-op scenario %q", program)
