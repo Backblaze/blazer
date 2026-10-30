@@ -112,6 +112,13 @@ func (options *composeOptions) validate() (contentType string, info map[string]s
 	return contentType, info, nil
 }
 
+func validateComposePlatformSize(size, intLimit uint64) error {
+	if size > intLimit {
+		return fmt.Errorf("b2: Compose uploaded part exceeds this platform's maximum buffer size")
+	}
+	return nil
+}
+
 func (p ComposePart) validate(nonFinal bool) error {
 	const minPartSize int64 = 5e6
 	const maxPartSize int64 = 5e9
@@ -125,8 +132,8 @@ func (p ComposePart) validate(nonFinal bool) error {
 		if p.size > maxPartSize {
 			return fmt.Errorf("b2: Compose uploaded part exceeds the 5 GB B2 part limit")
 		}
-		if uint64(p.size) > uint64(^uint(0)>>1) {
-			return fmt.Errorf("b2: Compose uploaded part exceeds this platform's maximum buffer size")
+		if err := validateComposePlatformSize(uint64(p.size), uint64(^uint(0)>>1)); err != nil {
+			return err
 		}
 		if nonFinal && p.size < minPartSize {
 			return fmt.Errorf("b2: Compose nonfinal part must be at least %d bytes", minPartSize)
