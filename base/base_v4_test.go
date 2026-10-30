@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // v4AuthJSON builds a v4-shaped authorizeAccount response whose apiUrl points
@@ -98,6 +99,61 @@ func TestAuthorizeAccountV4(t *testing.T) {
 	}
 	if b.accountID != "account-id" {
 		t.Errorf("accountID = %q, want %q", b.accountID, "account-id")
+	}
+}
+
+func TestListKeysReturnsCapabilities(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/b2api/v4/b2_authorize_account":
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+		case "/b2api/v4/b2_list_keys":
+			_, _ = fmt.Fprint(w, `{"keys":[{"applicationKeyId":"key-1","keyName":"first","capabilities":["listBuckets"],"expirationTimestamp":1700000000123},{"applicationKeyId":"key-2","keyName":"second","capabilities":["readFiles","writeFiles"],"expirationTimestamp":1700000001456}],"nextApplicationKeyId":"next-key"}`)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b, err := AuthorizeAccount(context.Background(), "account-id", "application-key", SetAPIBase(srv.URL))
+	if err != nil {
+		t.Fatalf("AuthorizeAccount: %v", err)
+	}
+	keys, next, err := b.ListKeys(context.Background(), 10, "")
+	if err != nil {
+		t.Fatalf("ListKeys: %v", err)
+	}
+	if next != "next-key" {
+		t.Errorf("next = %q, want %q", next, "next-key")
+	}
+
+	want := []struct {
+		name         string
+		id           string
+		capabilities []string
+		expires      time.Time
+	}{
+		{"first", "key-1", []string{"listBuckets"}, time.Date(2023, time.November, 14, 22, 13, 20, 123000000, time.UTC)},
+		{"second", "key-2", []string{"readFiles", "writeFiles"}, time.Date(2023, time.November, 14, 22, 13, 21, 456000000, time.UTC)},
+	}
+	if len(keys) != len(want) {
+		t.Fatalf("ListKeys returned %d keys, want %d", len(keys), len(want))
+	}
+	for i, key := range keys {
+		if key.Name != want[i].name {
+			t.Errorf("keys[%d].Name = %q, want %q", i, key.Name, want[i].name)
+		}
+		if key.ID != want[i].id {
+			t.Errorf("keys[%d].ID = %q, want %q", i, key.ID, want[i].id)
+		}
+		if !reflect.DeepEqual(key.Capabilities, want[i].capabilities) {
+			t.Errorf("keys[%d].Capabilities = %v, want %v", i, key.Capabilities, want[i].capabilities)
+		}
+		if !key.Expires.Equal(want[i].expires) {
+			t.Errorf("keys[%d].Expires = %v, want %v", i, key.Expires, want[i].expires)
+		}
 	}
 }
 
