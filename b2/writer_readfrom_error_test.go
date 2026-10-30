@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// Credential-free fakes accept this below-minimum part size to force multipart uploads.
+const readFromTestChunkSize = 3
+
 func TestWriterReadFromReturnsUploadError(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -28,7 +31,7 @@ func TestWriterReadFromReturnsUploadError(t *testing.T) {
 			srv.Reply("upload_part", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"part failed"}`)
 
 			writer := bucket.Object("failed").NewWriter(context.Background())
-			writer.ChunkSize = 3
+			writer.ChunkSize = readFromTestChunkSize
 			writer.ConcurrentUploads = 1
 			writer.Resume = tc.resume
 			payload := bytes.Repeat([]byte("x"), 128)
@@ -125,7 +128,7 @@ func TestWriterReadFromReturnsInjectedUploadError(t *testing.T) {
 			bucket := newProgressReviewBucket(t)
 			bucket.b = &readFromFailureBucket{beBucketInterface: bucket.b, failure: injected}
 			writer := bucket.Object("injected-error").NewWriter(context.Background())
-			writer.ChunkSize = 3
+			writer.ChunkSize = readFromTestChunkSize
 			writer.ConcurrentUploads = 1
 			writer.Resume = tc.resume
 			payload := bytes.Repeat([]byte("x"), 128)
@@ -150,19 +153,31 @@ func TestWriterReadFromReturnsInjectedUploadError(t *testing.T) {
 // Hold the streaming producer until that error is recorded, then let it observe
 // the cancelled context. The caller's cancellation must still win.
 func TestWriterReadFromStreamingCallerContextWithRecordedTransportError(t *testing.T) {
+	customCause := errors.New("caller-provided cancellation cause")
 	for _, tc := range []struct {
-		name     string
-		deadline bool
-		want     error
+		name        string
+		deadline    bool
+		customCause bool
+		want        error
 	}{
 		{name: "cancel", want: context.Canceled},
 		{name: "deadline", deadline: true, want: context.DeadlineExceeded},
+		{name: "cancel with cause", customCause: true, want: context.Canceled},
+		{name: "deadline with cause", deadline: true, customCause: true, want: context.DeadlineExceeded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var ctx context.Context
 			var cancel context.CancelFunc
+			var cancelWithCause context.CancelCauseFunc
 			if tc.deadline {
-				ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+				if tc.customCause {
+					ctx, cancel = context.WithTimeoutCause(context.Background(), 3*time.Second, customCause)
+				} else {
+					ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+				}
+			} else if tc.customCause {
+				ctx, cancelWithCause = context.WithCancelCause(context.Background())
+				cancel = func() { cancelWithCause(nil) }
 			} else {
 				ctx, cancel = context.WithCancel(context.Background())
 			}
@@ -185,7 +200,7 @@ func TestWriterReadFromStreamingCallerContextWithRecordedTransportError(t *testi
 			}
 			writer := bucket.Object("caller-context-streaming").NewWriter(ctx,
 				WithCancelOnError(func() context.Context { return context.Background() }, func(error) { close(recorded) }))
-			writer.ChunkSize = 3
+			writer.ChunkSize = readFromTestChunkSize
 			writer.ConcurrentUploads = 1
 			done := make(chan error, 1)
 			finished := make(chan struct{})
@@ -220,7 +235,11 @@ func TestWriterReadFromStreamingCallerContextWithRecordedTransportError(t *testi
 			waitReadFromEvent(t, partEntered, "part upload")
 			waitReadFromEvent(t, bufferEntered, "next buffer")
 			if !tc.deadline {
-				cancel()
+				if tc.customCause {
+					cancelWithCause(customCause)
+				} else {
+					cancel()
+				}
 			}
 			waitReadFromEvent(t, recorded, "recorded transport error")
 			if err := writer.getErr(); !errors.Is(err, flattened) {
@@ -231,6 +250,9 @@ func TestWriterReadFromStreamingCallerContextWithRecordedTransportError(t *testi
 			case err := <-done:
 				if !errors.Is(err, tc.want) {
 					t.Fatalf("io.Copy error = %v, want caller's %v", err, tc.want)
+				}
+				if tc.customCause && errors.Is(err, customCause) {
+					t.Fatalf("io.Copy error = %v, unexpectedly matches caller's custom cause", err)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("streaming copy did not return")
