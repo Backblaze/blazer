@@ -368,6 +368,13 @@ func millitime(t int64) time.Time {
 	return time.Unix(t/1000, t%1000*1e6)
 }
 
+func keyExpiration(t int64) time.Time {
+	if t == 0 {
+		return time.Time{}
+	}
+	return millitime(t)
+}
+
 type b2Options struct {
 	transport       http.RoundTripper
 	failSomeUploads bool
@@ -2098,7 +2105,7 @@ func (b *B2) doCreateKeyWithState(ctx context.Context, state authState, apiVersi
 		ID:           b2resp.ID,
 		Secret:       b2resp.Secret,
 		Capabilities: b2resp.Capabilities,
-		Expires:      millitime(b2resp.Expires),
+		Expires:      keyExpiration(b2resp.Expires),
 		BucketIDs:    keyBucketIDs(b2types.Key(*b2resp)),
 		Prefix:       b2resp.Prefix,
 		b2:           b,
@@ -2138,7 +2145,7 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 			Name:         key.Name,
 			ID:           key.ID,
 			Capabilities: key.Capabilities,
-			Expires:      millitime(key.Expires),
+			Expires:      keyExpiration(key.Expires),
 			BucketIDs:    keyBucketIDs(key),
 			Prefix:       key.Prefix,
 			b2:           b,
