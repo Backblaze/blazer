@@ -730,8 +730,10 @@ func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 	}
 }
 
-// Close satisfies the io.Closer interface.  It is critical to check the return
-// value of Close for all writers.
+// Close satisfies the io.Closer interface.  It waits for in-flight part uploads
+// and, when WithCancelOnError is set, for the b2_cancel_large_file call and errf
+// to finish before it returns.  It is critical to check the return value of Close
+// for all writers.
 func (w *Writer) Close() error {
 	w.done.Do(func() {
 		w.closeWrite.Lock()
@@ -891,7 +893,9 @@ func WithSSEB2(algorithm string) WriterOption {
 // upload, to call b2_cancel_large_file on any permanent error.  It calls ctxf
 // to obtain a context with which to cancel the file; this is to allow callers
 // to set specific timeouts.  If errf is non-nil, then it is called with the
-// (possibly nil) output of b2_cancel_large_file.
+// (possibly nil) output of b2_cancel_large_file.  The errf callback may run on a
+// background goroutine, and Close waits for it to finish.  errf must not call Close
+// or wait on the goroutine that calls Close, or they will deadlock.
 func WithCancelOnError(ctxf func() context.Context, errf func(error)) WriterOption {
 	return func(w *Writer) {
 		w.ctxf = ctxf

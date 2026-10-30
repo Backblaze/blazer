@@ -1,0 +1,3 @@
+kind: Changed
+body: Writer.Close now waits for the cancel-on-error callback before returning.
+time: 2026-10-30T11:33:35.000000-06:00

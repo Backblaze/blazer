@@ -204,38 +204,25 @@ func TestWriterCloseWaitsForErrorCallback(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not enter cancel_large_file")
 	}
-	type closeResult struct {
-		err               error
-		callbackCompleted bool
-	}
-	closeStarted := make(chan struct{})
-	closed := make(chan closeResult, 1)
+	closed := make(chan error, 1)
 	go func() {
-		close(closeStarted)
-		err := writer.Close()
-		completed := false
-		select {
-		case <-callbackDone:
-			completed = true
-		default:
-		}
-		closed <- closeResult{err: err, callbackCompleted: completed}
+		closed <- writer.Close()
 	}()
-	<-closeStarted
 	select {
-	case got := <-closed:
-		t.Fatalf("errf completed when Close returned = %t, want true", got.callbackCompleted)
-	case <-time.After(time.Second):
-		// Release cleanup independently of Close, so even a broken Close cannot deadlock the test.
+	case err := <-closed:
+		t.Fatalf("Close returned before cancel_large_file was released: %v", err)
+	default:
 	}
 	releaseCancel()
 	select {
-	case got := <-closed:
-		if !got.callbackCompleted {
-			t.Error("errf completed when Close returned = false, want true")
+	case err := <-closed:
+		select {
+		case <-callbackDone:
+		default:
+			t.Error("errf had not completed when Close returned")
 		}
-		if got.err == nil || !strings.Contains(got.err.Error(), "part failed") {
-			t.Errorf("Close error = %v, want the worker's part failed error", got.err)
+		if err == nil || !strings.Contains(err.Error(), "part failed") {
+			t.Errorf("Close error = %v, want the worker's part failed error", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not return after worker cleanup completed")
