@@ -39,25 +39,29 @@ func FuzzComposeRange(f *testing.F) {
 		if p.validate(nonFinal) == nil && value != "" && !regexp.MustCompile(`^bytes=[0-9]+-[0-9]+$`).MatchString(value) {
 			t.Fatalf("accepted noncanonical range %q", value)
 		}
-		// Canonical ranges of at least 5 MB must always validate.
+		// The documented 5 MB nonfinal minimum and 5 GB maximum are inclusive.
+		// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
 		n := int64(len(value))
+		for _, tc := range []struct {
+			value    string
+			nonFinal bool
+			wantErr  bool
+		}{
+			{fmt.Sprintf("bytes=%d-%d", n, n+4_999_998), true, true},
+			{fmt.Sprintf("bytes=%d-%d", n+1, n), nonFinal, true},
+			{fmt.Sprintf("bytes=%d-%d", n, n+5_000_000_000), nonFinal, true},
+			{"bytes=9000000-9000010", true, true},
+			{"bytes=9000000-13999999", true, false},
+			{"bytes=9000000-14999999", true, false},
+		} {
+			if err := PartFromCopy("source", tc.value).validate(tc.nonFinal); (err != nil) != tc.wantErr {
+				t.Fatalf("validate(%q, nonFinal=%t) error = %v, want error=%t", tc.value, tc.nonFinal, err, tc.wantErr)
+			}
+		}
+		// Canonical ranges of at least 5 MB must always validate.
 		canonical := PartFromCopy("source", "bytes="+strconv.FormatInt(n, 10)+"-"+strconv.FormatInt(n+4_999_999, 10))
 		if err := canonical.validate(nonFinal); err != nil {
 			t.Fatal(err)
-		}
-		// The documented 5 MB nonfinal minimum and 5 GB maximum are inclusive.
-		// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
-		for _, invalid := range []struct {
-			value    string
-			nonFinal bool
-		}{
-			{fmt.Sprintf("bytes=%d-%d", n, n+4_999_998), true},
-			{fmt.Sprintf("bytes=%d-%d", n+1, n), nonFinal},
-			{fmt.Sprintf("bytes=%d-%d", n, n+5_000_000_000), nonFinal},
-		} {
-			if err := PartFromCopy("source", invalid.value).validate(invalid.nonFinal); err == nil {
-				t.Fatalf("validate(%q, nonFinal=%t) = nil, want range rejection", invalid.value, invalid.nonFinal)
-			}
 		}
 	})
 }
