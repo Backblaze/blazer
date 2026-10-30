@@ -29,6 +29,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 const (
@@ -49,11 +51,19 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 		ExposeHeaders:     []string{"x-bz-file-name"},
 		MaxAgeSeconds:     60,
 	}}
-	client := &Client{backend: &beRoot{b2i: &testRoot{
-		bucketMap: make(map[string]map[string]string),
-		errs:      &errCont{},
-	}}}
-	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{
+	const lockedJSON = `{"bucketId":"locked-id","bucketName":"locked","bucketType":"allPrivate","corsRules":[{"corsRuleName":"browser","allowedOrigins":["https://example.com"],"allowedHeaders":["authorization"],"allowedOperations":["b2_download_file_by_name"],"exposeHeaders":["x-bz-file-name"],"maxAgeSeconds":60}],"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":true}}}`
+	const plainJSON = `{"bucketId":"plain-id","bucketName":"plain","bucketType":"allPrivate","corsRules":[],"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false}}}`
+	srv := b2wiretest.New(t)
+	srv.ReplySequence("b2_list_buckets",
+		b2wiretest.Response{Body: `{"buckets":[]}`},
+		b2wiretest.Response{Body: `{"buckets":[]}`},
+		b2wiretest.Response{Body: `{"buckets":[` + lockedJSON + `,` + plainJSON + `]}`})
+	srv.ReplySequence("b2_create_bucket", b2wiretest.Response{Body: lockedJSON}, b2wiretest.Response{Body: plainJSON})
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "locked", &BucketAttrs{
 		Type:            Private,
 		CORSRules:       wantCORS,
 		FileLockEnabled: true,
@@ -61,6 +71,24 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	plain, err := client.NewBucket(ctx, "plain", &BucketAttrs{Type: Private})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creates := srv.Calls("b2_create_bucket")
+	if len(creates) != 2 {
+		t.Fatalf("create requests = %d, want 2", len(creates))
+	}
+	b2wiretest.AssertJSON(t, creates[0], "corsRules", []map[string]any{{
+		"corsRuleName": "browser", "allowedOrigins": []string{"https://example.com"},
+		"allowedHeaders": []string{"authorization"}, "allowedOperations": []string{"b2_download_file_by_name"},
+		"exposeHeaders": []string{"x-bz-file-name"}, "maxAgeSeconds": 60,
+	}})
+	b2wiretest.AssertJSON(t, creates[0], "fileLockEnabled", true)
+	// b2_create_bucket documents corsRules as optional and fileLockEnabled as
+	// false by default, so a plain bucket omits both fields.
+	b2wiretest.AssertNoJSON(t, creates[1], "corsRules")
+	b2wiretest.AssertNoJSON(t, creates[1], "fileLockEnabled")
 	attrs, err := bucket.Attrs(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -71,47 +99,39 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 	if !attrs.FileLockEnabled {
 		t.Error("Bucket.Attrs().FileLockEnabled = false, want true")
 	}
-}
-
-func TestNewBucketReplicationConfig(t *testing.T) {
-	ctx := context.Background()
-	want := &ReplicationConfiguration{
-		AsReplicationSource: AsReplicationSource{
-			SourceApplicationKeyID: "source-key",
-			ReplicationRules: []ReplicationRules{{
-				ReplicationRuleName:  "rule",
-				DestinationBucketID:  "destination-bucket-id",
-				FileNamePrefix:       "prefix/",
-				IncludeExistingFiles: true,
-				IsEnabled:            true,
-				Priority:             1,
-			}},
-		},
-		AsReplicationDestination: &AsReplicationDestination{
-			SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"},
-		},
-	}
-	client := &Client{backend: &beRoot{b2i: &testRoot{
-		bucketMap: make(map[string]map[string]string),
-		errs:      &errCont{},
-	}}}
-	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private, ReplicationConfig: want})
+	attrs, err = plain.Attrs(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := bucket.Attrs(ctx)
-	if err != nil {
-		t.Fatal(err)
+	if len(attrs.CORSRules) != 0 || attrs.FileLockEnabled {
+		t.Errorf("plain bucket attrs = %+v, want no CORS rules and no file lock", attrs)
 	}
-	if !reflect.DeepEqual(got.ReplicationConfig, want) {
-		t.Errorf("Bucket.Attrs().ReplicationConfig = %#v, want %#v", got.ReplicationConfig, want)
+	lists := srv.Calls("b2_list_buckets")
+	if len(lists) != 4 {
+		t.Fatalf("list requests = %d, want 4", len(lists))
+	}
+	for i, name := range []string{"locked", "plain"} {
+		b2wiretest.AssertJSON(t, lists[i+2], "bucketName", name)
+		b2wiretest.AssertNoJSON(t, lists[i+2], "bucketId")
 	}
 }
 
 func TestBucketID(t *testing.T) {
-	b := &Bucket{b: &beBucket{b2bucket: &testBucket{idv: "bucket-id"}}}
-	if got := b.ID(); got != "bucket-id" {
-		t.Fatalf("Bucket.ID() = %q, want %q", got, "bucket-id")
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	before := len(srv.Requests())
+	if got := bucket.ID(); got != "bid" {
+		t.Fatalf("created Bucket.ID() = %q, want bid", got)
+	}
+	if got := len(srv.Requests()); got != before {
+		t.Fatalf("Bucket.ID() sent %d requests, want 0", got-before)
+	}
+	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"listed-id","bucketName":"n","bucketType":"allPrivate"}]}`)
+	listed, err := bucket.c.Bucket(context.Background(), "n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := listed.ID(); got != "listed-id" {
+		t.Fatalf("listed Bucket.ID() = %q, want listed-id", got)
 	}
 }
 
@@ -131,6 +151,7 @@ func (t testError) Error() string {
 type errCont struct {
 	errMap map[string]map[int]error
 	opMap  sync.Map
+	onCall func(name string, attempt uint32)
 }
 
 func (e *errCont) getError(name string) error {
@@ -139,6 +160,9 @@ func (e *errCont) getError(name string) error {
 	}
 	val, _ := e.opMap.LoadOrStore(name, new(uint32))
 	newVal := atomic.AddUint32(val.(*uint32), 1)
+	if e.onCall != nil {
+		e.onCall(name, newVal)
+	}
 	return e.errMap[name][int(newVal-1)]
 }
 
@@ -164,8 +188,9 @@ func (t *testRoot) retryAfter(d time.Duration) <-chan time.Time {
 }
 
 type testAfter struct {
-	calls uint32
-	ready chan time.Time
+	ready  chan time.Time
+	mu     sync.Mutex
+	delays []time.Duration
 }
 
 func newTestAfter() *testAfter {
@@ -174,13 +199,23 @@ func newTestAfter() *testAfter {
 	return &testAfter{ready: ready}
 }
 
-func (a *testAfter) wait(time.Duration) <-chan time.Time {
-	atomic.AddUint32(&a.calls, 1)
+func (a *testAfter) wait(d time.Duration) <-chan time.Time {
+	a.mu.Lock()
+	a.delays = append(a.delays, d)
+	a.mu.Unlock()
 	return a.ready
 }
 
 func (a *testAfter) count() int {
-	return int(atomic.LoadUint32(&a.calls))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.delays)
+}
+
+func (a *testAfter) durations() []time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]time.Duration(nil), a.delays...)
 }
 
 type testBucketSettings struct {
@@ -522,12 +557,11 @@ func (t *testFileChunk) uploadPart(_ context.Context, r io.Reader, _ string, _, 
 }
 
 type testFile struct {
-	n                string
-	s                int64
-	t                time.Time
-	a                string
-	files            map[string]string
-	bypassGovernance bool
+	n     string
+	s     int64
+	t     time.Time
+	a     string
+	files map[string]string
 }
 
 func (t *testFile) id() string                           { return t.n }
@@ -549,36 +583,11 @@ func (t *testFile) listParts(context.Context, int, int) ([]b2FilePartInterface, 
 	return nil, 0, nil
 }
 
-func (t *testFile) deleteFileVersion(_ context.Context, bypassGovernance bool) error {
+func (t *testFile) deleteFileVersion(_ context.Context, _ bool) error {
 	gmux.Lock()
 	defer gmux.Unlock()
-	t.bypassGovernance = bypassGovernance
 	delete(t.files, t.n)
 	return nil
-}
-
-func TestObjectDeleteBypassGovernanceOption(t *testing.T) {
-	ctx := context.Background()
-	standard := &testFile{n: "standard", a: "upload", files: make(map[string]string)}
-	if err := objectForDeleteOptionTest(standard).Delete(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if standard.bypassGovernance {
-		t.Fatal("Delete without BypassGovernance requested a bypass")
-	}
-
-	bypass := &testFile{n: "bypass", a: "upload", files: make(map[string]string)}
-	if err := objectForDeleteOptionTest(bypass).Delete(ctx, BypassGovernance()); err != nil {
-		t.Fatal(err)
-	}
-	if !bypass.bypassGovernance {
-		t.Fatal("Delete with BypassGovernance did not request a bypass")
-	}
-}
-
-func objectForDeleteOptionTest(file *testFile) *Object {
-	root := &beRoot{b2i: &testRoot{errs: &errCont{}, bucketMap: make(map[string]map[string]string)}}
-	return &Object{f: &beFile{b2file: file, ri: root}}
 }
 
 func TestObjectDeleteAllowsCopyStatus(t *testing.T) {
@@ -821,8 +830,9 @@ func TestBackoff(t *testing.T) {
 	defer cancel()
 
 	table := []struct {
-		root *testRoot
-		want int
+		root   *testRoot
+		want   int
+		delays [][2]time.Duration
 	}{
 		{
 			root: &testRoot{
@@ -836,7 +846,8 @@ func TestBackoff(t *testing.T) {
 					},
 				},
 			},
-			want: 2,
+			want:   2,
+			delays: [][2]time.Duration{{time.Second, time.Second}, {2 * time.Second, 2 * time.Second}},
 		},
 		{
 			root: &testRoot{
@@ -849,7 +860,8 @@ func TestBackoff(t *testing.T) {
 					},
 				},
 			},
-			want: 1,
+			want:   1,
+			delays: [][2]time.Duration{{1010 * time.Millisecond, 1030 * time.Millisecond}},
 		},
 	}
 
@@ -874,7 +886,12 @@ func TestBackoff(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := timer.count(); got != ent.want {
-			t.Errorf("got %d calls, wanted %d", got, ent.want)
+			t.Fatalf("got %d calls, wanted %d", got, ent.want)
+		}
+		for i, got := range timer.durations() {
+			if want := ent.delays[i]; got < want[0] || got > want[1] {
+				t.Errorf("wait %d = %v, want [%v, %v]", i+1, got, want[0], want[1])
+			}
 		}
 	}
 }
@@ -892,8 +909,14 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 		errs: &errCont{
 			errMap: map[string]map[int]error{
 				"createBucket": {
-					0: testError{retry: true, maxRetries: 5},
-					1: testError{retry: true, maxRetries: 5},
+					0: testError{retry: true, maxRetries: 8},
+					1: testError{retry: true, maxRetries: 8},
+					2: testError{retry: true, maxRetries: 8},
+					3: testError{retry: true, maxRetries: 8},
+					4: testError{retry: true, maxRetries: 8},
+					5: testError{retry: true, maxRetries: 8},
+					6: testError{retry: true, maxRetries: 8},
+					7: testError{retry: true, maxRetries: 8},
 				},
 			},
 		},
@@ -906,8 +929,25 @@ func TestBackoffWithoutRetryAfter(t *testing.T) {
 	if _, err := client.NewBucket(ctx, "fun", &BucketAttrs{Type: Private}); err != nil {
 		t.Errorf("bucket should not err, got %v", err)
 	}
-	if got := timer.count(); got != 2 {
-		t.Errorf("wrong number of calls; got %d, want 2", got)
+	if got := timer.count(); got != 8 {
+		t.Fatalf("wrong number of calls; got %d, want 8", got)
+	}
+	// Literal bounds allow jitter without measuring elapsed wall-clock time.
+	// The last two waits must return to the 30-second backoff cap, plus jitter.
+	want := [][2]time.Duration{
+		{1010 * time.Millisecond, 1030 * time.Millisecond},
+		{2040 * time.Millisecond, 2122 * time.Millisecond},
+		{4 * time.Second, 4600 * time.Millisecond},
+		{8 * time.Second, 9300 * time.Millisecond},
+		{16 * time.Second, 20 * time.Second},
+		{32 * time.Second, 40 * time.Second},
+		{30 * time.Second, 32 * time.Second},
+		{30 * time.Second, 32 * time.Second},
+	}
+	for i, got := range timer.durations() {
+		if got < want[i][0] || got > want[i][1] {
+			t.Errorf("wait %d = %v, want [%v, %v]", i+1, got, want[i][0], want[i][1])
+		}
 	}
 }
 
@@ -963,6 +1003,12 @@ func TestBackoffWithMaxRetriesReached(t *testing.T) {
 		}
 		if got := timer.count(); got != ent.want {
 			t.Fatalf("got %d calls, wanted %d", got, ent.want)
+		}
+		want := [][2]time.Duration{{1010 * time.Millisecond, 1030 * time.Millisecond}, {2040 * time.Millisecond, 2122 * time.Millisecond}}
+		for i, got := range timer.durations() {
+			if got < want[i][0] || got > want[i][1] {
+				t.Errorf("wait %d = %v, want [%v, %v]", i+1, got, want[i][0], want[i][1])
+			}
 		}
 	}
 }
@@ -1448,12 +1494,15 @@ func TestReaderDoubleClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := o.NewReader(ctx)
-	// Read to EOF, and then read some more.
-	if _, err := io.Copy(ioutil.Discard, r); err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { _ = r.Close() })
+	if err := r.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
 	}
-	if _, err := io.Copy(ioutil.Discard, r); err != nil {
-		t.Fatal(err)
+	if err := r.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if n, err := r.Read(make([]byte, 1)); n != 0 || err == nil {
+		t.Fatalf("Read after Close = %d, %v; want 0 and an error or EOF", n, err)
 	}
 }
 
@@ -1713,42 +1762,95 @@ func TestWriterReturnsError(t *testing.T) {
 }
 
 func TestWriterLimitNewUploadAttempts(t *testing.T) {
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	concurrentUploads := 4
-	retryCount := 5
-	errorCount := concurrentUploads * (retryCount + 1)
-
-	errorMap := make(map[int]error, errorCount)
-	for i := 0; i < errorCount; i++ {
-		errorMap[i] = testError{reupload: true}
-	}
-
-	client := &Client{
-		backend: &beRoot{
-			b2i: &testRoot{
+	for _, uploads := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d workers", uploads), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			const attempts = 6 // one initial attempt plus five reuploads
+			errorMap := make(map[string]map[int]error)
+			for part := 1; part <= uploads; part++ {
+				retries := make(map[int]error)
+				for attempt := 0; attempt < attempts+1; attempt++ {
+					retries[attempt] = testError{reupload: true, maxReuploads: attempts - 1}
+				}
+				errorMap[fmt.Sprintf("uploadPart:%d", part)] = retries
+			}
+			errs := &errCont{errMap: errorMap}
+			started := make(chan string, uploads)
+			release := make(chan struct{})
+			if uploads > 1 {
+				errs.onCall = func(name string, attempt uint32) {
+					if attempt == 1 && strings.HasPrefix(name, "uploadPart:") {
+						started <- name
+						<-release
+					}
+				}
+			}
+			client := &Client{backend: &beRoot{b2i: &testRoot{
 				bucketMap: make(map[string]map[string]string),
-				errs: &errCont{
-					errMap: map[string]map[int]error{
-						"uploadPart": errorMap,
-					},
-				},
-			},
-		},
-	}
-
-	bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := bucket.Object("test").NewWriter(ctx)
-	r := io.LimitReader(zReader{}, 1e7)
-	w.ChunkSize = 1e4
-	w.ConcurrentUploads = concurrentUploads
-	if _, err := io.Copy(w, r); err == nil {
-		t.Fatalf("io.Copy: should have returned an error")
+				errs:      errs,
+				afterFunc: newTestAfter().wait,
+			}}}
+			bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := bucket.Object("test").NewWriter(ctx)
+			w.ChunkSize = 1e4
+			w.ConcurrentUploads = uploads
+			copyDone := make(chan error, 1)
+			go func() {
+				_, err := io.Copy(w, io.LimitReader(zReader{}, 1e7))
+				copyDone <- err
+			}()
+			if uploads > 1 {
+				parts := map[string]bool{}
+				for range uploads {
+					select {
+					case part := <-started:
+						parts[part] = true
+					case <-ctx.Done():
+						t.Fatal("concurrent uploads did not both start:", ctx.Err())
+					}
+				}
+				if got := len(parts); got != uploads {
+					t.Fatalf("concurrent upload parts = %d, want %d", got, uploads)
+				}
+				close(release)
+			}
+			select {
+			case err := <-copyDone:
+				if err == nil {
+					t.Fatal("io.Copy: should have returned an error")
+				}
+			case <-ctx.Done():
+				t.Fatal("io.Copy did not return:", ctx.Err())
+			}
+			w.wg.Wait()
+			seen := 0
+			reachedCap := false
+			errs.opMap.Range(func(key, value any) bool {
+				name := key.(string)
+				if !strings.HasPrefix(name, "uploadPart:") {
+					return true
+				}
+				got := atomic.LoadUint32(value.(*uint32))
+				if got > attempts {
+					t.Errorf("%s attempts = %d, want at most %d", name, got, attempts)
+				}
+				if got == attempts {
+					reachedCap = true
+				}
+				seen++
+				return true
+			})
+			if seen < uploads {
+				t.Fatalf("upload parts with attempts = %d, want at least %d", seen, uploads)
+			}
+			if !reachedCap {
+				t.Fatalf("no part reached %d attempts", attempts)
+			}
+		})
 	}
 }
 
@@ -1868,45 +1970,75 @@ func readFile(ctx context.Context, obj *Object, sha string, chunk, concur int) e
 
 func TestBucketDefaultEncryptionRejected(t *testing.T) {
 	ctx := context.Background()
-	client := &Client{
-		backend: &beRoot{
-			b2i: &testRoot{
-				bucketMap: make(map[string]map[string]string),
-				errs:      &errCont{},
-			},
-		},
-	}
-	bucket, err := client.NewBucket(ctx, "bkt", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	client := bucket.c
 
 	table := []struct {
-		name string
-		sse  *ServerSideEncryption
-		ok   bool
+		name    string
+		sse     *ServerSideEncryption
+		ok      bool
+		wantErr string
 	}{
 		{name: "unset", sse: nil, ok: true},
 		{name: "sse-b2", sse: SSEB2WithAES256(), ok: true},
-		{name: "none", sse: &ServerSideEncryption{Mode: "none"}},
-		{name: "sse-c", sse: &ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"}},
-		{name: "empty", sse: &ServerSideEncryption{}},
-		{name: "sse-b2 without algorithm", sse: &ServerSideEncryption{Mode: "SSE-B2"}},
+		{name: "none", sse: &ServerSideEncryption{Mode: "none"}, wantErr: "none/ cannot be used as default for a bucket"},
+		{name: "sse-c", sse: &ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"}, wantErr: "SSE-C/AES256 cannot be used as default for a bucket"},
+		{name: "empty", sse: &ServerSideEncryption{}, wantErr: "/ cannot be used as default for a bucket"},
+		{name: "sse-b2 without algorithm", sse: &ServerSideEncryption{Mode: "SSE-B2"}, wantErr: "SSE-B2/ cannot be used as default for a bucket"},
 	}
 	for _, ent := range table {
 		t.Run(ent.name, func(t *testing.T) {
+			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+			lists := len(srv.Calls("b2_list_buckets"))
+			creates := len(srv.Calls("b2_create_bucket"))
+			updates := len(srv.Calls("b2_update_bucket"))
 			attrs := &BucketAttrs{DefaultServerSideEncryption: ent.sse}
 			_, err := client.NewBucket(ctx, "new-"+ent.name, attrs)
+			if got := len(srv.Calls("b2_list_buckets")) - lists; got != 1 {
+				t.Errorf("NewBucket listed %d times, want 1", got)
+			}
 			if (err == nil) != ent.ok {
 				t.Errorf("NewBucket(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
 			}
+			if !ent.ok && (err == nil || err.Error() != ent.wantErr) {
+				t.Errorf("NewBucket error = %v, want %q", err, ent.wantErr)
+			}
+			if !ent.ok {
+				if got := len(srv.Calls("b2_create_bucket")) - creates; got != 0 {
+					t.Errorf("invalid default sent %d create requests, want 0", got)
+				}
+				if got := len(srv.Calls("b2_update_bucket")) - updates; got != 0 {
+					t.Errorf("invalid default sent %d update requests, want 0", got)
+				}
+			}
 			// Attrs are ignored when the bucket already exists.
-			if _, err := client.NewBucket(ctx, "bkt", attrs); err != nil {
+			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[`+updateBucketJSON+`]}`)
+			lists = len(srv.Calls("b2_list_buckets"))
+			creates = len(srv.Calls("b2_create_bucket"))
+			updates = len(srv.Calls("b2_update_bucket"))
+			if _, err := client.NewBucket(ctx, "n", attrs); err != nil {
 				t.Errorf("NewBucket(existing, %+v): err = %v, want nil", ent.sse, err)
+			}
+			if got := len(srv.Calls("b2_list_buckets")) - lists; got != 1 {
+				t.Errorf("NewBucket(existing) listed %d times, want 1", got)
+			}
+			if got := len(srv.Calls("b2_create_bucket")) - creates; got != 0 {
+				t.Errorf("NewBucket(existing) sent %d create requests, want 0", got)
+			}
+			if got := len(srv.Calls("b2_update_bucket")) - updates; got != 0 {
+				t.Errorf("NewBucket(existing) sent %d update requests, want 0", got)
 			}
 			err = bucket.Update(ctx, attrs)
 			if (err == nil) != ent.ok {
 				t.Errorf("Update(%+v): err = %v, want ok=%v", ent.sse, err, ent.ok)
+			}
+			if !ent.ok {
+				if err == nil || err.Error() != ent.wantErr {
+					t.Errorf("Update error = %v, want %q", err, ent.wantErr)
+				}
+				if got := len(srv.Calls("b2_update_bucket")) - updates; got != 0 {
+					t.Errorf("invalid default sent %d update requests, want 0", got)
+				}
 			}
 		})
 	}
@@ -1991,36 +2123,4 @@ func TestCreateKeyDispatch(t *testing.T) {
 			t.Errorf("Bucket.CreateKey with BucketIDs: want error, got nil")
 		}
 	})
-}
-
-func TestBucketAttrsCORSAndFileLockPerBucket(t *testing.T) {
-	ctx := context.Background()
-	wantCORS := []CORSRule{{Name: "browser", AllowedOrigins: []string{"https://example.com"}}}
-	client := &Client{backend: &beRoot{b2i: &testRoot{
-		bucketMap: make(map[string]map[string]string),
-		errs:      &errCont{},
-	}}}
-	locked, err := client.NewBucket(ctx, "locked-bucket", &BucketAttrs{Type: Private, CORSRules: wantCORS, FileLockEnabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := client.NewBucket(ctx, "plain-bucket", &BucketAttrs{Type: Private})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := locked.Attrs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got.CORSRules, wantCORS) || !got.FileLockEnabled {
-		t.Errorf("locked bucket attrs = %+v, want its own CORS rules and file lock", got)
-	}
-	got, err = plain.Attrs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.CORSRules) != 0 || got.FileLockEnabled {
-		t.Errorf("plain bucket attrs = %+v, want no CORS rules and no file lock", got)
-	}
 }
