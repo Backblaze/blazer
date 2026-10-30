@@ -7,6 +7,9 @@ import (
 )
 
 func sum(i, j interface{}) interface{} {
+	if i == nil && j == nil {
+		return nil
+	}
 	var total int
 	if i != nil {
 		total += i.(int)
@@ -15,6 +18,18 @@ func sum(i, j interface{}) interface{} {
 		total += j.(int)
 	}
 	return total
+}
+
+func TestNewOneBucketExpiresAcrossResolutionBoundary(t *testing.T) {
+	start := time.Unix(0, 0)
+	w := New(500*time.Millisecond, time.Second, sum)
+	w.insertAt(start, 1)
+	if got := w.reducedAt(start.Add(900 * time.Millisecond)); got != 1 {
+		t.Fatalf("Reduce before resolution boundary = %v, want 1", got)
+	}
+	if got := w.reducedAt(start.Add(1800 * time.Millisecond)); got != nil {
+		t.Fatalf("Reduce after resolution boundary = %v, want nil", got)
+	}
 }
 
 func TestNewUsesOneBucketWhenSizeIsLessThanResolution(t *testing.T) {
