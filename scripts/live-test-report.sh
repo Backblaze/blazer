@@ -59,30 +59,31 @@ jq -r 'select(.Test == null and (.Action == "pass" or .Action == "fail" or .Acti
   | "\(.Action | ascii_upcase) \(.Package) (\(.Elapsed // 0)s)"' "$in" | sed "s#$module/##"
 
 # Output of failed tests, and of tests a panic or timeout cut off: Go attributes that stack trace to the
-# running test but emits no failure event for it, only one for the package.
+# running test but emits no failure event for it, only one for the package. Each test (and each failed
+# package) gets its own budget so a noisy one cannot hide another's failure. Past 300 lines the first 100
+# and last 200 are kept, and panic, timeout and fatal lines are always kept.
 if [ -n "$failed" ] || [ -n "$failed_pkgs" ]; then
   echo "::group::Output of failed tests"
-  out=$(mktemp)
-  jq -rjs '
+  jq -rs '
     def key: "\(.Package) \(.Test)";
+    def important: test("^panic: |test timed out|^fatal error: ");
+    def cap: if length <= 300 then . else
+        ([.[:100][], .[-200:][]]) as $kept
+        | ([.[] | select(important)] | .[:20] - $kept) as $key
+        | .[:100] + ["... \(length - 300) lines omitted ..."] + (if ($key | length) > 0 then ["... key lines from the omitted part ..."] + $key + ["..."] else [] end) + .[-200:]
+      end;
     [.[] | select(.Action == "fail" and .Test == null) | .Package] as $badpkgs
     | [.[] | select(.Test != null and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | key] as $done
     | [.[] | select(.Action == "run" and (.Package as $p | $badpkgs | index($p) != null)) | key | select(. as $k | $done | index($k) == null)] as $cut
     | [.[] | select(.Action == "fail" and .Test != null) | key] as $f
-    | .[] | select(.Action == "output" and (
+    | [.[] | select(.Action == "output" and (
         (.Test != null and ((key as $k | $f | index($k) != null) or (key as $k | $cut | index($k) != null)))
-        or (.Test == null and (.Package as $p | $badpkgs | index($p) != null))))
-    | .Output' "$in" >"$out"
-  # Keep both ends: a timeout puts its reason first, a t.Fatal puts the failure last.
-  total=$(wc -l <"$out")
-  if [ "$total" -le 300 ]; then
-    cat "$out"
-  else
-    head -n 100 "$out"
-    echo "... $((total - 300)) lines omitted ..."
-    tail -n 200 "$out"
-  fi
-  rm -f "$out"
+        or (.Test == null and (.Package as $p | $badpkgs | index($p) != null))))]
+    | group_by(if .Test != null then key else .Package end)
+    | .[]
+    | "=== \(.[0] | if .Test != null then key else .Package end)",
+      ((map(.Output) | join("") | split("\n") | if length > 0 and .[-1] == "" then .[:-1] else . end | cap)[])
+  ' "$in"
   echo "::endgroup::"
 fi
 

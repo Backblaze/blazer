@@ -74,6 +74,7 @@ jobs:
           set -o pipefail
           go test -json -count=1 -timeout 30m ./b2/... ./base/... | tee test.json | jq -Rrj --unbuffered '
             fromjson? | if .Action == "build-output" or (.Test == null and .Action == "output") then .Output
+            elif .Action == "output" and (.Output | test("^panic: |test timed out|^fatal error: ")) then .Output
             elif .Action == "build-fail" then "BUILD FAIL \(.ImportPath)\n"
             elif .Action == "pass" or .Action == "fail" or .Action == "skip" then
               select(.Test != null and (.Test | contains("/") | not))
