@@ -15,8 +15,8 @@ failure: it claims coverage it does not give.
 
 1. Read the linked issue and, if present, `intent/<slug>/spec.md` and `plan.md`.
 2. Merge the PR onto current `main` locally and run `make ci`. Say what you ran.
-3. For each behavior the PR claims to fix or add, revert that line and confirm a test fails. Name any
-   behavior no test pins.
+3. For each behavior the PR claims to fix or add, check the author's revert proof (see "Reviewing tests"). Re-run
+   it yourself for changes to `base/`, wire, auth or credential code, and name any behavior no test pins.
 
 ## Passes
 

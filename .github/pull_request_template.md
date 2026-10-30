@@ -14,13 +14,8 @@ Paste the tail of `make ci`. For each behavior this PR adds or fixes, name the t
 change is reverted. List any live-B2 checks you ran, and any you could not. See
 [docs/testing-standard.md](docs/testing-standard.md).
 
-- [ ] RED first: the new test failed before the fix (output above).
-- [ ] Revert proof: with the production change reverted, the new test fails (output above).
-- [ ] Unit: `make ci` (tail above).
-- [ ] Integration: ran (output above), or NOT RUN and why (for example no credentials).
-- [ ] Contract: a claim was added or changed and its row and check are updated, or "no claim changed".
-- [ ] System (simulator): ran (output above), or "not applicable" and why.
-- [ ] Security: I touched auth, logging, errors, URLs, credentials or parsing and added or updated a security test, or "not touched".
+- [ ] Revert proof: the new test failed before the fix and fails again with the production change reverted (output above).
+- [ ] Kinds: for unit, integration, contract, system and security, each is run (output above) or marked "NOT RUN" or "not applicable" with a reason.
 - [ ] No test was deleted, skipped, loosened or retired, or a human approved it (link).
 - [ ] Each new test states its evidence level (L1 to L5). No test was added only for coverage.
 
