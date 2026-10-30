@@ -1114,6 +1114,9 @@ func TestListBucketsWithKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !key.Expires().IsZero() {
+		t.Errorf("key.Expires() = %v, want zero time for a key without an expiration", key.Expires())
+	}
 	defer func() {
 		if err := key.Delete(ctx); err != nil {
 			t.Error(err)
@@ -1340,6 +1343,9 @@ func TestKeyRestrictionAccessors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bucket.CreateKey: %v", err)
 	}
+	if !key.Expires().IsZero() {
+		t.Errorf("key.Expires() = %v, want zero time for a key without an expiration", key.Expires())
+	}
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
@@ -1370,6 +1376,9 @@ func TestKeyRestrictionAccessors(t *testing.T) {
 	}
 	if listed == nil {
 		t.Fatalf("ListKeys did not return key %q", key.ID())
+	}
+	if !listed.Expires().IsZero() {
+		t.Errorf("listed.Expires() = %v, want zero time for a key without an expiration", listed.Expires())
 	}
 	assertKeyRestrictions(t, listed, []string{bucket.ID()}, "live-227/")
 }
