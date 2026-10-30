@@ -45,7 +45,8 @@ func (k *Key) Prefix() string { return k.k.prefix() }
 // useless.
 func (k *Key) Name() string { return k.k.name() }
 
-// Expires returns the expiration date of this application key.
+// Expires returns the expiration date of this application key, or the zero time
+// if the key does not expire.
 func (k *Key) Expires() time.Time { return k.k.expires() }
 
 // Delete removes the key from B2.
