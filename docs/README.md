@@ -8,6 +8,7 @@ reviewers keep finding. The files here hold the detail behind those rules.
 | [b2-contracts.md](b2-contracts.md) | You touch a B2 call, encryption, file info, bucket settings, downloads, retries or large files. It lists what B2 and the reference SDKs do, with sources and the tests that pin each fact. |
 | [testing.md](testing.md) | You write or run tests. It explains the test levels, what each one proves, how to run the repo-owned SDK harness contract and the live tests, and how to show a test pins a fix. |
 | [review-lessons.md](review-lessons.md) | You review a PR or prepare one for review. It groups the problems earlier reviews found, with links to the PRs where they were raised. |
+| [review-evals.md](review-evals.md) | You change `REVIEW.md`, `AGENTS.md` or the review model and want to score it. It lists five past bugs with the buggy commit, the review pass that should catch each, the fix and the pinning test. |
 
 Other process docs live at the repository root: [REVIEW.md](../REVIEW.md), [CONTRIBUTING.md](../CONTRIBUTING.md),
 [RELEASE.md](../RELEASE.md) and [SECURITY.md](../SECURITY.md).
