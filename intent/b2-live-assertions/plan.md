@@ -10,13 +10,18 @@
 | Item | Tests | Status / assertion catches |
 | --- | --- | --- |
 | R1 | `TestResumeWriterWithoutExtantFile` | Done: live-only, compile-checked; catches missing finalization or altered/truncated content after resume without an existing upload |
-| R2 | `TestZeroByteObject` | Done: live-only, compile-checked; catches nonzero size metadata for an empty upload; wire twin pending |
-| R3 | `TestDeleteWithoutName`; `TestWriteEmpty` | Done: live-only, compile-checked; catches deletion that reports success while leaving the object readable, and nonempty content after an empty write; wire twins pending |
+| R2 | `TestZeroByteObject`; `TestZeroByteObjectWire` | Done: live-only, compile-checked; catches nonzero size metadata for an empty upload; cheap offline twin M1 |
+| R3 | `TestDeleteWithoutName`; `TestWriteEmpty`; `TestDeleteWithoutNameWire`; `TestZeroByteObjectWire` | Done: live-only, compile-checked; catches deletion that reports success while leaving the object readable, and nonempty content after an empty write; cheap offline twins M2/M1 |
 | R4 | `TestListUnfinishedLargeFiles` | Done: live-only, compile-checked; catches wrong names, missing/extra entries and iterator errors; valid part sizes and writer finalization after listing |
 | R5 | `TestFileBufferLive` | Done: live-only, compile-checked; catches altered/truncated bytes uploaded through the file buffer |
 | R6 | `TestCopyLive` | Done: live-only, compile-checked; catches a corrupt copy even when its own reported SHA1 matches its corrupt content |
 | R7 | `TestReauthPreservesOptions` | Live-only, compile-checked: catches a refreshed client that cannot access the original bucket; behavioral wire twin pending |
 | R8 | `TestNewBucket`; `TestBucketDefaultEncryption` | Live-only, compile-checked: catches a wrong bucket name or explicit SSE-B2 setting; omitted SSE moves to a deterministic wire twin (pending) |
+
+| Break | Twin / production behavior | Temporary mutation | Failing output (exit 1) | Restored output (exit 0) |
+| --- | --- | --- | --- | --- |
+| M1 (R2/R3) | `TestZeroByteObjectWire`; `b2/b2.go:attrsFromFileInfo` | Map `Size` to `size + 1` | `empty object size = 1, want 0` (both chunk-size cases); `FAIL .../b2 0.724s` | `ok .../b2 0.586s` |
+| M2 (R3) | `TestDeleteWithoutNameWire`; `b2/b2.go:Object.Delete` | Return nil instead of calling `deleteFileVersion` | `Attrs after Delete = <nil>, want not-exist`; `delete calls = 0, want 1`; `FAIL .../b2 0.707s` | `ok .../b2 0.438s` |
 
 | Check | Result |
 | --- | --- |
@@ -27,4 +32,6 @@
 unset B2_APPLICATION_KEY_ID B2_APPLICATION_KEY B2_ACCOUNT_ID B2_ACCOUNT_KEY
 go vet ./...
 go test ./b2/...
+go test ./b2 -run '^TestZeroByteObjectWire$' -count=1 -timeout=30s
+go test ./b2 -run '^TestDeleteWithoutNameWire$' -count=1 -timeout=30s
 ```
