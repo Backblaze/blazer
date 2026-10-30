@@ -78,3 +78,11 @@ func TestBackoffCapsLongDelay(t *testing.T) {
 		t.Fatalf("Backoff(31s) = %v, want capped below 32s", got)
 	}
 }
+
+func TestBackoffDoublesShortDelay(t *testing.T) {
+	const min = 2020 * time.Millisecond
+	const max = 2060 * time.Millisecond
+	if got := Backoff(time.Second); got < min || got >= max {
+		t.Fatalf("Backoff(1s) = %v, want [%v, %v)", got, min, max)
+	}
+}
