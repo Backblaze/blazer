@@ -2044,10 +2044,13 @@ type Key struct {
 	Secret       string
 	Name         string
 	Capabilities []string
-	Expires      time.Time
-	BucketIDs    []string
-	Prefix       string
-	b2           *B2
+	// Expires is the application key's expiration date. A zero time.Time means
+	// the key never expires; check that with IsZero, not Unix, which is
+	// -62135596800 for the zero time.
+	Expires   time.Time
+	BucketIDs []string
+	Prefix    string
+	b2        *B2
 }
 
 func keyBucketIDs(key b2types.Key) []string {
