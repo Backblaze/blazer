@@ -612,6 +612,12 @@ func TestSyncUsesRequestedConcurrency(t *testing.T) {
 	if current != 2 {
 		t.Fatalf("active uploads before release=%d, want exactly 2", current)
 	}
+	// No event signals that a third upload did not start, so wait briefly before release.
+	select {
+	case <-entered:
+		t.Fatal("third upload started before either active upload was released")
+	case <-time.After(200 * time.Millisecond):
+	}
 	once.Do(func() { close(release) })
 	select {
 	case err := <-result:
@@ -636,6 +642,14 @@ func TestSyncWalkErrorsHandleNilAndDirectoryEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	filePath := filepath.Join(root, "regular.txt")
+	if err := os.WriteFile(filePath, []byte("regular"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name      string
 		entry     fs.DirEntry
@@ -643,6 +657,7 @@ func TestSyncWalkErrorsHandleNilAndDirectoryEntries(t *testing.T) {
 	}{
 		{"nil entry", nil, nil},
 		{"directory entry", fs.FileInfoToDirEntry(dirInfo), fs.SkipDir},
+		{"regular-file entry", fs.FileInfoToDirEntry(fileInfo), nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var visitErr error
