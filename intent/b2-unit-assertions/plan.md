@@ -1,6 +1,10 @@
+This file is slice C1's proof record, standing in for a spec and plan. It follows #204's checklist rather than R-numbered requirements.
+
+Item 1 moved to #245: the stronger assertion fails on main because of a product bug.
+
 | Item | Status | Test / proof rows |
 | --- | --- | --- |
-| 1. Writer error identity | Stopped: current main returns context cancellation instead of the injected error; supplied assertion preserved, uncommitted; production fix out of scope | `TestWriterReturnsError`; 1 |
+| 1. Writer error identity | Moved to #245 | — |
 | 2. Upload attempt cap | Done: one worker, five reuploads, six attempts | `TestWriterLimitNewUploadAttempts`; 2a–2c |
 | 3. Read after double Close | Done: close before EOF, then explicitly require zero bytes and an error | `TestReaderDoubleClose`; 3 |
 | 4. Fake-echo bucket tests | Done: CORS/file-lock create and per-bucket reads use the recording server; redundant replication and per-bucket fake tests removed | `TestNewBucketCORSAndFileLock`; 4a–4d; existing `TestNewBucketReplicationConfigurationWireRoundTrip`; 4e |
@@ -18,7 +22,6 @@
 
 | Item | Break | Failing output | Passing after revert |
 | --- | --- | --- | --- |
-| 1 | No mutation: supplied stronger assertion on current main | `io.Copy error = context canceled, want injected permanent upload failure` | Stopped; no green available without a production fix |
 | 2a | Reupload limit `+1` → `+2` | `uploadPart attempts = 7, want 6 (initial attempt plus five reuploads)` | `ok github.com/Backblaze/blazer/b2 0.764s` |
 | 2b | Initial-attempt guard flipped | `uploadPart attempts = 1, want 6 (initial attempt plus five reuploads)` | `ok github.com/Backblaze/blazer/b2 0.284s` |
 | 2c | Initial-attempt guard deleted | `uploadPart attempts = 1, want 6 (initial attempt plus five reuploads)` | `ok github.com/Backblaze/blazer/b2 0.287s` |
@@ -50,7 +53,6 @@ unset B2_APPLICATION_KEY_ID B2_APPLICATION_KEY B2_ACCOUNT_ID B2_ACCOUNT_KEY
 go test ./b2 -run '^TEST_NAME$' -count=1 -timeout=15s
 go test ./b2 -run '^(TestWriterLimitNewUploadAttempts|TestReaderDoubleClose|TestBackoff.*|TestBucketDefaultEncryptionRejected|TestNewBucketCORSAndFileLock|TestNewBucketReplicationConfigurationWireRoundTrip|TestObjectDeleteBypassGovernanceReachesTheWire|TestBucketID)$' -count=1
 go test -race -count=5 -shuffle=on ./b2/...
-go test -race -count=30 ./b2 -run '^(TestWriterReturnsError|TestWriterLimitNewUploadAttempts|TestReaderDoubleClose|TestBackoff|TestBackoffWithoutRetryAfter|TestBackoffWithMaxRetriesReached)$'
 go test -race -count=30 ./b2 -run '^(TestWriterLimitNewUploadAttempts|TestReaderDoubleClose|TestBackoff|TestBackoffWithoutRetryAfter|TestBackoffWithMaxRetriesReached)$'
 go vet ./...
 make ci
@@ -59,10 +61,10 @@ make b2keys crosscompile changelog-check scripts-test
 
 | Check | Actual output / result |
 | --- | --- |
-| C1 targeted run, excluding stopped item 1 | `ok github.com/Backblaze/blazer/b2 0.678s` |
+| C1 targeted run before item 1 moved to #245 | `ok github.com/Backblaze/blazer/b2 0.678s` |
 | Changed concurrency/timing tests, 30 race-enabled repetitions (item 1 excluded) | `ok github.com/Backblaze/blazer/b2 1.377s` |
-| Full b2 race suite, count 5, shuffled (seed `1793382557891028000`) | FAIL: item 1 failed 5/5 with `io.Copy error = context canceled, want injected permanent upload failure`; `FAIL github.com/Backblaze/blazer/b2 65.633s`; `ok github.com/Backblaze/blazer/b2/sync 17.810s` |
-| Concurrency/timing tests plus stopped item 1, count 30 | FAIL: item 1 failed 30/30 with the same error; `FAIL github.com/Backblaze/blazer/b2 0.440s` |
+| Full b2 race suite, count 5, shuffled | PASS: `ok github.com/Backblaze/blazer/b2 63.318s`; `ok github.com/Backblaze/blazer/b2/sync 15.414s` |
+| Concurrency/timing tests, count 30 | `ok github.com/Backblaze/blazer/b2 1.377s` |
 | `go vet ./...` | Exit 0, no output |
-| `make ci` | Build, vet, format, tidy, verify pass (`all modules verified`); lint `0 issues.`; tests fail only item 1: `FAIL github.com/Backblaze/blazer/b2 14.391s`, `make: *** [test] Error 1`; other packages pass or have no tests |
+| `make ci` at committed head | PASS: build, vet, format, tidy, verify (`all modules verified`), lint (`0 issues.`), race tests, b2keys, five cross-builds, changelog-check and scripts-test all passed; `b2` completed in `14.099s` |
 | Remaining CI targets run separately | Exit 0: b2keys (`[no test files]`), Linux amd64/386/arm, Darwin arm64 and Windows amd64 cross-builds; changelog-check passes; five shell script cases report `ok` |

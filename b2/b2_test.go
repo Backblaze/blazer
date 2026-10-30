@@ -541,12 +541,11 @@ func (t *testFileChunk) uploadPart(_ context.Context, r io.Reader, _ string, _, 
 }
 
 type testFile struct {
-	n                string
-	s                int64
-	t                time.Time
-	a                string
-	files            map[string]string
-	bypassGovernance bool
+	n     string
+	s     int64
+	t     time.Time
+	a     string
+	files map[string]string
 }
 
 func (t *testFile) id() string                           { return t.n }
@@ -568,10 +567,9 @@ func (t *testFile) listParts(context.Context, int, int) ([]b2FilePartInterface, 
 	return nil, 0, nil
 }
 
-func (t *testFile) deleteFileVersion(_ context.Context, bypassGovernance bool) error {
+func (t *testFile) deleteFileVersion(_ context.Context, _ bool) error {
 	gmux.Lock()
 	defer gmux.Unlock()
-	t.bypassGovernance = bypassGovernance
 	delete(t.files, t.n)
 	return nil
 }
