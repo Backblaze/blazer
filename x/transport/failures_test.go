@@ -162,7 +162,7 @@ func TestSyntheticResponseClosesRequestBodyWithoutDraining(t *testing.T) {
 
 func TestSyntheticResponseClosesUnwrittenPipeBody(t *testing.T) {
 	reader, writer := io.Pipe()
-	defer writer.Close()
+	defer func() { _ = writer.Close() }()
 	req := request(t, context.Background(), reader)
 	rt := WithFailures(roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("synthetic response reached wrapped RoundTripper")
