@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestReauthPreservesOptionsWire(t *testing.T) {
 	)
 	recorder := &recordingTransport{next: http.DefaultTransport}
 	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()), Transport(recorder),
-		UserAgent("first-agent"), UserAgent("second-agent"), FailSomeUploads(), ExpireSomeAuthTokens())
+		UserAgent("first-agent"), UserAgent("second-agent"), FailSomeUploads(), ExpireSomeAuthTokens(), ForceCapExceeded())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +63,8 @@ func TestReauthPreservesOptionsWire(t *testing.T) {
 		if got := request.Header.Get("User-Agent"); !strings.HasPrefix(got, "second-agent first-agent blazer/") {
 			t.Errorf("request %d User-Agent = %q, want both custom agents before blazer/", i, got)
 		}
-		wantModes := []string{"fail_some_uploads", "expire_some_account_authorization_tokens"}
-		if got := request.Header.Values("X-Bz-Test-Mode"); !reflect.DeepEqual(got, wantModes) {
+		wantModes := []string{"expire_some_account_authorization_tokens", "fail_some_uploads", "force_cap_exceeded"}
+		if got := normalizedTestModes(request.Header.Values("X-Bz-Test-Mode")); !reflect.DeepEqual(got, wantModes) {
 			t.Errorf("request %d test modes = %q, want %q", i, got, wantModes)
 		}
 	}
@@ -77,4 +78,15 @@ func TestReauthPreservesOptionsWire(t *testing.T) {
 		}
 		b2wiretest.AssertJSON(t, lists[i], "accountId", "a")
 	}
+}
+
+func normalizedTestModes(values []string) []string {
+	var modes []string
+	for _, value := range values {
+		for _, mode := range strings.Split(value, ",") {
+			modes = append(modes, strings.TrimSpace(mode))
+		}
+	}
+	sort.Strings(modes)
+	return modes
 }
