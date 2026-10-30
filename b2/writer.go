@@ -290,6 +290,8 @@ func (w *Writer) Write(p []byte) (int, error) {
 // A guarded copy can release its write lock there before error cleanup blocks.
 func (w *Writer) write(p []byte, setErr func(error)) (int, error) {
 	w.closeWrite.RLock()
+	// Keep this lock through setErr cleanup: Close takes closeWrite.Lock and
+	// waits for cleanup anyway (TestWriterCloseWaitsForErrorCallback).
 	defer w.closeWrite.RUnlock()
 	if w.closed {
 		return 0, ErrClosed
@@ -732,8 +734,10 @@ func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 
 // Close satisfies the io.Closer interface.  It waits for in-flight part uploads
 // and, when WithCancelOnError is set, for the b2_cancel_large_file call and errf
-// to finish before it returns.  It is critical to check the return value of Close
-// for all writers.
+// to finish before it returns. Give the context returned by ctxf a deadline to
+// bound the cancellation RPC's wait. errf must return promptly and must not call
+// Close or wait on the goroutine calling Close, or they will deadlock. The context
+// deadline does not bound errf. It is critical to check Close's return value.
 func (w *Writer) Close() error {
 	w.done.Do(func() {
 		w.closeWrite.Lock()
@@ -891,11 +895,12 @@ func WithSSEB2(algorithm string) WriterOption {
 
 // WithCancelOnError requests the writer, if it has started a large file
 // upload, to call b2_cancel_large_file on any permanent error.  It calls ctxf
-// to obtain a context with which to cancel the file; this is to allow callers
-// to set specific timeouts.  If errf is non-nil, then it is called with the
+// to obtain a fresh context with which to cancel the file; give that context a
+// deadline to bound the cancellation RPC's wait. If errf is non-nil, it receives the
 // (possibly nil) output of b2_cancel_large_file.  The errf callback may run on a
-// background goroutine, and Close waits for it to finish.  errf must not call Close
-// or wait on the goroutine that calls Close, or they will deadlock.
+// background goroutine, and Close waits for it to finish. The context deadline
+// does not bound errf: it must return promptly and must not call Close or wait on
+// the goroutine that calls Close, or they will deadlock.
 func WithCancelOnError(ctxf func() context.Context, errf func(error)) WriterOption {
 	return func(w *Writer) {
 		w.ctxf = ctxf

@@ -1,3 +1,8 @@
 kind: Changed
-body: Writer.Close now waits for the cancel-on-error callback before returning.
+body: >-
+  **Breaking:** Writer.Close now waits for in-flight part uploads and, with
+  WithCancelOnError, for b2_cancel_large_file and errf to finish. An errf that calls
+  Close or waits on the goroutine calling Close deadlocks. Bound the cancellation
+  RPC's wait with a deadline on the context returned by ctxf; errf must return
+  promptly, as that deadline does not bound the callback.
 time: 2026-10-30T11:33:35.000000-06:00

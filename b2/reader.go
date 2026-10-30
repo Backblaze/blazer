@@ -391,6 +391,9 @@ func (w *guardedCopyWriter) Write(p []byte) (int, error) {
 		return 0, errCopyAbandoned
 	}
 	if writer, ok := w.w.(*Writer); ok {
+		// Cancellation waits for an in-flight Write. Its network calls use the same
+		// context as copyContext, so their I/O is cancelled too. Only a RoundTripper
+		// ignoring the request context can prolong that network wait, as for any API call.
 		return writer.write(p, func(err error) {
 			unlock()
 			writer.setErr(err)
