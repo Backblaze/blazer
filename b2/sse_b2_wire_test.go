@@ -211,7 +211,8 @@ func TestWithSSEB2WireAndRoundTrip(t *testing.T) {
 
 	large := bucket.Object("large").NewWriter(ctx, WithSSEB2("AES256"))
 	large.ChunkSize = 1
-	if _, err := large.Write([]byte("x")); err != nil {
+	// Payload exceeds ChunkSize to use the large-file path; exactly ChunkSize is a simple upload since #221.
+	if _, err := large.Write([]byte("xy")); err != nil {
 		t.Fatal(err)
 	}
 	if err := large.Close(); err != nil {
@@ -223,8 +224,13 @@ func TestWithSSEB2WireAndRoundTrip(t *testing.T) {
 	}
 	assertSSEB2(t, starts[0].body)
 	parts := wire.requestsTo("/part")
-	if len(parts) != 1 || parts[0].headers.Get("X-Bz-Server-Side-Encryption") != "" {
-		t.Errorf("upload_part requests = %#v, want one request without a per-part SSE-B2 header", parts)
+	if len(parts) != 2 {
+		t.Fatalf("upload_part requests = %d, want 2", len(parts))
+	}
+	for _, part := range parts {
+		if part.headers.Get("X-Bz-Server-Side-Encryption") != "" {
+			t.Errorf("upload_part request = %#v, want no per-part SSE-B2 header", part)
+		}
 	}
 }
 
