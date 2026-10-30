@@ -79,4 +79,20 @@ awk 'BEGIN { pad = sprintf("%80s", ""); for (i = 1; i <= 5000; i++) printf "{\"A
 ev fail b2 TestAttrs >>"$tmp/long.json"
 check "keeps the error line after long failure output" 1 "::error::Tests failed in the live run." "$tmp/long.json"
 
+
+# The failure message comes last, after the noise (David's case): 400 log lines, then the t.Fatal line.
+cp "$tmp/pass.json" "$tmp/fatal.json"
+awk 'BEGIN { for (i = 1; i <= 400; i++) printf "{\"Action\":\"output\",\"Package\":\"github.com/Backblaze/blazer/b2\",\"Test\":\"TestAttrs\",\"Output\":\"    noise %d\\n\"}\n", i }' >>"$tmp/fatal.json"
+printf '%s\n' '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestAttrs","Output":"    attrs_test.go:99: FATAL-MESSAGE\n"}' >>"$tmp/fatal.json"
+ev fail b2 TestAttrs >>"$tmp/fatal.json"
+check "keeps the last lines of long failure output" 1 "FATAL-MESSAGE" "$tmp/fatal.json"
+check "says how many lines were omitted" 1 "lines omitted" "$tmp/fatal.json"
+
+# A timeout keeps its reason (first lines) even when the stack trace is long.
+cp "$tmp/pass.json" "$tmp/longtimeout.json"
+printf '%s\n' '{"Action":"run","Package":"github.com/Backblaze/blazer/b2","Test":"TestHangs"}' '{"Action":"output","Package":"github.com/Backblaze/blazer/b2","Test":"TestHangs","Output":"panic: test timed out after 30m0s\n"}' >>"$tmp/longtimeout.json"
+awk 'BEGIN { for (i = 1; i <= 600; i++) printf "{\"Action\":\"output\",\"Package\":\"github.com/Backblaze/blazer/b2\",\"Test\":\"TestHangs\",\"Output\":\"goroutine %d [running]\\n\"}\n", i }' >>"$tmp/longtimeout.json"
+printf '%s\n' '{"Action":"fail","Package":"github.com/Backblaze/blazer/b2","Elapsed":1800}' >>"$tmp/longtimeout.json"
+check "keeps the timeout reason above a long stack trace" 1 "panic: test timed out after 30m0s" "$tmp/longtimeout.json"
+
 exit "$fail"

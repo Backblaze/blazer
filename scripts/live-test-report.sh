@@ -73,7 +73,15 @@ if [ -n "$failed" ] || [ -n "$failed_pkgs" ]; then
         (.Test != null and ((key as $k | $f | index($k) != null) or (key as $k | $cut | index($k) != null)))
         or (.Test == null and (.Package as $p | $badpkgs | index($p) != null))))
     | .Output' "$in" >"$out"
-  head -n 300 "$out"
+  # Keep both ends: a timeout puts its reason first, a t.Fatal puts the failure last.
+  total=$(wc -l <"$out")
+  if [ "$total" -le 300 ]; then
+    cat "$out"
+  else
+    head -n 100 "$out"
+    echo "... $((total - 300)) lines omitted ..."
+    tail -n 200 "$out"
+  fi
   rm -f "$out"
   echo "::endgroup::"
 fi
