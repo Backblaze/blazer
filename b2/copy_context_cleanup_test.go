@@ -24,7 +24,7 @@ func TestWriterCloseWaitsForCancelDeadline(t *testing.T) {
 	srv.Reply("upload_part", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"part failed"}`)
 	transport := bucketInfoRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(r.URL.Path, "/b2_cancel_large_file") {
-			defer r.Body.Close()
+			defer func() { _ = r.Body.Close() }()
 			close(cancelEntered)
 			select {
 			case <-r.Context().Done():
@@ -124,7 +124,7 @@ func TestWriterReadFromCancellationCancelsStartLargeFile(t *testing.T) {
 			srv.Reply("b2_create_bucket", http.StatusOK, noReplicationBucketJSON)
 			transport := bucketInfoRoundTripper(func(r *http.Request) (*http.Response, error) {
 				if strings.HasSuffix(r.URL.Path, "/b2_start_large_file") {
-					defer r.Body.Close()
+					defer func() { _ = r.Body.Close() }()
 					close(startEntered)
 					select {
 					case <-r.Context().Done():
