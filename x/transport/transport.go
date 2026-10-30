@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"math"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -46,7 +46,7 @@ func WithFailures(rt http.RoundTripper, opts ...FailureOption) http.RoundTripper
 
 type options struct {
 	pathSubstrings []string
-	failureRate    float64
+	failureRate    atomic.Uint64
 	status         int
 	stall          time.Duration
 	rt             http.RoundTripper
@@ -67,7 +67,7 @@ func (o *options) doRequest(req *http.Request) (*http.Response, error) {
 
 func (o *options) RoundTrip(req *http.Request) (*http.Response, error) {
 	// TODO: fix triggering conditions
-	if rand.Float64() > o.failureRate {
+	if rand.Float64() > math.Float64frombits(o.failureRate.Load()) {
 		return o.doRequest(req)
 	}
 
@@ -86,11 +86,19 @@ func (o *options) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if o.status > 0 {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
 		resp := &http.Response{
-			Status:     fmt.Sprintf("%d %s", o.status, http.StatusText(o.status)),
-			StatusCode: o.status,
-			Body:       ioutil.NopCloser(strings.NewReader(o.msg)),
-			Request:    req,
+			Status:        fmt.Sprintf("%d %s", o.status, http.StatusText(o.status)),
+			StatusCode:    o.status,
+			Proto:         "HTTP/1.1",
+			ProtoMajor:    1,
+			ProtoMinor:    1,
+			Header:        make(http.Header),
+			Body:          io.NopCloser(strings.NewReader(o.msg)),
+			ContentLength: int64(len(o.msg)),
+			Request:       req,
 		}
 		return resp, nil
 	}
@@ -100,6 +108,10 @@ func (o *options) RoundTrip(req *http.Request) (*http.Response, error) {
 		select {
 		case <-time.After(o.stall):
 		case <-ctx.Done():
+			if req.Body != nil {
+				_ = req.Body.Close()
+			}
+			return nil, ctx.Err()
 		}
 	}
 	return o.doRequest(req)
@@ -122,7 +134,7 @@ func MatchPathSubstring(s string) FailureOption {
 // 1 will always fail.  The default is never to fail.
 func FailureRate(rate float64) FailureOption {
 	return func(o *options) {
-		o.failureRate = rate
+		o.failureRate.Store(math.Float64bits(rate))
 	}
 }
 
@@ -135,7 +147,9 @@ func Response(status int) FailureOption {
 }
 
 // Stall simulates a network connection failure by stalling for the given
-// duration.
+// duration. If the request context ends during the stall, RoundTrip closes the
+// request body, returns ctx.Err() (context.Canceled or context.DeadlineExceeded),
+// and does not call the wrapped RoundTripper.
 func Stall(dur time.Duration) FailureOption {
 	return func(o *options) {
 		o.stall = dur
@@ -154,10 +168,7 @@ func Body(msg string) FailureOption {
 // context is closed.
 func Trigger(ctx context.Context) FailureOption {
 	return func(o *options) {
-		go func() {
-			<-ctx.Done()
-			o.failureRate = 1
-		}()
+		context.AfterFunc(ctx, func() { o.failureRate.Store(math.Float64bits(1)) })
 	}
 }
 

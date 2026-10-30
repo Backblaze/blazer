@@ -593,21 +593,86 @@ func TestSyncUsesRequestedConcurrency(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { _, err := Sync(ctx, bucket, "parallel", root, WithConcurrency(2)); result <- err }()
-	for i := 0; i < 2; i++ {
+	for started := 0; started < 2; started++ {
 		select {
 		case <-entered:
+			gate.Lock()
+			current := active
+			gate.Unlock()
+			if current > 2 {
+				t.Fatalf("third upload started while waiting for two active uploads: active=%d", current)
+			}
 		case <-ctx.Done():
-			t.Fatal("two uploads did not overlap")
+			t.Fatalf("only %d uploads started before the 5-second deadline, want 2", started)
 		}
 	}
+	gate.Lock()
+	current := active
+	gate.Unlock()
+	if current != 2 {
+		t.Fatalf("active uploads before release=%d, want exactly 2", current)
+	}
+	// No event signals that a third upload did not start, so wait briefly before release.
+	select {
+	case <-entered:
+		t.Fatal("third upload started before either active upload was released")
+	case <-time.After(200 * time.Millisecond):
+	}
 	once.Do(func() { close(release) })
-	if err := <-result; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("Sync did not finish after releasing uploads")
 	}
 	gate.Lock()
 	defer gate.Unlock()
 	if maximum != 2 {
 		t.Fatalf("maximum simultaneous uploads=%d, want 2", maximum)
+	}
+}
+
+func TestSyncWalkErrorsHandleNilAndDirectoryEntries(t *testing.T) {
+	bucket, _ := newSyncWire(t)
+	root := t.TempDir()
+	walkErr := errors.New("walk failed")
+	dirInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(root, "regular.txt")
+	if err := os.WriteFile(filePath, []byte("regular"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		entry     fs.DirEntry
+		wantVisit error
+	}{
+		{"nil entry", nil, nil},
+		{"directory entry", fs.FileInfoToDirEntry(dirInfo), fs.SkipDir},
+		{"regular-file entry", fs.FileInfoToDirEntry(fileInfo), nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var visitErr error
+			walk := func(path string, visit fs.WalkDirFunc) error {
+				visitErr = visit(filepath.Join(path, "unreadable"), test.entry, walkErr)
+				return nil
+			}
+			result, err := syncWithLocalIO(context.Background(), bucket, "p", root, walk, fileSHA1)
+			if visitErr != test.wantVisit {
+				t.Fatalf("walk callback = %v, want %v", visitErr, test.wantVisit)
+			}
+			if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Err != walkErr {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+		})
 	}
 }
 
