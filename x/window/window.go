@@ -101,10 +101,9 @@ func (w *Window) sweep(now time.Time) {
 	}
 	last := now.Add(-diff)
 
-	b := w.bucket(now)
-	p := w.bucket(last)
-
-	if b == p && diff <= w.res {
+	old := int64(last.UnixNano()) / int64(w.res)
+	new := int64(now.UnixNano()) / int64(w.res)
+	if old == new && diff <= w.res {
 		// We're in the same bucket as the previous sweep, so all buckets are
 		// valid.
 		return
@@ -122,8 +121,6 @@ func (w *Window) sweep(now time.Time) {
 	// Expire all invalid buckets.  This means buckets not seen since the
 	// previous sweep and now, including the current bucket but not including the
 	// previous bucket.
-	old := int64(last.UnixNano()) / int64(w.res)
-	new := int64(now.UnixNano()) / int64(w.res)
 	for i := old + 1; i <= new; i++ {
 		b := int(i) % len(w.events)
 		w.events[b] = nil
