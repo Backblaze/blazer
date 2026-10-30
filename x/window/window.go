@@ -59,8 +59,8 @@ func New(size, resolution time.Duration, r Reducer) *Window {
 			panic("window: resolution must be positive for a finite window")
 		}
 		buckets := size / resolution
-		if size%resolution != 0 {
-			buckets++
+		if buckets == 0 {
+			buckets = 1
 		}
 		return &Window{
 			res:    resolution,
