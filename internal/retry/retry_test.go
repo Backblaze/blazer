@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var retryTestError = errors.New("retry test error")
+var errRetryTest = errors.New("retry test error")
 
 func immediateAfter(time.Duration) <-chan time.Time {
 	c := make(chan time.Time, 1)
@@ -19,12 +19,12 @@ func TestDoAttemptCounting(t *testing.T) {
 	var calls, retries int
 	err := Do(context.Background(), func() error {
 		calls++
-		return retryTestError
+		return errRetryTest
 	}, Attempts(3), WithAfter(immediateAfter), OnRetry(func(uint, error) error {
 		retries++
 		return nil
 	}))
-	if !errors.Is(err, retryTestError) || calls != 3 || retries != 2 {
+	if !errors.Is(err, errRetryTest) || calls != 3 || retries != 2 {
 		t.Fatalf("Do() error=%v calls=%d retries=%d, want original error, 3 calls, 2 retries", err, calls, retries)
 	}
 }
@@ -36,10 +36,10 @@ func TestDoDynamicAttempts(t *testing.T) {
 		if calls == 3 {
 			return nil
 		}
-		return retryTestError
+		return errRetryTest
 	}, DynamicAttempts(func(attempt, attempts uint, err error) uint {
 		dynamicCalls++
-		if attempt == 1 && attempts == 1 && errors.Is(err, retryTestError) {
+		if attempt == 1 && attempts == 1 && errors.Is(err, errRetryTest) {
 			return 3
 		}
 		return attempts
@@ -56,7 +56,7 @@ func TestDoReturnsContextErrorDuringDelay(t *testing.T) {
 	never := make(chan time.Time)
 	result := make(chan error, 1)
 	go func() {
-		result <- Do(ctx, func() error { return retryTestError }, Attempts(2), Delay(time.Hour), WithAfter(func(time.Duration) <-chan time.Time {
+		result <- Do(ctx, func() error { return errRetryTest }, Attempts(2), Delay(time.Hour), WithAfter(func(time.Duration) <-chan time.Time {
 			close(delayStarted)
 			return never
 		}))

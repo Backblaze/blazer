@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"net/http"
@@ -98,7 +97,7 @@ func (o *options) RoundTrip(req *http.Request) (*http.Response, error) {
 			ProtoMajor:    1,
 			ProtoMinor:    1,
 			Header:        make(http.Header),
-			Body:          ioutil.NopCloser(strings.NewReader(o.msg)),
+			Body:          io.NopCloser(strings.NewReader(o.msg)),
 			ContentLength: int64(len(o.msg)),
 			Request:       req,
 		}
