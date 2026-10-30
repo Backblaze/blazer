@@ -3,6 +3,7 @@ package b2
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 type scriptRoot struct {
 	*testRoot
 	names      func(call int, cont string) (fs []b2FileInterface, next string, handled bool)
+	versions   func(call int, name, id string) (fs []b2FileInterface, nextName, nextID string)
 	unfinished func(call int, cont string) (fs []b2FileInterface, next string, handled bool)
 	calls      int32
 }
@@ -29,6 +31,15 @@ func (r *scriptRoot) createBucket(ctx context.Context, name, btype string, info 
 type scriptBucket struct {
 	*testBucket
 	r *scriptRoot
+}
+
+func (b *scriptBucket) listFileVersions(ctx context.Context, count int, name, id, pfx, del string) ([]b2FileInterface, string, string, error) {
+	if b.r.versions != nil {
+		n := int(atomic.AddInt32(&b.r.calls, 1))
+		fs, nextName, nextID := b.r.versions(n, name, id)
+		return fs, nextName, nextID, nil
+	}
+	return b.testBucket.listFileVersions(ctx, count, name, id, pfx, del)
 }
 
 func (b *scriptBucket) listFileNames(ctx context.Context, count int, cont, pfx, del string) ([]b2FileInterface, string, error) {
@@ -74,19 +85,55 @@ func newScriptRoot() *scriptRoot {
 // A backend that keeps returning an empty page with the same cursor must make
 // the iterator fail with an error, not hang or overflow the stack.
 func TestListFailsWhenAnEmptyPageDoesNotAdvance(t *testing.T) {
-	root := newScriptRoot()
-	root.names = func(int, string) ([]b2FileInterface, string, bool) { return nil, "a", true }
-	bucket, ctx := scriptedBucket(t, root)
-
-	iter := bucket.List(ctx, ListPageSize(100))
-	for iter.Next() {
-	}
-	err := iter.Err()
-	if err == nil || !strings.Contains(err.Error(), "not advancing") {
-		t.Fatalf("Err() = %v, want a 'not advancing' error", err)
-	}
-	if got := atomic.LoadInt32(&root.calls); got > 3 {
-		t.Errorf("backend was asked %d times, want the listing to stop within a few requests", got)
+	for _, mode := range []string{"names", "versions", "unfinished"} {
+		t.Run(mode, func(t *testing.T) {
+			root := newScriptRoot()
+			stalled := func(n int, _ string) ([]b2FileInterface, string, bool) {
+				if n > 2 {
+					return nil, "", true
+				}
+				return nil, "a", true
+			}
+			root.names, root.unfinished = stalled, stalled
+			root.versions = func(n int, _, id string) ([]b2FileInterface, string, string) {
+				// A new ID under the same name advances; only the third page stalls.
+				switch n {
+				case 1:
+					return nil, "a", "first"
+				case 2:
+					if id != "first" {
+						t.Errorf("second page ID = %q, want first", id)
+					}
+					return nil, "a", "second"
+				case 3:
+					if id != "second" {
+						t.Errorf("third page ID = %q, want second", id)
+					}
+					return nil, "a", "second"
+				}
+				return nil, "", ""
+			}
+			bucket, ctx := scriptedBucket(t, root)
+			opts := []ListOption{ListPageSize(100)}
+			wantCalls := int32(2)
+			switch mode {
+			case "versions":
+				opts = append(opts, ListHidden())
+				wantCalls = 3
+			case "unfinished":
+				opts = append(opts, ListUnfinished())
+			}
+			iter := bucket.List(ctx, opts...)
+			if iter.Next() {
+				t.Fatal("empty pages yielded an object")
+			}
+			if err := iter.Err(); err == nil || !strings.Contains(err.Error(), "not advancing") {
+				t.Fatalf("Err() = %v, want a 'not advancing' error", err)
+			}
+			if got := atomic.LoadInt32(&root.calls); got != wantCalls {
+				t.Errorf("backend calls = %d, want %d", got, wantCalls)
+			}
+		})
 	}
 }
 
@@ -94,8 +141,17 @@ func TestListFailsWhenAnEmptyPageDoesNotAdvance(t *testing.T) {
 // walked, without recursion.
 func TestListWalksManyConsecutiveEmptyPages(t *testing.T) {
 	const empties = 5000
+	firstDepth, maximumDepth := 0, 0
 	root := newScriptRoot()
 	root.names = func(n int, cont string) ([]b2FileInterface, string, bool) {
+		var stack [128]uintptr
+		depth := runtime.Callers(0, stack[:])
+		if n == 1 {
+			firstDepth = depth
+		}
+		if depth > maximumDepth {
+			maximumDepth = depth
+		}
 		if n <= empties {
 			return nil, fmt.Sprintf("%06d", n), true // digits sort before "a"
 		}
@@ -113,6 +169,12 @@ func TestListWalksManyConsecutiveEmptyPages(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Fatalf("listed %v after %d empty pages, want [a b c]", got, empties)
+	}
+	if maximumDepth > firstDepth+4 {
+		t.Errorf("stack depth grew from %d to %d, want constant depth", firstDepth, maximumDepth)
+	}
+	if calls := atomic.LoadInt32(&root.calls); calls != 5001 {
+		t.Errorf("listing calls = %d, want 5001", calls)
 	}
 }
 
