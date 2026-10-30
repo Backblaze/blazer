@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/blog"
 	"github.com/Backblaze/blazer/internal/retry"
 )
@@ -54,7 +55,8 @@ type Writer struct {
 
 	// ChunkSize is the size, in bytes, of each individual part, when writing
 	// large files, and also when determining whether to upload a file normally
-	// or when to split it into parts.  The default is 100M (1e8)  The minimum is
+	// or when to split it into parts: an upload of at most ChunkSize bytes is
+	// sent as a single file.  The default is 100M (1e8)  The minimum is
 	// 5M (5e6); values less than this are not an error, but will fail.  The
 	// maximum is 5GB (5e9).
 	ChunkSize int
@@ -297,7 +299,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 			return n, err
 		}
 		left := w.csize - w.w.Len()
-		if len(p) < left {
+		if len(p) <= left {
 			k, err := w.w.Write(p)
 			if err != nil {
 				w.setErr(err)
@@ -700,7 +702,7 @@ func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
 		return nb, nil
 	}
 	w.init()
-	if size < int64(w.csize) {
+	if size <= int64(w.csize) {
 		// the magic happens on w.Close()
 		return size, nil
 	}
@@ -933,7 +935,8 @@ func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, roo
 			return root.reupload(err)
 		}),
 		retry.OnRetry(func(attempt uint, err error) error {
-			blog.V(1).Infof("b2 upload part: error: %v; retrying", err)
+			code, _ := base.Code(err)
+			blog.V(1).Infof("b2 upload part: error (%T, status %d); retrying", err, code)
 			fresh, err := large.getUploadPartURL(ctx)
 			if err != nil {
 				return err
