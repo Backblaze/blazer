@@ -83,7 +83,7 @@ type Writer struct {
 
 	csize       int
 	ctx         context.Context
-	cancel      context.CancelFunc // cancels ctx
+	cancel      context.CancelCauseFunc // cancels ctx with the first Writer error
 	ctxf        func() context.Context
 	errf        func(error)
 	ready       chan chunk
@@ -140,6 +140,11 @@ type chunk struct {
 	buf writeBuffer
 }
 
+type writerCause struct{ err error }
+
+func (c writerCause) Error() string { return c.err.Error() }
+func (c writerCause) Unwrap() error { return c.err }
+
 func (w *Writer) setErr(err error) {
 	if err == nil || err == io.EOF {
 		return
@@ -151,7 +156,7 @@ func (w *Writer) setErr(err error) {
 	}
 	blog.V(1).Infof("error writing object: %T", err)
 	w.err = err
-	w.cancel()
+	w.cancel(writerCause{err})
 	w.emux.Unlock()
 	if w.ctxf == nil || w.file == nil {
 		return
@@ -655,16 +660,30 @@ func (w *Writer) sendChunk() error {
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
 //
-// If the Writer's context is cancelled while ReadFrom is copying from a
-// non-seekable r, ReadFrom returns the context error without waiting for a
-// Read on r that is already in progress. Once ReadFrom has returned, nothing
-// more from r is written to w; data read before the cancellation may already
-// have been written. That pending Read may still finish later, so do not reuse
-// r until it has returned (for example, close r first if it supports it).
+// On every path, ReadFrom returns the Writer's error when it cancels itself;
+// caller cancellation returns context.Canceled or context.DeadlineExceeded,
+// even if the caller supplied a custom cause. If the Writer's context is
+// cancelled while copying from a non-seekable r, ReadFrom returns without
+// waiting for a Read on r that is already in progress.
+// When the Writer cancels itself, ReadFrom returns the same first recorded
+// error as Close, so errors.Is and errors.As work and io.Copy sees it rather
+// than context.Canceled.
+// Once ReadFrom has returned, nothing more from r is written to w; data read
+// before cancellation may already have been written. That pending Read may
+// still finish later, so do not reuse r until it has returned (for example,
+// close r first if it supports it).
 //
 // With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
 // its remaining length supplies the progress total.
-func (w *Writer) ReadFrom(r io.Reader) (int64, error) {
+func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
+	defer func() {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			var cause writerCause
+			if errors.As(context.Cause(w.ctx), &cause) {
+				err = cause.err
+			}
+		}
+	}()
 	rs, ok := r.(io.ReadSeeker)
 	if !ok {
 		return copyContext(w.ctx, w, r)

@@ -300,8 +300,8 @@ func (progressSkipChunk) uploadPart(context.Context, readResetter, string, int, 
 }
 
 func TestProgressResumeSkipDoesNotReadClosedBuffer(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 	buf := newMemoryBuffer()
 	if _, err := buf.Write([]byte("already uploaded")); err != nil {
 		t.Fatal(err)
