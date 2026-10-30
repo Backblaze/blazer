@@ -124,8 +124,9 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, src, dst string) error {
 }
 ```
 
-If the file is smaller than the writer's `ChunkSize` (100 MB by default), Blazer buffers it and sends it
-with `b2_upload_file`. Larger files are uploaded in `ChunkSize` parts with B2's large file API.
+If the file is no larger than the writer's `ChunkSize` (100 MB by default), Blazer buffers it and sends
+it with `b2_upload_file`. Larger files are uploaded in `ChunkSize` parts with B2's large file API, which
+always produces at least two parts.
 
 ### Copy a file into B2, with multiple concurrent uploads
 
