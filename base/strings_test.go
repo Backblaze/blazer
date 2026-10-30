@@ -4,6 +4,32 @@ import (
 	"testing"
 )
 
+func TestEscapeLiterals(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{"a/b/c", "a/b/c"},
+		{"a b", "a+b"},
+		{"é", "%C3%A9"},
+		{"a%b", "a%25b"},
+		{"a/b c/d", "a/b+c/d"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			if got := escape(test.input); got != test.want {
+				t.Errorf("escape(%q) = %q, want %q", test.input, got, test.want)
+			}
+			got, err := unescape(test.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.input {
+				t.Errorf("unescape(%q) = %q, want %q", test.want, got, test.input)
+			}
+		})
+	}
+}
+
 func TestEncodeDecode(t *testing.T) {
 	// crashes identified by go-fuzz
 	origs := []string{
