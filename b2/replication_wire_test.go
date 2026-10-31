@@ -83,7 +83,8 @@ func TestSetupReplicationPublicWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("rule"), WithFileNamePrefix("logs/")); err != nil {
+	// https://www.backblaze.com/apidocs/b2-update-bucket documents priority 1.
+	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("rule"), WithFileNamePrefix("logs/"), WithRulePriority(1)); err != nil {
 		t.Fatal(err)
 	}
 	if len(updates) != 2 || updates[0]["bucketId"] != "dst-id" || updates[1]["bucketId"] != "src-id" {
@@ -107,7 +108,7 @@ func TestSetupReplicationPublicWire(t *testing.T) {
 		t.Fatalf("source wire rules = %#v, want one", rules)
 	}
 	rule := rules[0].(map[string]interface{})
-	if srcRole["sourceApplicationKeyId"] != "source-key" || rule["destinationBucketId"] != "dst-id" || rule["fileNamePrefix"] != "logs/" || rule["replicationRuleName"] != "rule" {
+	if srcRole["sourceApplicationKeyId"] != "source-key" || rule["destinationBucketId"] != "dst-id" || rule["fileNamePrefix"] != "logs/" || rule["replicationRuleName"] != "rule" || rule["priority"] != float64(1) {
 		t.Fatalf("source wire role = %#v", srcRole)
 	}
 	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("rule"), WithFileNamePrefix("logs/")); err != nil {
