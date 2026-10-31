@@ -176,6 +176,7 @@ func TestAccountInfoRenamePlatform(t *testing.T) {
 	renameErr := errors.New("rename denied")
 	for _, test := range []struct {
 		goos      string
+		destDir   bool
 		renameErr error
 		wantErr   error
 		wantCalls int
@@ -183,23 +184,33 @@ func TestAccountInfoRenamePlatform(t *testing.T) {
 		{goos: "windows", renameErr: sharingErr, wantCalls: 2},
 		{goos: "linux", renameErr: renameErr, wantErr: renameErr, wantCalls: 1},
 		{goos: "darwin", renameErr: renameErr, wantErr: renameErr, wantCalls: 1},
+		{goos: "windows", destDir: true, renameErr: renameErr, wantErr: renameErr, wantCalls: 1},
 	} {
-		t.Run(test.goos, func(t *testing.T) {
+		name := test.goos
+		if test.destDir {
+			name += " directory"
+		}
+		t.Run(name, func(t *testing.T) {
 			tmp, dest := filepath.Join(t.TempDir(), "new"), filepath.Join(t.TempDir(), "previous")
+			if test.destDir {
+				if err := os.Mkdir(dest, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
 			calls, clockCalls := 0, 0
 			rename := func(old, new string) error {
 				calls++
 				if old != tmp || new != dest {
 					t.Errorf("rename paths = %q, %q; want %q, %q", old, new, tmp, dest)
 				}
-				if calls == 1 {
+				if calls == 1 || test.destDir {
 					return test.renameErr
 				}
 				return nil
 			}
 			now := func() time.Time {
 				clockCalls++
-				return time.Unix(0, 0)
+				return time.Unix(int64(clockCalls), 0)
 			}
 			if err := renameReplaceWith(tmp, dest, rename, test.goos, now); !errors.Is(err, test.wantErr) {
 				t.Errorf("rename error = %v, want %v", err, test.wantErr)
@@ -207,8 +218,8 @@ func TestAccountInfoRenamePlatform(t *testing.T) {
 			if calls != test.wantCalls {
 				t.Errorf("rename calls = %d, want %d", calls, test.wantCalls)
 			}
-			if test.goos != "windows" && clockCalls != 0 {
-				t.Errorf("non-Windows rename entered retry deadline: clock calls = %d, want 0", clockCalls)
+			if (test.goos != "windows" || test.destDir) && clockCalls != 0 {
+				t.Errorf("rename entered retry deadline: clock calls = %d, want 0", clockCalls)
 			}
 		})
 	}
