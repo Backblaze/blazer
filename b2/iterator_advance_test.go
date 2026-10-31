@@ -3,6 +3,7 @@ package b2
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -167,8 +168,8 @@ func TestListWalksManyConsecutiveEmptyPages(t *testing.T) {
 	if err := iter.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("listed %v after %d empty pages, want [a b c]", got, empties)
+	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("listed %v after %d empty pages, want %v", got, empties, want)
 	}
 	if maximumDepth > firstDepth+4 {
 		t.Errorf("stack depth grew from %d to %d, want constant depth", firstDepth, maximumDepth)
@@ -187,6 +188,9 @@ func TestListUnfinishedContinuesPastEmptyPageWithCursor(t *testing.T) {
 		case 1:
 			return nil, "next", true
 		case 2:
+			if cont != "next" {
+				t.Errorf("second page cursor = %q, want next", cont)
+			}
 			return []b2FileInterface{&testFile{n: "big", a: "start", files: map[string]string{}}}, "", true
 		}
 		return nil, "", true
@@ -200,6 +204,9 @@ func TestListUnfinishedContinuesPastEmptyPageWithCursor(t *testing.T) {
 	}
 	if err := iter.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
+	}
+	if calls := atomic.LoadInt32(&root.calls); calls != 2 {
+		t.Fatalf("listing calls = %d, want 2", calls)
 	}
 	if len(got) != 1 || got[0] != "big" {
 		t.Fatalf("listed %v, want [big]: an empty unfinished page with a cursor ended the listing", got)

@@ -24,16 +24,20 @@ import (
 	"testing"
 )
 
-func TestSetupReplicationPublicWire(t *testing.T) {
-	ctx := context.Background()
+type setupReplicationWire struct {
+	updates []map[string]interface{}
+	paths   []string
+}
+
+func newSetupReplicationWire(t *testing.T, ctx context.Context) (*setupReplicationWire, *Bucket, *Bucket) {
+	t.Helper()
+	wire := &setupReplicationWire{}
 	buckets := map[string]map[string]interface{}{}
 	for _, entry := range []struct{ name, id string }{{"source", "src-id"}, {"destination", "dst-id"}} {
 		bucket := bucketWithEmptyDefaultSSE(map[string]interface{}{"bucketName": entry.name, "bucketType": "allPrivate"})
 		bucket["bucketId"] = entry.id
 		buckets[entry.name] = bucket
 	}
-	var updates []map[string]interface{}
-	var paths []string
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -56,8 +60,8 @@ func TestSetupReplicationPublicWire(t *testing.T) {
 			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "t" {
 				t.Errorf("update wire = %s auth=%q", r.Method, r.Header.Get("Authorization"))
 			}
-			updates = append(updates, body)
-			paths = append(paths, r.URL.Path)
+			wire.updates = append(wire.updates, body)
+			wire.paths = append(wire.paths, r.URL.Path)
 			name := "source"
 			if body["bucketId"] == "dst-id" {
 				name = "destination"
@@ -83,38 +87,67 @@ func TestSetupReplicationPublicWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("rule"), WithFileNamePrefix("logs/")); err != nil {
+	return wire, src, dst
+}
+
+func TestSetupReplicationPublicWire(t *testing.T) {
+	ctx := context.Background()
+	wire, src, dst := newSetupReplicationWire(t, ctx)
+	// https://www.backblaze.com/apidocs/b2-update-bucket documents priority 1.
+	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("rule"), WithFileNamePrefix("logs/"), WithRulePriority(1)); err != nil {
 		t.Fatal(err)
 	}
-	if len(updates) != 2 || updates[0]["bucketId"] != "dst-id" || updates[1]["bucketId"] != "src-id" {
-		t.Fatalf("wire update order = %#v, want destination then source", updates)
+	if len(wire.updates) != 2 || wire.updates[0]["bucketId"] != "dst-id" || wire.updates[1]["bucketId"] != "src-id" {
+		t.Fatalf("wire update order = %#v, want destination then source", wire.updates)
 	}
-	for _, path := range paths {
+	for _, path := range wire.paths {
 		if !strings.HasSuffix(path, "/b2_update_bucket") {
 			t.Fatalf("update path = %q", path)
 		}
 	}
-	dstConfig := updates[0]["replicationConfiguration"].(map[string]interface{})
+	dstConfig := wire.updates[0]["replicationConfiguration"].(map[string]interface{})
 	dstRole := dstConfig["asReplicationDestination"].(map[string]interface{})
 	mapping := dstRole["sourceToDestinationKeyMapping"].(map[string]interface{})
 	if mapping["source-key"] != "destination-key" {
 		t.Fatalf("destination wire mapping = %#v", mapping)
 	}
-	srcConfig := updates[1]["replicationConfiguration"].(map[string]interface{})
+	srcConfig := wire.updates[1]["replicationConfiguration"].(map[string]interface{})
 	srcRole := srcConfig["asReplicationSource"].(map[string]interface{})
 	rules := srcRole["replicationRules"].([]interface{})
 	if len(rules) != 1 {
 		t.Fatalf("source wire rules = %#v, want one", rules)
 	}
 	rule := rules[0].(map[string]interface{})
-	if srcRole["sourceApplicationKeyId"] != "source-key" || rule["destinationBucketId"] != "dst-id" || rule["fileNamePrefix"] != "logs/" || rule["replicationRuleName"] != "rule" {
+	if srcRole["sourceApplicationKeyId"] != "source-key" || rule["destinationBucketId"] != "dst-id" || rule["fileNamePrefix"] != "logs/" || rule["replicationRuleName"] != "rule" || rule["priority"] != float64(1) {
 		t.Fatalf("source wire role = %#v", srcRole)
 	}
 	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("rule"), WithFileNamePrefix("logs/")); err != nil {
 		t.Fatal(err)
 	}
-	if len(updates) != 2 {
-		t.Fatalf("idempotent rerun sent %d updates, want 2", len(updates))
+	if len(wire.updates) != 2 {
+		t.Fatalf("idempotent rerun sent %d updates, want 2", len(wire.updates))
+	}
+}
+
+func TestSetupReplicationDefaultPriorityOnWire(t *testing.T) {
+	ctx := context.Background()
+	wire, src, dst := newSetupReplicationWire(t, ctx)
+	// 128 is the SDK's default for a bucket's first rule.
+	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("default-rule"), WithFileNamePrefix("logs/")); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.updates) != 2 || wire.updates[1]["bucketId"] != "src-id" {
+		t.Fatalf("wire updates = %#v, want destination then source", wire.updates)
+	}
+	sourceConfig := wire.updates[1]["replicationConfiguration"].(map[string]interface{})
+	sourceRole := sourceConfig["asReplicationSource"].(map[string]interface{})
+	rules := sourceRole["replicationRules"].([]interface{})
+	if len(rules) != 1 {
+		t.Fatalf("source wire rules = %#v, want exactly one", rules)
+	}
+	rule := rules[0].(map[string]interface{})
+	if rule["priority"] != float64(128) || rule["replicationRuleName"] != "default-rule" || rule["destinationBucketId"] != "dst-id" || rule["fileNamePrefix"] != "logs/" {
+		t.Fatalf("source wire rule = %#v, want default priority and requested fields", rule)
 	}
 }
 

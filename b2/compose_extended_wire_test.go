@@ -278,6 +278,30 @@ func TestComposeValidationRejectsInvalidPartsBeforeStarting(t *testing.T) {
 	}
 }
 
+func TestComposeValidationReportsOneBasedPartNumbers(t *testing.T) {
+	// Compose reports the position of the invalid input from the caller's one-based list.
+	wire := newComposeWire(t)
+	bucket := wire.bucket(t)
+	for _, tc := range []struct {
+		name  string
+		parts []ComposePart
+		want  string
+	}{
+		{"first", []ComposePart{PartFromReader(bytes.NewReader(nil), 0), PartFromReader(bytes.NewReader(nil), 1)}, "part 1:"},
+		{"third", []ComposePart{PartFromCopy("first", "bytes=0-4999999"), PartFromCopy("second", "bytes=0-4999999"), PartFromReader(bytes.NewReader(nil), 0)}, "part 3:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := bucket.Compose(context.Background(), "invalid", tc.parts)
+			if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+				t.Fatalf("Compose() error = %v, want prefix %q", err, tc.want)
+			}
+		})
+	}
+	if calls, _, _, _ := wire.snapshot(); len(calls) != 0 {
+		t.Fatalf("validation calls = %v, want none", calls)
+	}
+}
+
 func TestComposeRejectsMoreThan10000PartsBeforeStarting(t *testing.T) {
 	wire := newComposeWire(t)
 	wire.failCopyPart = 1 // Bound the unfixed path to one request.
