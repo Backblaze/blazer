@@ -46,6 +46,9 @@ func TestZeroByteObjectWire(t *testing.T) {
 			if got := uploads[0]; len(got.Body) != 0 || got.Header.Get("Content-Length") != "0" || got.Header.Get("X-Bz-File-Name") != "empty" {
 				t.Fatalf("empty upload: body=%q headers=%v", got.Body, got.Header)
 			}
+			if got := uploads[0].Header.Get("X-Bz-Content-Sha1"); got != "da39a3ee5e6b4b0d3255bfef95601890afd80709" {
+				t.Fatalf("empty upload X-Bz-Content-Sha1 = %q, want da39a3ee5e6b4b0d3255bfef95601890afd80709", got)
+			}
 			attrs, err := bucket.Object("empty").Attrs(ctx)
 			if err != nil {
 				t.Fatal(err)
