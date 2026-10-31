@@ -342,16 +342,39 @@ func TestProgressSlowCallbackCanReenterTransfer(t *testing.T) {
 	}
 	payload := bytes.Repeat([]byte("reentry"), 20_000)
 
+	writerEntered := make(chan struct{})
+	writerAcknowledged := make(chan struct{})
+	writerGate := make(chan struct{})
+	releaseWriter := sync.OnceFunc(func() { close(writerGate) })
+	defer releaseWriter()
+	var writerOnce sync.Once
 	var writer *Writer
 	writer = bucket.Object("upload").NewWriter(ctx, WithProgress(func(_, _ int64) {
-		time.Sleep(time.Millisecond)
-		_ = writer.status()
+		writerOnce.Do(func() {
+			close(writerEntered)
+			<-writerGate
+			_ = writer.status()
+			close(writerAcknowledged)
+		})
 	}))
-	if _, err := writer.ReadFrom(&slowReadSeeker{Reader: bytes.NewReader(payload)}); err != nil {
+	if _, err := writer.ReadFrom(bytes.NewReader(payload)); err != nil {
 		t.Fatal(err)
 	}
 	writeDone := make(chan error, 1)
 	go func() { writeDone <- writer.Close() }()
+	select {
+	case <-writerEntered:
+	case err := <-writeDone:
+		t.Fatalf("upload completed without a progress callback: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload callback did not enter")
+	}
+	releaseWriter()
+	select {
+	case <-writerAcknowledged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload callback did not return from writer.status")
+	}
 	select {
 	case err := <-writeDone:
 		if err != nil {
@@ -361,12 +384,21 @@ func TestProgressSlowCallbackCanReenterTransfer(t *testing.T) {
 		t.Fatal("slow reentrant upload callback deadlocked")
 	}
 
-	bucket.b = slowProgressBucket{bucket.b}
+	readerEntered := make(chan struct{})
+	readerAcknowledged := make(chan struct{})
+	readerGate := make(chan struct{})
+	releaseReader := sync.OnceFunc(func() { close(readerGate) })
+	defer releaseReader()
+	var readerOnce sync.Once
 	reader := bucket.Object("upload").NewRangeReader(ctx, 0, int64(len(payload)))
 	reader.ChunkSize = len(payload) + 1
 	reader.Progress = func(_, _ int64) {
-		time.Sleep(time.Millisecond)
-		_ = reader.status()
+		readerOnce.Do(func() {
+			close(readerEntered)
+			<-readerGate
+			_ = reader.status()
+			close(readerAcknowledged)
+		})
 	}
 	readDone := make(chan error, 1)
 	go func() {
@@ -376,6 +408,19 @@ func TestProgressSlowCallbackCanReenterTransfer(t *testing.T) {
 		}
 		readDone <- err
 	}()
+	select {
+	case <-readerEntered:
+	case err := <-readDone:
+		t.Fatalf("download completed without a progress callback: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("download callback did not enter")
+	}
+	releaseReader()
+	select {
+	case <-readerAcknowledged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("download callback did not return from reader.status")
+	}
 	select {
 	case err := <-readDone:
 		if err != nil {
@@ -615,24 +660,27 @@ func TestProgressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := client.backend.(*beRoot).b2i.(*testRoot)
-	root.bucketMap["progress-cancel"]["file"] = string(bytes.Repeat([]byte("x"), 128_000))
-	bucket.b = slowProgressBucket{bucket.b}
+	root.bucketMap["progress-cancel"]["file"] = "x"
 	reader := bucket.Object("file").NewReader(ctx)
 	started := make(chan struct{})
 	release := make(chan struct{})
+	releaseCallback := sync.OnceFunc(func() { close(release) })
+	defer releaseCallback()
+	terminal := make(chan struct{})
 	var mu sync.Mutex
 	var samples []progressSample
 	reader.Progress = func(complete, total int64) {
 		mu.Lock()
-		first := len(samples) == 0
+		samples = append(samples, progressSample{complete, total})
+		number := len(samples)
 		mu.Unlock()
-		if first {
+		switch number {
+		case 1:
 			close(started)
 			<-release
+		case 2:
+			close(terminal)
 		}
-		mu.Lock()
-		samples = append(samples, progressSample{complete, total})
-		mu.Unlock()
 	}
 	readDone := make(chan struct{})
 	go func() { _, _ = io.Copy(io.Discard, reader); close(readDone) }()
@@ -641,21 +689,46 @@ func TestProgressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("callback did not start before cancellation")
 	}
+	if got := progressSnapshot(&mu, &samples); len(got) != 1 || got[0] != (progressSample{1, -1}) {
+		t.Fatalf("first progress = %+v, want one (1, -1) sample", got)
+	}
 	cancel()
 	closed := make(chan error, 1)
 	go func() { closed <- reader.Close() }()
 	select {
 	case err := <-closed:
-		close(release)
+		releaseCallback()
 		t.Fatalf("Reader.Close returned before terminal callback on cancel: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	close(release)
-	if err := <-closed; err != nil {
-		t.Fatal(err)
+	releaseCallback()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reader.Close did not finish after releasing the callback")
 	}
-	<-readDone
+	select {
+	case <-terminal:
+	default:
+		t.Fatal("cancelled reader did not deliver a separate terminal (1, -1) callback")
+	}
+	select {
+	case <-reader.reporter.done:
+	default:
+		t.Fatal("progress reporter did not finish before Reader.Close returned")
+	}
+	select {
+	case <-readDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled read did not finish")
+	}
 	before := progressSnapshot(&mu, &samples)
+	if len(before) != 2 || before[0] != (progressSample{1, -1}) || before[1] != (progressSample{1, -1}) {
+		t.Fatalf("progress at completion = %+v, want [(1, -1), (1, -1)]", before)
+	}
 	select {
 	case <-reader.reporter.wake: // finish may leave a pre-terminal wake queued.
 	default:
