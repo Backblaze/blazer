@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/Backblaze/blazer/internal/b2wiretest"
+	"github.com/Backblaze/blazer/x/b2sim"
 )
 
 const (
@@ -759,21 +760,18 @@ func TestReaderFrom(t *testing.T) {
 	defer cancel()
 
 	table := []struct {
-		size, pos int64
+		size int64
 	}{
 		{
-			size: 10,
+			size: 3,
 		},
 	}
 
 	for _, e := range table {
-		client := &Client{
-			backend: &beRoot{
-				b2i: &testRoot{
-					bucketMap: make(map[string]map[string]string),
-					errs:      &errCont{},
-				},
-			},
+		// This transport verifies streaming SHA1 trailers instead of storing them as file bytes.
+		client, err := NewClient(ctx, "test-id", "test-key", Transport(b2sim.New()))
+		if err != nil {
+			t.Fatal(err)
 		}
 
 		bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
@@ -786,7 +784,7 @@ func TestReaderFrom(t *testing.T) {
 			}
 		}()
 
-		r := &zReadSeeker{pos: e.pos, size: e.size}
+		r := bytes.NewReader([]byte("abc"))
 		w := bucket.Object("writer").NewWriter(ctx)
 		n, err := w.ReadFrom(r)
 		if err != nil {
@@ -794,6 +792,26 @@ func TestReaderFrom(t *testing.T) {
 		}
 		if n != e.size {
 			t.Errorf("ReadFrom(): got %d bytes, wanted %d bytes", n, e.size)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := bucket.Object("writer").Delete(ctx); err != nil {
+				t.Error(err)
+			}
+		}()
+		reader := bucket.Object("writer").NewReader(ctx)
+		defer func() { _ = reader.Close() }()
+		got, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 3 || string(got) != "abc" {
+			t.Errorf("downloaded content = %q (%d bytes), want abc (3 bytes)", got, len(got))
+		}
+		if gotSHA1 := fmt.Sprintf("%x", sha1.Sum(got)); gotSHA1 != "a9993e364706816aba3e25717850c26c9cd0d89d" {
+			t.Errorf("downloaded SHA1 = %s, want a9993e364706816aba3e25717850c26c9cd0d89d", gotSHA1)
 		}
 	}
 }
