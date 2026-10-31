@@ -108,7 +108,30 @@ func (a *AccountInfoFile) Set(data AuthData) {
 	a.err = a.write(data)
 }
 
-func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
+func (a *AccountInfoFile) write(data AuthData) error {
+	return a.writeWith(data, accountInfoFileOps{
+		createTemp: func(dir, pattern string) (accountInfoTempFile, error) {
+			return os.CreateTemp(dir, pattern)
+		},
+		remove: os.Remove,
+		rename: renameReplace,
+	})
+}
+
+type accountInfoTempFile interface {
+	io.WriteCloser
+	Name() string
+	Chmod(os.FileMode) error
+	Sync() error
+}
+
+type accountInfoFileOps struct {
+	createTemp func(string, string) (accountInfoTempFile, error)
+	remove     func(string) error
+	rename     func(string, string) error
+}
+
+func (a *AccountInfoFile) writeWith(data AuthData, ops accountInfoFileOps) (resultErr error) {
 	content, err := json.Marshal(cloneAuthData(data))
 	if err != nil {
 		return err
@@ -127,12 +150,12 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 	if err := checkPrivateAccountInfoParent(parent, info); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(parent, ".account-info-*")
+	file, err := ops.createTemp(parent, ".account-info-*")
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := os.Remove(file.Name()); err != nil && !os.IsNotExist(err) && resultErr == nil {
+		if err := ops.remove(file.Name()); err != nil && !os.IsNotExist(err) && resultErr == nil {
 			resultErr = err
 		}
 	}()
@@ -153,7 +176,7 @@ func (a *AccountInfoFile) write(data AuthData) (resultErr error) {
 	if closeErr != nil {
 		return closeErr
 	}
-	return renameReplace(file.Name(), a.path)
+	return ops.rename(file.Name(), a.path)
 }
 
 func checkPrivateAccountInfoParent(parent string, info os.FileInfo) error {
@@ -176,8 +199,12 @@ func checkPrivateAccountInfoParent(parent string, info os.FileInfo) error {
 // with a sharing violation while another process briefly holds the destination;
 // those clear on their own, so retry. A directory is never replaced.
 func renameReplace(tmp, dest string) error {
-	err := os.Rename(tmp, dest)
-	if err == nil || runtime.GOOS != "windows" {
+	return renameReplaceWith(tmp, dest, os.Rename, runtime.GOOS, time.Now)
+}
+
+func renameReplaceWith(tmp, dest string, rename func(string, string) error, goos string, now func() time.Time) error {
+	err := rename(tmp, dest)
+	if err == nil || goos != "windows" {
 		return err
 	}
 	if info, statErr := os.Lstat(dest); statErr == nil && info.IsDir() {
@@ -186,8 +213,8 @@ func renameReplace(tmp, dest string) error {
 	// Windows: a concurrent reader or writer can briefly hold dest, so the
 	// atomic move fails with a transient sharing violation. Retry until it
 	// clears, bounded by a deadline.
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
-		if err = os.Rename(tmp, dest); err == nil {
+	for deadline := now().Add(2 * time.Second); now().Before(deadline); {
+		if err = rename(tmp, dest); err == nil {
 			return nil
 		}
 		time.Sleep(time.Millisecond)

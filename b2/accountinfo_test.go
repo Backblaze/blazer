@@ -33,17 +33,31 @@ func TestInMemoryAccountInfo(t *testing.T) {
 	if _, ok := store.AuthData(); ok {
 		t.Fatal("new store is populated")
 	}
-	data := sampleAuthData()
+	want := AuthData{
+		ApplicationKeyID: "key-id", AccountID: "account", AuthToken: "session-token",
+		APIURL: "https://api.example", DownloadURL: "https://download.example",
+		S3URL: "https://s3.example", AbsMinPartSize: 5_000_000,
+		RecommendedPartSize: 100_000_000, AllowedBuckets: []string{"bucket"},
+		AllowedPrefix: "prefix/", AllowedCapabilities: []string{"listBuckets"},
+	}
+	data := want
+	data.AllowedBuckets = append([]string(nil), want.AllowedBuckets...)
+	data.AllowedCapabilities = append([]string(nil), want.AllowedCapabilities...)
 	store.Set(data)
-	data.AllowedBuckets[0] = "modified"
 	got, ok := store.AuthData()
-	if !ok || got.AllowedBuckets[0] != "bucket" {
-		t.Fatalf("stored data = %+v, ok=%t", got, ok)
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored data = %+v, ok=%t; want %+v, true", got, ok, want)
+	}
+	data.AllowedBuckets[0] = "modified"
+	data.AllowedCapabilities[0] = "modified"
+	got, ok = store.AuthData()
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored data after caller mutation = %+v, ok=%t; want %+v, true", got, ok, want)
 	}
 	got.AllowedCapabilities[0] = "modified"
 	got, _ = store.AuthData()
-	if got.AllowedCapabilities[0] != "listBuckets" {
-		t.Fatal("returned data aliases stored slice")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("returned data aliases stored slice: got %+v, want %+v", got, want)
 	}
 	store.Clear()
 	if _, ok := store.AuthData(); ok {
@@ -162,6 +176,9 @@ func TestNewClientReauthorizesIncompleteSession(t *testing.T) {
 		omit func(*AuthData)
 	}{
 		{"account ID", func(data *AuthData) { data.AccountID = "" }},
+		{"API URL", func(data *AuthData) { data.APIURL = "" }},
+		{"auth token", func(data *AuthData) { data.AuthToken = "" }},
+		{"download URL", func(data *AuthData) { data.DownloadURL = "" }},
 		{"S3 URL", func(data *AuthData) { data.S3URL = "" }},
 		{"minimum part size", func(data *AuthData) { data.AbsMinPartSize = 0 }},
 		{"recommended part size", func(data *AuthData) { data.RecommendedPartSize = 0 }},
@@ -255,6 +272,74 @@ func TestAccountInfoConcurrency(t *testing.T) {
 }
 
 func TestAccountInfoFileAtomicReplacement(t *testing.T) {
+	t.Run("paused rename keeps a complete snapshot", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "private", "account.json")
+		first := AuthData{AccountID: "first", AuthToken: "first"}
+		second := AuthData{AccountID: "second", AuthToken: "second"}
+		store := NewAccountInfoFile(path)
+		store.Set(first)
+		if err := store.Err(); err != nil {
+			t.Fatal(err)
+		}
+
+		renameStarted := make(chan struct{})
+		continueRename := make(chan struct{})
+		var releaseOnce sync.Once
+		releaseRename := func() { releaseOnce.Do(func() { close(continueRename) }) }
+		t.Cleanup(releaseRename)
+		ops := accountInfoFileOps{
+			createTemp: func(dir, pattern string) (accountInfoTempFile, error) {
+				file, err := os.CreateTemp(dir, pattern)
+				return file, err
+			},
+			remove: os.Remove,
+			rename: func(tmp, dest string) error {
+				return renameReplaceWith(tmp, dest, func(old, new string) error {
+					close(renameStarted)
+					<-continueRename
+					return os.Rename(old, new)
+				}, "linux", time.Now)
+			},
+		}
+		done := make(chan error, 1)
+		go func() { done <- store.writeWith(second, ops) }()
+		select {
+		case <-renameStarted:
+		case err := <-done:
+			t.Fatalf("replacement completed before rename paused: %v", err)
+		case <-time.After(time.Second):
+			t.Fatal("replacement did not reach rename")
+		}
+		assertComplete := func(when string) AuthData {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s snapshot: %v", when, err)
+			}
+			var got AuthData
+			if err := json.Unmarshal(content, &got); err != nil {
+				t.Fatalf("%s snapshot is partial JSON: %v", when, err)
+			}
+			if (got.AccountID != "first" || got.AuthToken != "first") &&
+				(got.AccountID != "second" || got.AuthToken != "second") {
+				t.Fatalf("%s snapshot = account %q, token %q; want full first or second snapshot", when, got.AccountID, got.AuthToken)
+			}
+			return got
+		}
+		_ = assertComplete("paused")
+		releaseRename()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("replacement did not complete")
+		}
+		if got := assertComplete("replacement"); got.AccountID != second.AccountID || got.AuthToken != second.AuthToken {
+			t.Fatalf("replacement snapshot = account %q, token %q; want account %q, token %q", got.AccountID, got.AuthToken, second.AccountID, second.AuthToken)
+		}
+	})
+
 	path := filepath.Join(t.TempDir(), "private", "account.json")
 	first, second := NewAccountInfoFile(path), NewAccountInfoFile(path)
 	first.Set(AuthData{AccountID: "first", AuthToken: "first"})
