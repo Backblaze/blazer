@@ -212,8 +212,13 @@ func ListDelimiter(delimiter string) ListOption {
 }
 
 // ListPageSize configures the iterator to request the given number of objects
-// per network round-trip.  The default (and maximum) is 1000 objects, except
-// for unfinished large files, which is 100.
+// per network round-trip. With no ListPageSize, or ListPageSize(0), object and
+// version listings send maxFileCount 0, so B2 uses its default of 100.
+// Unfinished large-file listings omit maxFileCount, and B2 likewise uses its
+// default of 100.
+//
+// The SDK limits object and version listings to 1000 objects, and unfinished
+// large-file listings to 100.
 func ListPageSize(count int) ListOption {
 	return func(o *objectIteratorOptions) {
 		o.pageSize = count
