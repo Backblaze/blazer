@@ -1,0 +1,14 @@
+# Snyk policy. `exclude.code` keeps paths out of Snyk Code (SAST) scanning.
+exclude:
+  code:
+    # Test code. Tests are never shipped in the module's API, and their
+    # fixtures are credential-shaped on purpose (fake application keys, auth
+    # tokens, SSE-C keys), which Snyk Code reports as hardcoded secrets.
+    # Production source in b2/, base/, internal/ and x/ is still scanned.
+    - '**/*_test.go'
+    - '**/testdata/**'
+    - scripts/*_test.sh
+    # Recording httptest B2 server, imported only from _test.go files.
+    - internal/b2wiretest/**
+    # Contract checks run by the SDK harness against the local B2 simulator.
+    - .sdkharness/**
