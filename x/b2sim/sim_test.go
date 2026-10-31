@@ -212,17 +212,20 @@ func TestGoldenPath(t *testing.T) {
 	retention := requireJSONFields(t, infoFields["fileRetention"], "isClientAuthorizedToRead", "value")
 	requireJSONFields(t, retention["value"], "mode", "retainUntilTimestamp")
 	requireJSONFields(t, infoFields["legalHold"], "isClientAuthorizedToRead", "value")
-	large := bytes.Repeat([]byte("multipart!"), 1_100_001) // over two 5 MB parts
+	// Distinct parts make concatenation order observable.
+	large := bytes.Repeat([]byte("A"), 5_000_000)
+	large = append(large, bytes.Repeat([]byte("B"), 5_000_000)...)
+	large = append(large, 'C')
 	largeObject, err := writeObject(ctx, bucket, "large.txt", large, 5_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls := sim.Calls(); calls["b2_start_large_file"] != 1 || calls["b2_upload_part"] < 2 || calls["b2_finish_large_file"] != 1 {
+	if calls := sim.Calls(); calls["b2_start_large_file"] != 1 || calls["b2_upload_part"] != 3 || calls["b2_finish_large_file"] != 1 {
 		t.Fatalf("large upload did not use multipart wire path: %v", calls)
 	}
 	got, err = readObject(ctx, largeObject, 0, -1)
 	if err != nil || !bytes.Equal(got, large) {
-		t.Fatalf("multipart download: bytes=%d err=%v", len(got), err)
+		t.Fatalf("multipart download: bytes=%d err=%v; first bytes=%q, want %q", len(got), err, got[:min(len(got), 8)], "AAAAAAAA")
 	}
 	iter := bucket.List(ctx)
 	var names []string
@@ -557,27 +560,16 @@ func TestBucketUpdateRejectsStaleRevision(t *testing.T) {
 	}
 }
 
-func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
-	sim := New()
-	id := sim.Seed("missing-part")
-	started := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": id, "fileName": "large", "contentType": "application/octet-stream"})
-	var body struct {
-		FileID string `json:"fileId"`
-	}
-	if err := json.NewDecoder(started.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if err := started.Body.Close(); err != nil {
-		t.Fatal(err)
-	}
-	part := []byte("second")
-	req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+body.FileID, bytes.NewReader(part))
+func uploadSimulatorPart(t *testing.T, sim *Simulator, fileID string, number int, data []byte) string {
+	t.Helper()
+	checksum := fmt.Sprintf("%x", sha1.Sum(data))
+	req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+fileID, bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "b2sim-token")
-	req.Header.Set("X-Bz-Part-Number", "2")
-	req.Header.Set("X-Bz-Content-Sha1", digest(part))
+	req.Header.Set("X-Bz-Part-Number", fmt.Sprint(number))
+	req.Header.Set("X-Bz-Content-Sha1", checksum)
 	resp, err := sim.RoundTrip(req)
 	if err != nil {
 		t.Fatal(err)
@@ -585,28 +577,84 @@ func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
 	if err := resp.Body.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("part upload status = %d", resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("upload part %d status = %d, want 200", number, resp.StatusCode)
 	}
-	finish := postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": body.FileID, "partSha1Array": []string{""}})
-	if err := finish.Body.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if finish.StatusCode != http.StatusBadRequest {
-		t.Fatalf("missing part finish status = %d, want 400", finish.StatusCode)
-	}
-	if sim.large[body.FileID] == nil || len(sim.buckets[id].versions) != 0 {
-		t.Fatal("failed finish removed unfinished file or stored a version")
+	return checksum
+}
+
+func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
+	// Part numbers must be contiguous and start at 1:
+	// https://www.backblaze.com/apidocs/b2-upload-part
+	for _, tc := range []struct {
+		name       string
+		numbers    [2]int
+		wantStatus int
+	}{
+		{"missing first", [2]int{2, 3}, 400},
+		// A missing final part cannot be rejected by the non-final-size check.
+		{"missing final", [2]int{1, 3}, 400},
+		{"contiguous control", [2]int{1, 2}, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sim := New()
+			id := sim.Seed("missing-part")
+			start := postSimulatorJSON(t, sim, "b2_start_large_file", map[string]any{"bucketId": id, "fileName": "large", "contentType": "application/octet-stream"})
+			var started struct {
+				FileID string `json:"fileId"`
+			}
+			if err := json.NewDecoder(start.Body).Decode(&started); err != nil {
+				t.Fatal(err)
+			}
+			if err := start.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			first := bytes.Repeat([]byte("A"), 5_000_000)
+			last := []byte("B")
+			hashes := []string{
+				uploadSimulatorPart(t, sim, started.FileID, tc.numbers[0], first),
+				uploadSimulatorPart(t, sim, started.FileID, tc.numbers[1], last),
+			}
+			finish := postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": started.FileID, "partSha1Array": hashes})
+			var body struct {
+				Code string `json:"code"`
+			}
+			if err := json.NewDecoder(finish.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if err := finish.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if finish.StatusCode != tc.wantStatus {
+				t.Fatalf("finish status=%d code=%q, want %d", finish.StatusCode, body.Code, tc.wantStatus)
+			}
+			if tc.wantStatus == 400 {
+				if body.Code != "bad_request" || sim.large[started.FileID] == nil || len(sim.buckets[id].versions) != 0 {
+					t.Fatalf("failed finish: code=%q unfinished=%t versions=%d, want bad_request, retained upload, no version", body.Code, sim.large[started.FileID] != nil, len(sim.buckets[id].versions))
+				}
+			} else {
+				if sim.large[started.FileID] != nil || len(sim.buckets[id].versions) != 1 {
+					t.Fatal("successful finish did not replace the unfinished upload with one version")
+				}
+				if got := sim.buckets[id].versions[0].data; !bytes.Equal(got, append(first, last...)) {
+					t.Fatalf("finished bytes = %d, want the two parts in order", len(got))
+				}
+			}
+		})
 	}
 }
 
 func TestMultipartLimitsLeaveUploadUnfinished(t *testing.T) {
+	// The non-final minimum is 5,000,000 bytes; the final minimum is 1:
+	// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
 	for _, tc := range []struct {
-		name  string
-		parts [][]byte
+		name       string
+		parts      [][]byte
+		wantStatus int
 	}{
-		{name: "one part", parts: [][]byte{bytes.Repeat([]byte("a"), 5_000_000)}},
-		{name: "short non-final part", parts: [][]byte{[]byte("short"), []byte("last")}},
+		{"one part", [][]byte{bytes.Repeat([]byte("a"), 5_000_000)}, 400},
+		{"short non-final part", [][]byte{bytes.Repeat([]byte("a"), 4_999_999), []byte("b")}, 400},
+		{"minimum valid parts", [][]byte{bytes.Repeat([]byte("a"), 5_000_000), []byte("b")}, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sim := New()
@@ -623,37 +671,32 @@ func TestMultipartLimitsLeaveUploadUnfinished(t *testing.T) {
 			}
 			var hashes []string
 			for i, part := range tc.parts {
-				req, err := http.NewRequest(http.MethodPost, origin+"/upload/part/"+started.FileID, bytes.NewReader(part))
-				if err != nil {
-					t.Fatal(err)
-				}
-				req.Header.Set("Authorization", "b2sim-token")
-				req.Header.Set("X-Bz-Part-Number", fmt.Sprint(i+1))
-				req.Header.Set("X-Bz-Content-Sha1", digest(part))
-				resp, err := sim.RoundTrip(req)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := resp.Body.Close(); err != nil {
-					t.Fatal(err)
-				}
-				if resp.StatusCode != 200 {
-					t.Fatalf("upload part %d status = %d", i+1, resp.StatusCode)
-				}
-				hashes = append(hashes, digest(part))
+				hashes = append(hashes, uploadSimulatorPart(t, sim, started.FileID, i+1, part))
 			}
 			finish := postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": started.FileID, "partSha1Array": hashes})
-			var failureBody struct {
+			var body struct {
 				Code string `json:"code"`
 			}
-			if err := json.NewDecoder(finish.Body).Decode(&failureBody); err != nil {
+			if err := json.NewDecoder(finish.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
 			if err := finish.Body.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if finish.StatusCode != 400 || failureBody.Code != "bad_request" || sim.large[started.FileID] == nil {
-				t.Fatalf("finish status=%d code=%q unfinished=%t, want 400 bad_request and retained upload", finish.StatusCode, failureBody.Code, sim.large[started.FileID] != nil)
+			if finish.StatusCode != tc.wantStatus {
+				t.Fatalf("finish status=%d code=%q, want %d", finish.StatusCode, body.Code, tc.wantStatus)
+			}
+			if tc.wantStatus == 400 {
+				if body.Code != "bad_request" || sim.large[started.FileID] == nil || len(sim.buckets[bucketID].versions) != 0 {
+					t.Fatalf("failed finish: code=%q unfinished=%t versions=%d, want bad_request, retained upload, no version", body.Code, sim.large[started.FileID] != nil, len(sim.buckets[bucketID].versions))
+				}
+			} else {
+				if sim.large[started.FileID] != nil || len(sim.buckets[bucketID].versions) != 1 {
+					t.Fatal("successful finish did not replace the unfinished upload with one version")
+				}
+				if got := sim.buckets[bucketID].versions[0].data; len(got) != 5_000_001 || !bytes.Equal(got, bytes.Join(tc.parts, nil)) {
+					t.Fatalf("finished bytes = %d, want 5000001 bytes matching the parts", len(got))
+				}
 			}
 		})
 	}
