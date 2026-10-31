@@ -37,10 +37,7 @@ func adder(i, j interface{}) interface{} {
 }
 
 func TestWindows(t *testing.T) {
-	// New(time.Second, time.Minute, adder) currently panics on use because it
-	// allocates zero buckets. New(time.Second, 0, adder) panics with an integer
-	// divide by zero when constructed; it does not return a zero-bucket window.
-	// #176 tracks validating those inputs, so this test does not assert their behavior yet.
+	// Constructor bounds and one-bucket expiry are covered in new_bounds_test.go.
 	table := []struct {
 		size, dur time.Duration
 		incs      []epair

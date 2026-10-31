@@ -33,9 +33,10 @@ func TestNewOneBucketExpiresAcrossResolutionBoundary(t *testing.T) {
 }
 
 func TestNewUsesOneBucketWhenSizeIsLessThanResolution(t *testing.T) {
+	start := time.Unix(0, 0)
 	w := New(500*time.Millisecond, time.Second, sum)
-	w.Insert(2)
-	if got := w.Reduce(); got != 2 {
+	w.insertAt(start, 2)
+	if got := w.reducedAt(start.Add(100 * time.Millisecond)); got != 2 {
 		t.Fatalf("Reduce() = %v, want 2", got)
 	}
 }
