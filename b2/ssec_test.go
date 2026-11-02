@@ -146,7 +146,8 @@ func TestSSECKeyEveryFormatRedactsMaterial(t *testing.T) {
 	}
 }
 
-func TestSSECReaderMethodTypeChangeDocumented(t *testing.T) {
+// This is a documentation gate, not a test of SSE-C request behavior.
+func TestDocsSSECReaderMethodTypeChangeDocumented(t *testing.T) {
 	// The note lives in a changie fragment until a release batches it into CHANGELOG.md, so
 	// look in both: one line must carry the Breaking marker and every detail.
 	files, err := filepath.Glob(filepath.Join("..", ".changes", "*", "*.yaml"))

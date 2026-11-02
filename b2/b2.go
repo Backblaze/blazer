@@ -735,7 +735,7 @@ func (o *Object) URL() string {
 //
 // Callers must close the writer when finished and check the error status.
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancelCause(ctx)
 	w := &Writer{
 		o:             o,
 		name:          o.name,

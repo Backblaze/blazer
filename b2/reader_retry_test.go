@@ -138,7 +138,17 @@ func TestReaderBudgetBoundary(t *testing.T) {
 // up sooner would fail a read the rest of the library survives, so the budget is
 // pinned: 20 truncated downloads followed by a good one must succeed.
 func TestReaderBudgetMatchesTheDownloadRetryBudget(t *testing.T) {
-	if _, calls, err := readTruncated(t, 20); err != nil {
+	got, calls, err := readTruncated(t, 20)
+	if err != nil {
 		t.Fatalf("a chunk truncated 20 times before being served whole failed after %d attempts: %v", calls, err)
+	}
+	if got != strings.Repeat("x", 1000) {
+		t.Errorf("content after 20 truncated downloads = %q, want 1000 x bytes", got)
+	}
+	if calls != 21 {
+		t.Errorf("download calls after 20 truncated downloads = %d, want 21", calls)
+	}
+	if _, _, err := readTruncated(t, 21); err == nil {
+		t.Error("21 truncated downloads succeeded, want an error")
 	}
 }

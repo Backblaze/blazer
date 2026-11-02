@@ -54,6 +54,35 @@ func (r *recordingTransport) snapshot() []recordedRequest {
 	return append([]recordedRequest(nil), r.requests...)
 }
 
+func responseJSON(t *testing.T, response *http.Response) json.RawMessage {
+	t.Helper()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+	}
+	return body
+}
+
+func requireJSONFields(t *testing.T, body json.RawMessage, names ...string) map[string]json.RawMessage {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("response omitted documented field %q: %s", name, body)
+		}
+	}
+	return fields
+}
+
 func TestPublicClientSendsB2WireRequests(t *testing.T) {
 	ctx := context.Background()
 	recorder := &recordingTransport{sim: New()}
@@ -172,6 +201,17 @@ func TestGoldenPath(t *testing.T) {
 	if err != nil || !bytes.Equal(got, small[5:11]) {
 		t.Fatalf("range download: bytes=%q err=%v", got, err)
 	}
+	// b2_get_file_info documents these response names:
+	// https://www.backblaze.com/apidocs/b2-get-file-info
+	info := responseJSON(t, postSimulatorJSON(t, sim, "b2_get_file_info", map[string]any{"fileId": smallObject.ID()}))
+	infoFields := requireJSONFields(t, info, "accountId", "action", "bucketId", "contentLength", "contentSha1", "contentType", "fileId", "fileInfo", "fileName", "fileRetention", "legalHold", "serverSideEncryption", "uploadTimestamp")
+	sse := requireJSONFields(t, infoFields["serverSideEncryption"], "algorithm", "mode")
+	if string(sse["mode"]) != `"SSE-B2"` && string(sse["mode"]) != "null" {
+		t.Errorf("server-side encryption mode = %s", sse["mode"])
+	}
+	retention := requireJSONFields(t, infoFields["fileRetention"], "isClientAuthorizedToRead", "value")
+	requireJSONFields(t, retention["value"], "mode", "retainUntilTimestamp")
+	requireJSONFields(t, infoFields["legalHold"], "isClientAuthorizedToRead", "value")
 	large := bytes.Repeat([]byte("multipart!"), 1_100_001) // over two 5 MB parts
 	largeObject, err := writeObject(ctx, bucket, "large.txt", large, 5_000_000)
 	if err != nil {
@@ -372,6 +412,47 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if attrs.DefaultRetention == nil || attrs.DefaultRetention.Mode != "governance" || attrs.DefaultRetention.Period == nil || attrs.DefaultRetention.Period.Duration != 1 {
 		t.Fatalf("retention not returned: %+v", attrs.DefaultRetention)
 	}
+	// b2_list_buckets documents these bucket response names:
+	// https://www.backblaze.com/apidocs/b2-list-buckets
+	var listed struct {
+		Buckets []json.RawMessage `json:"buckets"`
+	}
+	if err := json.Unmarshal(responseJSON(t, postSimulatorJSON(t, sim, "b2_list_buckets", map[string]any{"accountId": "b2sim-account", "bucketId": bucket.ID()})), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Buckets) != 1 {
+		t.Fatalf("listed buckets = %d, want 1", len(listed.Buckets))
+	}
+	bucketFields := requireJSONFields(t, listed.Buckets[0], "bucketId", "bucketName", "bucketType", "bucketInfo", "corsRules", "defaultServerSideEncryption", "fileLockConfiguration", "lifecycleRules", "replicationConfiguration", "revision")
+	sseFields := requireJSONFields(t, bucketFields["defaultServerSideEncryption"], "isClientAuthorizedToRead", "value")
+	fileLockFields := requireJSONFields(t, bucketFields["fileLockConfiguration"], "isClientAuthorizedToRead", "value")
+	replicationFields := requireJSONFields(t, bucketFields["replicationConfiguration"], "isClientAuthorizedToRead", "value")
+	requireJSONFields(t, sseFields["value"], "algorithm", "mode")
+	fileLockValue := requireJSONFields(t, fileLockFields["value"], "defaultRetention", "isFileLockEnabled")
+	retentionFields := requireJSONFields(t, fileLockValue["defaultRetention"], "mode", "period")
+	requireJSONFields(t, retentionFields["period"], "duration", "unit")
+	replicationValue := requireJSONFields(t, replicationFields["value"], "asReplicationSource")
+	source := requireJSONFields(t, replicationValue["asReplicationSource"], "replicationRules", "sourceApplicationKeyId")
+	var replicationRules []json.RawMessage
+	if err := json.Unmarshal(source["replicationRules"], &replicationRules); err != nil {
+		t.Fatal(err)
+	}
+	if len(replicationRules) != 1 {
+		t.Fatalf("replication rules = %d, want 1", len(replicationRules))
+	}
+	requireJSONFields(t, replicationRules[0], "destinationBucketId", "isEnabled", "priority", "replicationRuleName")
+	var cors, rules []json.RawMessage
+	if err := json.Unmarshal(bucketFields["corsRules"], &cors); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bucketFields["lifecycleRules"], &rules); err != nil {
+		t.Fatal(err)
+	}
+	if len(cors) != 1 || len(rules) != 1 {
+		t.Fatalf("CORS/lifecycle response lengths = %d/%d, want 1/1", len(cors), len(rules))
+	}
+	requireJSONFields(t, cors[0], "allowedOperations", "allowedOrigins", "corsRuleName", "maxAgeSeconds")
+	requireJSONFields(t, rules[0], "daysFromUploadingToHiding", "fileNamePrefix")
 	object := bucket.Object("locked.txt")
 	until := time.Unix(2_000_000_000, 0)
 	w := object.NewWriter(ctx, b2.WithFileRetention(&b2.FileRetention{Mode: b2.RetentionGovernance, RetainUntil: until}), b2.WithLegalHold(b2.LegalHoldOn))
@@ -968,6 +1049,8 @@ func TestRoundTripCancelsBlockedBodyRead(t *testing.T) {
 	body := &blockingBody{entered: make(chan struct{}), closed: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	deadline, cancelDeadline := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelDeadline()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, origin+"/b2api/v4/b2_create_bucket", body)
 	if err != nil {
 		t.Fatal(err)
@@ -976,7 +1059,7 @@ func TestRoundTripCancelsBlockedBodyRead(t *testing.T) {
 	go func() { _, err := sim.RoundTrip(req); result <- err }()
 	select {
 	case <-body.entered:
-	case <-time.After(time.Second):
+	case <-deadline.Done():
 		t.Fatal("body read did not start")
 	}
 	cancel()
@@ -985,13 +1068,13 @@ func TestRoundTripCancelsBlockedBodyRead(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("RoundTrip error = %v, want cancellation", err)
 		}
-	case <-time.After(time.Second):
+	case <-deadline.Done():
 		_ = body.Close()
 		t.Fatal("RoundTrip remained blocked after cancellation")
 	}
 	select {
 	case <-body.closed:
-	case <-time.After(time.Second):
+	case <-deadline.Done():
 		t.Fatal("body reader did not exit")
 	}
 }
@@ -999,7 +1082,8 @@ func TestRoundTripCancelsBlockedBodyRead(t *testing.T) {
 func TestReadFromMultipartTrailingSHA1(t *testing.T) {
 	ctx := context.Background()
 	sim := New()
-	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	recorder := &recordingTransport{sim: sim}
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(recorder))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1025,6 +1109,28 @@ func TestReadFromMultipartTrailingSHA1(t *testing.T) {
 	}
 	if sim.Calls()["b2_upload_part"] < 2 {
 		t.Fatal("multipart part path was not exercised")
+	}
+	partRequests := 0
+	for _, request := range recorder.snapshot() {
+		if !strings.HasPrefix(request.path, "/upload/part/") {
+			continue
+		}
+		partRequests++
+		if request.contentSHA != "hex_digits_at_end" {
+			t.Errorf("part SHA1 header = %q, want hex_digits_at_end", request.contentSHA)
+			continue
+		}
+		if len(request.body) < sha1.Size*2 {
+			t.Errorf("part body = %d bytes, want data plus SHA1 trailer", len(request.body))
+			continue
+		}
+		trailer := request.body[len(request.body)-sha1.Size*2:]
+		if got, want := string(trailer), digest(request.body[:len(request.body)-sha1.Size*2]); got != want {
+			t.Errorf("part SHA1 trailer = %q, want %q", got, want)
+		}
+	}
+	if partRequests < 2 {
+		t.Fatalf("multipart requests = %d, want at least 2", partRequests)
 	}
 }
 

@@ -368,6 +368,16 @@ func millitime(t int64) time.Time {
 	return time.Unix(t/1000, t%1000*1e6)
 }
 
+// b2_create_key and b2_list_keys return null expirationTimestamp for keys that
+// never expire; it decodes as zero, which must map to the zero time. Keep
+// millitime unchanged because it also converts file timestamps.
+func keyExpiration(t int64) time.Time {
+	if t == 0 {
+		return time.Time{}
+	}
+	return millitime(t)
+}
+
 type b2Options struct {
 	transport       http.RoundTripper
 	failSomeUploads bool
@@ -2037,8 +2047,23 @@ type Key struct {
 	Secret       string
 	Name         string
 	Capabilities []string
-	Expires      time.Time
-	b2           *B2
+	// Expires is the application key's expiration date. A zero time.Time means
+	// the key never expires; check that with IsZero, not Unix, which is
+	// -62135596800 for the zero time.
+	Expires   time.Time
+	BucketIDs []string
+	Prefix    string
+	b2        *B2
+}
+
+func keyBucketIDs(key b2types.Key) []string {
+	if len(key.BucketIDs) != 0 {
+		return key.BucketIDs
+	}
+	if key.BucketID != "" {
+		return []string{key.BucketID}
+	}
+	return nil
 }
 
 // CreateKey wraps v3 b2_create_key, producing a single-bucket key (or, with an
@@ -2086,7 +2111,9 @@ func (b *B2) doCreateKeyWithState(ctx context.Context, state authState, apiVersi
 		ID:           b2resp.ID,
 		Secret:       b2resp.Secret,
 		Capabilities: b2resp.Capabilities,
-		Expires:      millitime(b2resp.Expires),
+		Expires:      keyExpiration(b2resp.Expires),
+		BucketIDs:    keyBucketIDs(b2types.Key(*b2resp)),
+		Prefix:       b2resp.Prefix,
 		b2:           b,
 	}, nil
 }
@@ -2121,10 +2148,13 @@ func (b *B2) ListKeys(ctx context.Context, max int, next string) ([]*Key, string
 	var keys []*Key
 	for _, key := range b2resp.Keys {
 		keys = append(keys, &Key{
-			Name:    key.Name,
-			ID:      key.ID,
-			Expires: millitime(key.Expires),
-			b2:      b,
+			Name:         key.Name,
+			ID:           key.ID,
+			Capabilities: key.Capabilities,
+			Expires:      keyExpiration(key.Expires),
+			BucketIDs:    keyBucketIDs(key),
+			Prefix:       key.Prefix,
+			b2:           b,
 		})
 	}
 	return keys, b2resp.Next, nil

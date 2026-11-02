@@ -87,6 +87,9 @@ func TestDownloadFileIDIsNotLogged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("log subprocess failed: %v\n%s", err, out)
 	}
+	if !strings.Contains(string(out), ">> b2_download_file_by_id GET [URL and headers redacted]") {
+		t.Fatalf("redacted download log line missing: %s", out)
+	}
 	if strings.Contains(string(out), secretID) || strings.Contains(string(out), secretKey) || strings.Contains(string(out), secretDigest) {
 		t.Fatalf("download file ID or SSE-C material appeared in logs: %s", out)
 	}

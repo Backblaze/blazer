@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Summarizes a `go test -json` run of the live tests and fails unless they really ran against B2.
 # Usage: scripts/live-test-report.sh test.json
-# Writes a Markdown summary to $GITHUB_STEP_SUMMARY when set. Exit 1 when a test failed, when any test
+# Prints the Markdown summary and the output of failed tests to stdout (the job log) and, when set, also
+# appends the summary to $GITHUB_STEP_SUMMARY. Exit 1 when a test failed, when any test
 # skipped, or when a test defined in a live test file did not pass.
 set -euo pipefail
 
 in=${1:?usage: live-test-report.sh test.json}
-summary=${GITHUB_STEP_SUMMARY:-/dev/stdout}
 module=github.com/Backblaze/blazer
 # Every top-level test in these files must run and pass; there is no other way to tell they reached B2.
 live_files=(b2/integration_test.go b2/lock_test.go base/integration_test.go)
@@ -34,7 +34,7 @@ list() {
   while IFS= read -r line; do echo "- \`${line#"$module"/}\`"; done <<<"$2"
 }
 
-{
+report() {
   echo "## Live integration tests"
   echo
   echo "Commit \`${GITHUB_SHA:-local}\` · trigger \`${GITHUB_EVENT_NAME:-local}\`"
@@ -46,7 +46,46 @@ list() {
   list "Failed packages" "$failed_pkgs"
   list "Skipped (no test may skip in the live run)" "$skipped"
   list "Live tests that did not pass" "$missing"
-} >>"$summary"
+}
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  report | tee -a "$GITHUB_STEP_SUMMARY"
+else
+  report
+fi
+
+# Where the time went, per package, so the log shows what ran.
+jq -r 'select(.Test == null and (.Action == "pass" or .Action == "fail" or .Action == "skip"))
+  | "\(.Action | ascii_upcase) \(.Package) (\(.Elapsed // 0)s)"' "$in" | sed "s#$module/##"
+
+# Output of failed tests, and of tests a panic or timeout cut off: Go attributes that stack trace to the
+# running test but emits no failure event for it, only one for the package. Each test (and each failed
+# package) gets its own budget so a noisy one cannot hide another's failure. Past 300 lines the first 100
+# and last 200 are kept, and panic, timeout and fatal lines are always kept.
+if [ -n "$failed" ] || [ -n "$failed_pkgs" ]; then
+  echo "::group::Output of failed tests"
+  jq -rs '
+    def key: "\(.Package) \(.Test)";
+    def important: test("^panic: |test timed out|^fatal error: ");
+    def cap: if length <= 300 then . else
+        ([.[:100][], .[-200:][]]) as $kept
+        | ([.[] | select(important)] | .[:20] - $kept) as $key
+        | .[:100] + ["... \(length - 300) lines omitted ..."] + (if ($key | length) > 0 then ["... key lines from the omitted part ..."] + $key + ["..."] else [] end) + .[-200:]
+      end;
+    [.[] | select(.Action == "fail" and .Test == null) | .Package] as $badpkgs
+    | [.[] | select(.Test != null and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | key] as $done
+    | [.[] | select(.Action == "run" and (.Package as $p | $badpkgs | index($p) != null)) | key | select(. as $k | $done | index($k) == null)] as $cut
+    | [.[] | select(.Action == "fail" and .Test != null) | key] as $f
+    | [.[] | select(.Action == "output" and (
+        (.Test != null and ((key as $k | $f | index($k) != null) or (key as $k | $cut | index($k) != null)))
+        or (.Test == null and (.Package as $p | $badpkgs | index($p) != null))))]
+    | group_by(if .Test != null then key else .Package end)
+    | .[]
+    | "=== \(.[0] | if .Test != null then key else .Package end)",
+      ((map(.Output) | join("") | split("\n") | if length > 0 and .[-1] == "" then .[:-1] else . end | cap)[])
+  ' "$in"
+  echo "::endgroup::"
+fi
 
 status=0
 [ -n "$failed" ] && { echo "::error::Tests failed in the live run."; status=1; }

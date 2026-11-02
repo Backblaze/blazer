@@ -65,7 +65,7 @@ func TestWriterErrorLoggingOmitsErrorText(t *testing.T) {
 	}
 	var output bytes.Buffer
 	log.SetOutput(&output)
-	w := &Writer{name: "object", cancel: func() {}}
+	w := &Writer{name: "object", cancel: func(error) {}}
 	w.setErr(errors.New("server-error-secret"))
 	if strings.Contains(output.String(), "server-error-secret") {
 		t.Fatal("writer logged untrusted error text")

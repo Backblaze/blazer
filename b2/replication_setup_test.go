@@ -263,6 +263,15 @@ func TestSetupReplicationIdempotency(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("SetupReplication() = %v, wantErr=%t", err, tc.wantErr)
 			}
+			if tc.wantErr {
+				want := `setup replication: rule name "rule" is already in use with different options`
+				if tc.name == "different destination key mapping" {
+					want = "setup replication: destination already maps the source key to a different application key ID"
+				}
+				if err.Error() != want {
+					t.Fatalf("SetupReplication error = %q, want %q", err, want)
+				}
+			}
 			if root.keyCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
 				t.Fatalf("repeat changed state: key calls=%d source updates=%d destination updates=%d", root.keyCalls, len(srcBackend.updates), len(dstBackend.updates))
 			}
@@ -472,8 +481,8 @@ func TestSetupReplicationRejectsConflictingOptions(t *testing.T) {
 func TestSetupReplicationRejectsEmptyKeyIDs(t *testing.T) {
 	for _, tc := range []struct{ sourceKeyID, destinationKeyID string }{{"", "dst-key"}, {"src-key", ""}} {
 		_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
-		if err := SetupReplication(context.Background(), src, dst, tc.sourceKeyID, tc.destinationKeyID); err == nil {
-			t.Fatalf("SetupReplication(%q, %q) succeeded with empty key ID", tc.sourceKeyID, tc.destinationKeyID)
+		if err := SetupReplication(context.Background(), src, dst, tc.sourceKeyID, tc.destinationKeyID); err == nil || err.Error() != "setup replication: source and destination application key IDs are required" {
+			t.Fatalf("SetupReplication(%q, %q) = %v, want required-key-IDs error", tc.sourceKeyID, tc.destinationKeyID, err)
 		}
 		if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
 			t.Fatal("empty key ID caused an update")
@@ -484,7 +493,7 @@ func TestSetupReplicationRejectsEmptyKeyIDs(t *testing.T) {
 func TestReplicationStatusRejectsUnreadableConfig(t *testing.T) {
 	_, srcBackend, _, src, _ := replicationTestPair(t, nil, nil)
 	srcBackend.unreadable = true
-	if status, err := ReplicationStatus(context.Background(), src); err == nil {
-		t.Fatalf("ReplicationStatus() = %+v, nil; want unreadable-config error", status)
+	if status, err := ReplicationStatus(context.Background(), src); err == nil || err.Error() != "replication status: cannot read existing replication config" {
+		t.Fatalf("ReplicationStatus() = %+v, %v; want unreadable-config error", status, err)
 	}
 }
