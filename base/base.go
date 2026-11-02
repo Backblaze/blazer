@@ -378,6 +378,16 @@ func keyExpiration(t int64) time.Time {
 	return millitime(t)
 }
 
+// b2_list_file_names and b2_list_file_versions return virtual folders with
+// action "folder" and uploadTimestamp 0, which must map to the zero time.
+// Keep millitime unchanged because regular file timestamps may be zero.
+func listingTimestamp(action string, t int64) time.Time {
+	if action == "folder" && t == 0 {
+		return time.Time{}
+	}
+	return millitime(t)
+}
+
 type b2Options struct {
 	transport       http.RoundTripper
 	failSomeUploads bool
@@ -1671,11 +1681,12 @@ func (b *Bucket) ListFileNames(ctx context.Context, count int, continuation, pre
 	var files []*File
 	for _, f := range b2resp.Files {
 		retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+		timestamp := listingTimestamp(f.Action, f.Timestamp)
 		files = append(files, &File{
 			Name:      f.Name,
 			Size:      f.Size,
 			Status:    f.Action,
-			Timestamp: millitime(f.Timestamp),
+			Timestamp: timestamp,
 			Info: &FileInfo{
 				Name:                 f.Name,
 				SHA1:                 f.SHA1,
@@ -1684,7 +1695,7 @@ func (b *Bucket) ListFileNames(ctx context.Context, count int, continuation, pre
 				ContentType:          f.ContentType,
 				Info:                 f.Info,
 				Status:               f.Action,
-				Timestamp:            millitime(f.Timestamp),
+				Timestamp:            timestamp,
 				Retention:            retention,
 				LegalHold:            legalHold,
 				ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
@@ -1720,11 +1731,12 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 	var files []*File
 	for _, f := range b2resp.Files {
 		retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+		timestamp := listingTimestamp(f.Action, f.Timestamp)
 		files = append(files, &File{
 			Name:      f.Name,
 			Size:      f.Size,
 			Status:    f.Action,
-			Timestamp: millitime(f.Timestamp),
+			Timestamp: timestamp,
 			Info: &FileInfo{
 				Name:                 f.Name,
 				SHA1:                 f.SHA1,
@@ -1733,7 +1745,7 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 				ContentType:          f.ContentType,
 				Info:                 f.Info,
 				Status:               f.Action,
-				Timestamp:            millitime(f.Timestamp),
+				Timestamp:            timestamp,
 				Retention:            retention,
 				LegalHold:            legalHold,
 				ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
