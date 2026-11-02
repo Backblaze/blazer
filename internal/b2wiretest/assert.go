@@ -1,14 +1,19 @@
 package b2wiretest
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"math/big"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 )
 
-// AssertJSON checks a non-empty, dot-separated path in a request's JSON object body.
+// AssertJSON decodes r.Body and checks a non-empty, dot-separated path in its JSON object.
+// A hand-built Request must set Body. Numbers compare by value with large integers kept exact.
 // Dots always separate path segments; keys containing literal dots cannot be addressed.
 func AssertJSON(t testing.TB, r Request, path string, want any) {
 	t.Helper()
@@ -18,26 +23,32 @@ func AssertJSON(t testing.TB, r Request, path string, want any) {
 	}
 	wantJSON, err := json.Marshal(want)
 	if err != nil {
-		t.Fatalf("%s body %s: encode want: %v", r.Call, path, err)
+		t.Errorf("%s body %s: encode want: %v", r.Call, path, err)
 		return
 	}
 	var normalized any
-	if err := json.Unmarshal(wantJSON, &normalized); err != nil {
-		t.Fatalf("%s body %s: decode want: %v", r.Call, path, err)
+	if err := decodeSingleJSON(wantJSON, &normalized); err != nil {
+		t.Errorf("%s body %s: decode want: %v", r.Call, path, err)
 		return
 	}
-	got, ok := jsonPath(r.JSON, path)
+	recorded, ok := decodeJSONObject(r.Body)
+	if !ok {
+		t.Errorf("%s body %s: missing, want %v", r.Call, path, want)
+		return
+	}
+	got, ok := jsonPath(recorded, path)
 	if !ok {
 		t.Errorf("%s body %s: missing, want %s", r.Call, path, wantJSON)
 		return
 	}
-	if !reflect.DeepEqual(got, normalized) {
+	if !jsonValuesEqual(got, normalized) {
 		gotJSON, _ := json.Marshal(got)
 		t.Errorf("%s body %s: got %s, want %s", r.Call, path, gotJSON, wantJSON)
 	}
 }
 
-// AssertNoJSON checks that a non-empty, dot-separated path is absent from a request body.
+// AssertNoJSON checks that a non-empty, dot-separated path is absent from r.Body.
+// An empty Body means the field is absent; a non-empty Body must be a single JSON object.
 // It has the same path limitations as AssertJSON.
 func AssertNoJSON(t testing.TB, r Request, path string) {
 	t.Helper()
@@ -45,9 +56,80 @@ func AssertNoJSON(t testing.TB, r Request, path string) {
 		t.Errorf("%s body: empty JSON path", r.Call)
 		return
 	}
-	if got, ok := jsonPath(r.JSON, path); ok {
+	if len(r.Body) == 0 {
+		return
+	}
+	recorded, ok := decodeJSONObject(r.Body)
+	if !ok {
+		t.Errorf("%s body %s: body is not a JSON object", r.Call, path)
+		return
+	}
+	if got, ok := jsonPath(recorded, path); ok {
 		gotJSON, _ := json.Marshal(got)
 		t.Errorf("%s body %s: got %s, want missing", r.Call, path, gotJSON)
+	}
+}
+
+func decodeJSONObject(body []byte) (map[string]any, bool) {
+	var object map[string]any
+	if err := decodeSingleJSON(body, &object); err != nil || object == nil {
+		return nil, false
+	}
+	return object, true
+}
+
+func decodeSingleJSON(data []byte, value any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func jsonValuesEqual(got, want any) bool {
+	if gotNumber, ok := got.(json.Number); ok {
+		wantNumber, ok := want.(json.Number)
+		if !ok {
+			return false
+		}
+		gotRat, gotOK := new(big.Rat).SetString(gotNumber.String())
+		wantRat, wantOK := new(big.Rat).SetString(wantNumber.String())
+		return gotOK && wantOK && gotRat.Cmp(wantRat) == 0
+	}
+	switch got := got.(type) {
+	case []any:
+		want, ok := want.([]any)
+		if !ok || len(got) != len(want) {
+			return false
+		}
+		for i := range got {
+			if !jsonValuesEqual(got[i], want[i]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		want, ok := want.(map[string]any)
+		if !ok || len(got) != len(want) {
+			return false
+		}
+		for key, value := range got {
+			wantValue, ok := want[key]
+			if !ok || !jsonValuesEqual(value, wantValue) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(got, want)
 	}
 }
 
