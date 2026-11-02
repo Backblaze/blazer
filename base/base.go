@@ -1796,6 +1796,41 @@ func mkRange(offset, size int64) string {
 	return fmt.Sprintf("bytes=%d-%d", offset, offset+size-1)
 }
 
+// limitedReadCloser limits reads without preventing Close from reaching the
+// underlying response body.
+type limitedReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+// ErrInvalidRangeResponse reports a response that does not satisfy a range
+// request.
+var ErrInvalidRangeResponse = errors.New("invalid range response")
+
+func validateRangeResponse(resp *http.Response, offset int64) error {
+	if resp.StatusCode == http.StatusOK && offset == 0 {
+		return nil
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned HTTP %d, want 206", ErrInvalidRangeResponse, offset, resp.StatusCode)
+	}
+	contentRange := resp.Header.Get("Content-Range")
+	const prefix = "bytes "
+	if !strings.HasPrefix(contentRange, prefix) {
+		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, offset, contentRange)
+	}
+	startEnd := strings.TrimPrefix(contentRange, prefix)
+	dash := strings.IndexByte(startEnd, '-')
+	if dash < 1 {
+		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, offset, contentRange)
+	}
+	start, err := strconv.ParseInt(startEnd[:dash], 10, 64)
+	if err != nil || start != offset {
+		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned Content-Range %q", ErrInvalidRangeResponse, offset, contentRange)
+	}
+	return nil
+}
+
 // DownloadFileByName wraps b2_download_file_by_name.
 func (b *Bucket) DownloadFileByName(ctx context.Context, name string, offset, size int64, header bool) (*FileReader, error) {
 	return b.DownloadFileByNameWithSSEC(ctx, name, offset, size, header, nil)
@@ -1855,6 +1890,18 @@ func (b *Bucket) downloadFile(ctx context.Context, state authState, uri, b2Metho
 		return nil, err
 	}
 	logResponse(resp, nil)
+	if rng != "" && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
+		if err := validateRangeResponse(resp, offset); err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+		if size > 0 {
+			resp.Body = limitedReadCloser{Reader: io.LimitReader(resp.Body, size), Closer: resp.Body}
+			if contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64); err == nil && contentLength > size {
+				resp.Header.Set("Content-Length", strconv.FormatInt(size, 10))
+			}
+		}
+	}
 	return newFileReader(resp)
 }
 

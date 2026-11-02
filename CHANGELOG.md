@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased entries live in [`.changes/unreleased/`](.changes/unreleased/) until the next release. Add one with `changie new` (see [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries)).
 
+### Fixed
+
+- Range downloads now require a 206 response whose `Content-Range` starts at the requested offset, and cap each response to the requested size (#179).
+
 ## [0.9.0] - 2026-10-22
 
 ### Added
