@@ -803,6 +803,9 @@ func (w *Writer) Close() error {
 				blog.V(1).Infof("b2 writer: buffer close failed (%T)", err)
 			}
 		}()
+		if err := w.getErr(); err != nil {
+			return
+		}
 		// We need the lock to dereference w.cidx and w.w.Len()
 		w.wmux.RLock()
 		// Don't defer the RUnlock, since we don't want to be RLocked when we call sendChunk

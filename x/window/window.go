@@ -99,9 +99,10 @@ func (w *Window) sweep(now time.Time) {
 		}
 		return
 	}
-	last := now.Add(-diff)
-
-	old := int64(last.UnixNano()) / int64(w.res)
+	// Use w.last's own wall time. now.Add(-diff) mixes the monotonic difference
+	// with now's wall clock and can land one bucket early near a boundary, which
+	// then expires the bucket that was just written.
+	old := int64(w.last.UnixNano()) / int64(w.res)
 	new := int64(now.UnixNano()) / int64(w.res)
 	if old == new && diff <= w.res {
 		// We're in the same bucket as the previous sweep, so all buckets are
@@ -129,12 +130,18 @@ func (w *Window) sweep(now time.Time) {
 
 // Insert adds the given event.
 func (w *Window) Insert(e interface{}) {
-	w.insertAt(time.Now(), e)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.insertLocked(time.Now(), e)
 }
 
 func (w *Window) insertAt(t time.Time, e interface{}) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.insertLocked(t, e)
+}
+
+func (w *Window) insertLocked(t time.Time, e interface{}) {
 
 	if w.forever {
 		w.e = w.reduce(w.e, e)
@@ -148,12 +155,18 @@ func (w *Window) insertAt(t time.Time, e interface{}) {
 // Reduce runs the window's reducer over the valid values and returns the
 // result.
 func (w *Window) Reduce() interface{} {
-	return w.reducedAt(time.Now())
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.reducedLocked(time.Now())
 }
 
 func (w *Window) reducedAt(t time.Time) interface{} {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.reducedLocked(t)
+}
+
+func (w *Window) reducedLocked(t time.Time) interface{} {
 
 	if w.forever {
 		return w.e

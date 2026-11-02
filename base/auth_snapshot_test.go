@@ -185,3 +185,44 @@ func TestConcurrentUpdateWithKeyedDownloadByID(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// Deterministic torn-snapshot check: hold the write lock while a request starts
+// and replace every field. A snapshot taken under the read lock blocks until
+// the update is complete and then sees only the new state. A snapshot that
+// reads fields without the lock goes out immediately with the old state.
+func TestSnapshotWaitsForInFlightUpdateAndSeesOnlyNewState(t *testing.T) {
+	seen := make(chan *http.Request, 1)
+	transport := authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
+		seen <- req
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"buckets":[]}`)), Request: req}, nil
+	})
+	options := &b2Options{transport: transport}
+	account := &B2{accountID: "old", authToken: "old", apiURI: "https://old.invalid", opts: options}
+
+	account.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := account.ListBuckets(context.Background(), "")
+		done <- err
+	}()
+	select {
+	case req := <-seen:
+		account.mu.Unlock()
+		t.Fatalf("request left while an update held the lock: host=%q token=%q", req.URL.Host, req.Header.Get("Authorization"))
+	case <-time.After(100 * time.Millisecond):
+	}
+	account.accountID, account.authToken, account.apiURI = "new", "new", "https://new.invalid"
+	account.mu.Unlock()
+
+	select {
+	case req := <-seen:
+		if req.URL.Host != "new.invalid" || req.Header.Get("Authorization") != "new" {
+			t.Fatalf("request used host=%q token=%q, want the fully updated state", req.URL.Host, req.Header.Get("Authorization"))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("request never completed after the update")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
