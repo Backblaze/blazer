@@ -1,0 +1,3 @@
+kind: Fixed
+body: Writer.ReadFrom and io.Copy now return the recorded large-file upload error instead of masking it with context cancellation (#245).
+time: 2026-10-30T13:04:48.509659-06:00

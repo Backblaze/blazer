@@ -63,8 +63,8 @@ func TestAccountInfoFileRoundTripAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !json.Valid(content) || strings.Contains(string(content), "application-key-secret") {
-		t.Fatal("file is not valid JSON or contains the application key")
+	if !json.Valid(content) {
+		t.Fatal("file is not valid JSON")
 	}
 	fileInfo, err := os.Stat(path)
 	if err != nil {

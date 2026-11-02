@@ -222,7 +222,7 @@ func TestCopyLive(t *testing.T) {
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
-	source, _, err := writeFile(ctx, bucket, "copy-source", 1024, 1e8)
+	source, sourceSHA1, err := writeFile(ctx, bucket, "copy-source", 1024, 1e8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,10 @@ func TestCopyLive(t *testing.T) {
 	if attrs.Size != 1024 {
 		t.Errorf("copied object size: got %d, want %d", attrs.Size, 1024)
 	}
-	if err := readFile(ctx, destination, attrs.SHA1, 1024, 1); err != nil {
+	if attrs.SHA1 != sourceSHA1 {
+		t.Errorf("copied object SHA1: got %q, want source SHA1 %q", attrs.SHA1, sourceSHA1)
+	}
+	if err := readFile(ctx, destination, sourceSHA1, 1024, 1); err != nil {
 		t.Error(err)
 	}
 }
@@ -312,16 +315,24 @@ func TestResumeWriter(t *testing.T) {
 }
 
 func TestResumeWriterWithoutExtantFile(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
 	r := io.LimitReader(zReader{}, 15e6)
+	h := sha1.New()
 	w := bucket.Object("foo").NewWriter(ctx)
 	w.ChunkSize = 5e6
 	w.Resume = true
-	if _, err := io.Copy(w, r); err != nil {
+	if _, err := io.Copy(w, io.TeeReader(r, h)); err != nil {
 		t.Fatalf("io.Copy: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := readFile(ctx, bucket.Object("foo"), fmt.Sprintf("%x", h.Sum(nil)), 5e6, 1); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -410,7 +421,8 @@ func TestFileBufferLive(t *testing.T) {
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
-	r := io.LimitReader(zReader{}, 1e6)
+	h := sha1.New()
+	r := io.TeeReader(io.LimitReader(zReader{}, 1e6), h)
 	w := bucket.Object("small").NewWriter(ctx)
 
 	w.UseFileBuffer = true
@@ -425,11 +437,14 @@ func TestFileBufferLive(t *testing.T) {
 	smallTmpName := wb.f.Name()
 
 	if _, err := io.Copy(w, r); err != nil {
-		t.Errorf("creating small file: %v", err)
+		t.Fatalf("creating small file: %v", err)
 	}
 
 	if err := w.Close(); err != nil {
-		t.Errorf("w.Close(): %v", err)
+		t.Fatalf("w.Close(): %v", err)
+	}
+	if err := readFile(ctx, bucket.Object("small"), fmt.Sprintf("%x", h.Sum(nil)), 1e6, 1); err != nil {
+		t.Error(err)
 	}
 
 	if _, err := os.Stat(smallTmpName); !os.IsNotExist(err) {
@@ -757,6 +772,9 @@ func TestNewBucket(t *testing.T) {
 		if bucket.ID() == "" {
 			t.Errorf("%s: Bucket.ID() is empty after NewBucket", ent.name)
 		}
+		if got, want := bucket.Name(), id+"-"+ent.name; got != want {
+			t.Errorf("%s: Bucket.Name() = %q, want %q", ent.name, got, want)
+		}
 		if err := bucket.Update(ctx, nil); err != nil {
 			t.Errorf("%s: Update(ctx, nil): %v", ent.name, err)
 			continue
@@ -791,7 +809,8 @@ func TestBucketDefaultEncryption(t *testing.T) {
 		name  string
 		attrs *BucketAttrs
 	}{
-		{name: "sse-omitted", attrs: nil},
+		// Omission is covered by TestNewBucketDefaultEncryptionWire without
+		// depending on this live account's default encryption policy.
 		{name: "sse-explicit", attrs: &BucketAttrs{DefaultServerSideEncryption: SSEB2WithAES256()}},
 	}
 	for _, ent := range table {
@@ -875,8 +894,11 @@ func TestWriteEmpty(t *testing.T) {
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
-	_, _, err := writeFile(ctx, bucket, smallFileName, 0, 1e8)
+	obj, sha, err := writeFile(ctx, bucket, smallFileName, 0, 1e8)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := readFile(ctx, obj, sha, 1e6, 1); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -972,6 +994,10 @@ func TestDeleteWithoutName(t *testing.T) {
 	if err := bucket.Object(smallFileName).Delete(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Use a fresh handle so cached metadata cannot hide a failed deletion.
+	if _, err := bucket.Object(smallFileName).Attrs(ctx); !IsNotExist(err) {
+		t.Fatalf("Attrs after Delete: got %v, want not-exist", err)
+	}
 }
 
 func TestZeroByteObject(t *testing.T) {
@@ -987,41 +1013,65 @@ func TestZeroByteObject(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	attrs, err := bucket.Object(smallFileName).Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Size != 0 {
+		t.Fatalf("zero-byte object size: got %d, want 0", attrs.Size)
+	}
+
 	if err := bucket.Object(smallFileName).Delete(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestListUnfinishedLargeFiles(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
 	w := bucket.Object(largeFileName).NewWriter(ctx)
-	w.ChunkSize = 1e5
-	if _, err := io.Copy(w, io.LimitReader(zReader{}, 1e6)); err != nil {
+	w.ChunkSize = 5e6
+	defer func() {
+		if err := w.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := io.Copy(w, io.LimitReader(zReader{}, 6e6)); err != nil {
 		t.Fatal(err)
 	}
 	iter := bucket.List(ctx, ListUnfinished())
-	if !iter.Next() {
-		t.Errorf("ListUnfinishedLargeFiles: got none, want 1 (error %v)", iter.Err())
+	var names []string
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{largeFileName}; !reflect.DeepEqual(names, want) {
+		t.Errorf("ListUnfinishedLargeFiles: got %q, want %q", names, want)
 	}
 }
 
 func TestReauthPreservesOptions(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
 
-	first := bucket.r.(*beRoot).options
 	if err := bucket.r.reauthorizeAccount(ctx); err != nil {
 		t.Fatalf("reauthorizeAccount: %v", err)
 	}
-	second := bucket.r.(*beRoot).options
-	if !reflect.DeepEqual(first, second) {
-		// Test that they are literally the same set of options, which is an
-		// implementation detail but is fine for now.
-		t.Errorf("options mismatch: got %v, want %v", second, first)
+	// The wire twin checks transport, endpoint, user agent and test-mode
+	// options; here verify the refreshed client can still access live B2.
+	refreshed, err := bucket.c.Bucket(ctx, bucket.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.ID() != bucket.ID() {
+		t.Errorf("bucket after reauth: got ID %q, want %q", refreshed.ID(), bucket.ID())
 	}
 }
 
@@ -1113,6 +1163,9 @@ func TestListBucketsWithKey(t *testing.T) {
 	key, err := bucket.CreateKey(ctx, "testKey", Capabilities("listBuckets"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !key.Expires().IsZero() {
+		t.Errorf("key.Expires() = %v, want zero time for a key without an expiration", key.Expires())
 	}
 	defer func() {
 		if err := key.Delete(ctx); err != nil {
@@ -1340,6 +1393,9 @@ func TestKeyRestrictionAccessors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bucket.CreateKey: %v", err)
 	}
+	if !key.Expires().IsZero() {
+		t.Errorf("key.Expires() = %v, want zero time for a key without an expiration", key.Expires())
+	}
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
@@ -1370,6 +1426,9 @@ func TestKeyRestrictionAccessors(t *testing.T) {
 	}
 	if listed == nil {
 		t.Fatalf("ListKeys did not return key %q", key.ID())
+	}
+	if !listed.Expires().IsZero() {
+		t.Errorf("listed.Expires() = %v, want zero time for a key without an expiration", listed.Expires())
 	}
 	assertKeyRestrictions(t, listed, []string{bucket.ID()}, "live-227/")
 }
