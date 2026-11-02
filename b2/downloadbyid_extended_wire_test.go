@@ -96,6 +96,24 @@ func (w *downloadByIDWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprint(rw, `{"status":404,"code":"not_found","message":"file ID not found"}`)
 			return
 		}
+		if byteRange := r.Header.Get("Range"); status == http.StatusOK && byteRange != "" {
+			var start, requestedEnd int
+			if _, err := fmt.Sscanf(byteRange, "bytes=%d-%d", &start, &requestedEnd); err != nil {
+				w.t.Errorf("invalid Range %q: %v", byteRange, err)
+				rw.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if start != 0 || requestedEnd < len(body)-1 {
+				total := start + len(body)
+				end := requestedEnd
+				if end >= total {
+					end = total - 1
+				}
+				body = body[:end-start+1]
+				status = http.StatusPartialContent
+				rw.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, total))
+			}
+		}
 		if partialBody {
 			rw.Header().Set("Content-Length", "10")
 		} else {

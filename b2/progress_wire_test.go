@@ -111,24 +111,25 @@ func (w *progressWire) download(t *testing.T, rw http.ResponseWriter, r *http.Re
 		return
 	}
 	start, end := int64(0), int64(len(data)-1)
-	if h := r.Header.Get("Range"); h != "" {
-		bounds := strings.SplitN(strings.TrimPrefix(h, "bytes="), "-", 2)
+	byteRange := r.Header.Get("Range")
+	if byteRange != "" {
+		bounds := strings.SplitN(strings.TrimPrefix(byteRange, "bytes="), "-", 2)
 		if len(bounds) != 2 {
-			t.Errorf("invalid Range %q", h)
+			t.Errorf("invalid Range %q", byteRange)
 			rw.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		var err error
 		start, err = strconv.ParseInt(bounds[0], 10, 64)
 		if err != nil {
-			t.Errorf("invalid Range %q: %v", h, err)
+			t.Errorf("invalid Range %q: %v", byteRange, err)
 			rw.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		if bounds[1] != "" {
 			end, err = strconv.ParseInt(bounds[1], 10, 64)
 			if err != nil {
-				t.Errorf("invalid Range %q: %v", h, err)
+				t.Errorf("invalid Range %q: %v", byteRange, err)
 				rw.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -149,7 +150,8 @@ func (w *progressWire) download(t *testing.T, rw http.ResponseWriter, r *http.Re
 	}
 	chunk := data[int(start) : int(end)+1]
 	rw.Header().Set("Content-Length", strconv.Itoa(len(chunk)))
-	if r.Header.Get("Range") != "" {
+	if byteRange != "" && (start != 0 || end != int64(len(data)-1)) {
+		rw.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(data)))
 		rw.WriteHeader(http.StatusPartialContent)
 	}
 	first := len(chunk)
