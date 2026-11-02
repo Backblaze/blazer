@@ -56,6 +56,30 @@ func TestRangeReaderRejectsFullObjectResponse(t *testing.T) {
 	}
 }
 
+func TestRangeReaderRejectsNonPartialRangeResponse(t *testing.T) {
+	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Length": {"2"},
+				"Content-Range":  {"bytes 2-3/6"},
+			},
+			Body:    io.NopCloser(strings.NewReader("cd")),
+			Request: req,
+		}, nil
+	})
+
+	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
+	t.Cleanup(func() { _ = r.Close() })
+	got, err := io.ReadAll(r)
+	if len(got) != 0 {
+		t.Fatalf("NewRangeReader returned %q from a non-partial range response, want no bytes", got)
+	}
+	if !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader error = %v, want an invalid range response", err)
+	}
+}
+
 func TestNewReaderAcceptsWholeFileResponse(t *testing.T) {
 	const object = "abcdef"
 	bucket, ranges := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
@@ -177,6 +201,37 @@ func TestRangeReaderCapsOversizedRangeResponse(t *testing.T) {
 	}
 	if want := "cd"; string(got) != want {
 		t.Errorf("NewRangeReader returned %q, want %q", got, want)
+	}
+}
+
+func TestRangeReaderPreservesEqualContentLength(t *testing.T) {
+	var response *http.Response
+	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
+		// A leading zero is valid Content-Length syntax. Its spelling lets this
+		// test observe that an equal length was not rewritten by the clamp.
+		response = &http.Response{
+			StatusCode: http.StatusPartialContent,
+			Header: http.Header{
+				"Content-Length": {"02"},
+				"Content-Range":  {"bytes 2-3/6"},
+			},
+			Body:    io.NopCloser(strings.NewReader("cd")),
+			Request: req,
+		}
+		return response, nil
+	})
+
+	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
+	t.Cleanup(func() { _ = r.Close() })
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "cd"; string(got) != want {
+		t.Errorf("NewRangeReader returned %q, want %q", got, want)
+	}
+	if got, want := response.Header.Get("Content-Length"), "02"; got != want {
+		t.Errorf("Content-Length after an equal range response = %q, want unchanged %q", got, want)
 	}
 }
 
