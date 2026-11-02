@@ -87,6 +87,31 @@ func TestNewReaderAcceptsWholeFileResponse(t *testing.T) {
 	}
 }
 
+func TestRangeReaderRejectsOversizedOffsetZeroResponse(t *testing.T) {
+	const object = "abcdef"
+	bucket, ranges := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Length": {"6"}},
+			Body:       io.NopCloser(strings.NewReader(object)),
+			Request:    req,
+		}, nil
+	})
+
+	r := bucket.Object("object").NewRangeReader(context.Background(), 0, 2)
+	t.Cleanup(func() { _ = r.Close() })
+	got, err := io.ReadAll(r)
+	if len(got) != 0 {
+		t.Fatalf("NewRangeReader returned %q from an oversized HTTP 200 response, want no bytes", got)
+	}
+	if !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader error = %v, want an invalid range response", err)
+	}
+	if got, want := *ranges, []string{"bytes=0-1"}; len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("Range requests = %v, want %v", got, want)
+	}
+}
+
 func TestRangeReaderRejectsUnboundedFullObjectResponse(t *testing.T) {
 	const object = "abcdef"
 	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
@@ -103,8 +128,8 @@ func TestRangeReaderRejectsUnboundedFullObjectResponse(t *testing.T) {
 	t.Cleanup(func() { _ = r.Close() })
 	got := make([]byte, 4)
 	n, err := io.ReadFull(r, got)
-	if n != 3 || string(got[:n]) != "abc" {
-		t.Fatalf("NewRangeReader returned %q (%d bytes), want one non-repeated chunk \"abc\"", got[:n], n)
+	if n != 0 {
+		t.Fatalf("NewRangeReader returned %q (%d bytes) from an oversized HTTP 200 response, want no bytes", got[:n], n)
 	}
 	if !errors.Is(err, base.ErrInvalidRangeResponse) {
 		t.Fatalf("NewRangeReader error = %v, want an invalid range response", err)

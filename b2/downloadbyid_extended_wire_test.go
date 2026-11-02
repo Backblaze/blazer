@@ -46,6 +46,7 @@ type downloadByIDWire struct {
 	authorizations   int
 	unauthorizedOnce bool
 	partialBody      bool
+	ignoreRange      bool
 }
 
 func newDownloadByIDWire(t *testing.T) *downloadByIDWire {
@@ -78,6 +79,7 @@ func (w *downloadByIDWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 			w.unauthorizedOnce = false
 		}
 		partialBody := w.partialBody
+		ignoreRange := w.ignoreRange
 		w.requests = append(w.requests, downloadByIDRequest{method: r.Method, path: r.URL.Path, query: r.URL.RawQuery, headers: r.Header.Clone()})
 		w.mu.Unlock()
 		if status == http.StatusUnauthorized {
@@ -96,7 +98,7 @@ func (w *downloadByIDWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprint(rw, `{"status":404,"code":"not_found","message":"file ID not found"}`)
 			return
 		}
-		if byteRange := r.Header.Get("Range"); status == http.StatusOK && byteRange != "" {
+		if byteRange := r.Header.Get("Range"); status == http.StatusOK && byteRange != "" && !ignoreRange {
 			var start, requestedEnd int
 			if _, err := fmt.Sscanf(byteRange, "bytes=%d-%d", &start, &requestedEnd); err != nil {
 				w.t.Errorf("invalid Range %q: %v", byteRange, err)
@@ -255,6 +257,24 @@ func TestDownloadFileByIDNewClientRangeWire(t *testing.T) {
 	requests := wire.requestsSince(0)
 	if len(requests) != 1 || requests[0].method != http.MethodGet || requests[0].path != "/b2api/v4/b2_download_file_by_id" || requests[0].query != "fileId=historical-id" || requests[0].headers.Get("Range") != "bytes=1-2" || requests[0].headers.Get("Authorization") != "t" {
 		t.Fatalf("NewClient range request = %#v, want GET by historical ID with Range and auth", requests)
+	}
+}
+
+func TestDownloadFileByIDRangeErrorNamesMethod(t *testing.T) {
+	wire := newDownloadByIDWire(t)
+	wire.mu.Lock()
+	wire.ignoreRange = true
+	wire.mu.Unlock()
+
+	_, err := wire.baselineBucket(t).downloadFileByID(context.Background(), "historical-id", 1, 2, false, nil)
+	if !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("DownloadFileByID error = %v, want an invalid range response", err)
+	}
+	if !strings.Contains(err.Error(), "b2_download_file_by_id") {
+		t.Errorf("DownloadFileByID error = %q, want b2_download_file_by_id", err)
+	}
+	if strings.Contains(err.Error(), "b2_download_file_by_name") {
+		t.Errorf("DownloadFileByID error = %q, must not name b2_download_file_by_name", err)
 	}
 }
 

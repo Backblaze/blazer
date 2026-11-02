@@ -1807,26 +1807,36 @@ type limitedReadCloser struct {
 // request.
 var ErrInvalidRangeResponse = errors.New("invalid range response")
 
-func validateRangeResponse(resp *http.Response, offset int64) error {
+func validateRangeResponse(resp *http.Response, b2Method string, offset, size int64) error {
 	if resp.StatusCode == http.StatusOK && offset == 0 {
-		return nil
+		if size <= 0 {
+			return nil
+		}
+		contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+		if err != nil || contentLength < 0 {
+			return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Length %q", ErrInvalidRangeResponse, b2Method, offset, resp.Header.Get("Content-Length"))
+		}
+		if contentLength <= size {
+			return nil
+		}
+		return fmt.Errorf("%w: %s: range request at offset %d requested %d bytes but HTTP 200 returned %d", ErrInvalidRangeResponse, b2Method, offset, size, contentLength)
 	}
 	if resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned HTTP %d, want 206", ErrInvalidRangeResponse, offset, resp.StatusCode)
+		return fmt.Errorf("%w: %s: range request at offset %d returned HTTP %d, want 206", ErrInvalidRangeResponse, b2Method, offset, resp.StatusCode)
 	}
 	contentRange := resp.Header.Get("Content-Range")
 	const prefix = "bytes "
 	if !strings.HasPrefix(contentRange, prefix) {
-		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, offset, contentRange)
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
 	}
 	startEnd := strings.TrimPrefix(contentRange, prefix)
 	dash := strings.IndexByte(startEnd, '-')
 	if dash < 1 {
-		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, offset, contentRange)
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
 	}
 	start, err := strconv.ParseInt(startEnd[:dash], 10, 64)
 	if err != nil || start != offset {
-		return fmt.Errorf("%w: b2_download_file_by_name: range request at offset %d returned Content-Range %q", ErrInvalidRangeResponse, offset, contentRange)
+		return fmt.Errorf("%w: %s: range request at offset %d returned Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
 	}
 	return nil
 }
@@ -1891,7 +1901,7 @@ func (b *Bucket) downloadFile(ctx context.Context, state authState, uri, b2Metho
 	}
 	logResponse(resp, nil)
 	if rng != "" && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
-		if err := validateRangeResponse(resp, offset); err != nil {
+		if err := validateRangeResponse(resp, b2Method, offset, size); err != nil {
 			_ = resp.Body.Close()
 			return nil, err
 		}
