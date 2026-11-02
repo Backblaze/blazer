@@ -31,6 +31,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 const composeMinPartSize = 5e6
@@ -60,6 +62,7 @@ type composeWire struct {
 	starts              []map[string]any
 	calls               []string
 	copies              []map[string]any
+	copyTimes           []time.Time
 	uploads             []composeUpload
 	finishes            []map[string]any
 }
@@ -149,6 +152,7 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 		w.mu.Lock()
 		w.copies = append(w.copies, body)
+		w.copyTimes = append(w.copyTimes, time.Now())
 		w.calls = append(w.calls, fmt.Sprintf("copy:%d", partNumber))
 		fail := w.failCopyPart == partNumber
 		status := w.copyFailStatus
@@ -160,7 +164,7 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.mu.Unlock()
 		if status != 0 {
 			if status == http.StatusTooManyRequests {
-				rw.Header().Set("Retry-After", "1")
+				rw.Header().Set("Retry-After", "2")
 			}
 			rw.WriteHeader(status)
 			code := "service_unavailable"
@@ -287,6 +291,34 @@ func TestComposeRejectsMoreThan10000PartsBeforeStarting(t *testing.T) {
 	calls, _, _, _ := wire.snapshot()
 	if len(calls) != 0 {
 		t.Fatalf("too many parts started an upload: %v", calls)
+	}
+}
+
+func TestComposeAccepts10000PartsValidation(t *testing.T) {
+	// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
+	wire := b2wiretest.New(t)
+	wire.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+	wire.Reply("b2_create_bucket", http.StatusOK, noReplicationBucketJSON)
+	// Stop after validation, avoiding 10000 network copies in this boundary test.
+	wire.Reply("b2_start_large_file", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"validated 10000 parts"}`)
+	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(context.Background(), "n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := make([]ComposePart, 10000)
+	for i := range parts {
+		parts[i] = PartFromCopy("source", "bytes=0-4999999")
+	}
+	_, err = bucket.Compose(context.Background(), "at-limit", parts)
+	if err == nil || err.Error() != "b2_start_large_file: 400: validated 10000 parts" {
+		t.Fatalf("Compose error = %v, want scripted error after successful validation", err)
+	}
+	if got := len(wire.Calls("b2_start_large_file")); got != 1 {
+		t.Fatalf("start requests = %d, want 1", got)
 	}
 }
 
@@ -735,18 +767,18 @@ func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		status, wantAuth int
+		minRetryWait     time.Duration
 	}{
-		{"expired token", http.StatusUnauthorized, 2},
-		{"request timeout", http.StatusRequestTimeout, 1},
-		{"service unavailable", http.StatusServiceUnavailable, 1},
-		{"gateway timeout", http.StatusGatewayTimeout, 1},
-		{"rate limited", http.StatusTooManyRequests, 1},
+		{"expired token", http.StatusUnauthorized, 2, 0},
+		{"request timeout", http.StatusRequestTimeout, 1, time.Second},
+		{"service unavailable", http.StatusServiceUnavailable, 1, time.Second},
+		{"gateway timeout", http.StatusGatewayTimeout, 1, time.Second},
+		{"rate limited", http.StatusTooManyRequests, 1, 2 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newComposeWire(t)
 			wire.copyFailStatus = tc.status
 			bucket := wire.bucket(t)
-			started := time.Now()
 			_, err := bucket.Compose(context.Background(), "retry-copy", []ComposePart{
 				PartFromCopy("source-one", "bytes=0-4999999"),
 				PartFromCopy("source-two", "bytes=0-2"),
@@ -754,11 +786,16 @@ func TestComposeCopyPartReauthAndBackoff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.status == http.StatusTooManyRequests && time.Since(started) < 900*time.Millisecond {
-				t.Fatal("copy_part retry ignored Retry-After: 1")
-			}
 			wire.mu.Lock()
 			defer wire.mu.Unlock()
+			if tc.minRetryWait > 0 {
+				if len(wire.copyTimes) < 2 {
+					t.Fatalf("copy_part status %d attempts = %d, want at least 2", tc.status, len(wire.copyTimes))
+				}
+				if waited := wire.copyTimes[1].Sub(wire.copyTimes[0]); waited < tc.minRetryWait {
+					t.Fatalf("copy_part status %d retry waited %v, want at least %v", tc.status, waited, tc.minRetryWait)
+				}
+			}
 			if len(wire.copies) != 3 || wire.authCalls != tc.wantAuth || !reflect.DeepEqual(wire.calls, []string{"start", "copy:1", "copy:1", "copy:2", "finish"}) {
 				t.Fatalf("copies=%d auth=%d calls=%v", len(wire.copies), wire.authCalls, wire.calls)
 			}

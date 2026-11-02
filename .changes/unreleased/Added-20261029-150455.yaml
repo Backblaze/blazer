@@ -1,0 +1,3 @@
+kind: Added
+body: Key.BucketIDs and Key.Prefix report a key's bucket restriction and name prefix (#227).
+time: 2026-10-29T15:04:55.53261-06:00

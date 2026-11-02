@@ -66,6 +66,8 @@ func TestAuthorizationSnapshotDoesNotHoldLockAcrossNetwork(t *testing.T) {
 }
 
 func TestConcurrentUpdateUsesConsistentAuthorizationSnapshot(t *testing.T) {
+	// A torn snapshot needs an interleaving inside snapshot, which cannot be
+	// forced without a production test hook. CI runs this test with -race.
 	transport := authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
 		var body struct {
 			AccountID string `json:"accountId"`
@@ -110,6 +112,8 @@ func TestConcurrentUpdateUsesConsistentAuthorizationSnapshot(t *testing.T) {
 }
 
 func TestConcurrentAuthDataUsesConsistentSnapshot(t *testing.T) {
+	// A torn snapshot needs an interleaving inside snapshot, which cannot be
+	// forced without a production test hook. CI runs this test with -race.
 	oldState := &B2{accountID: "old", authToken: "old", apiURI: "https://old.invalid", downloadURI: "https://old.invalid", s3URI: "https://old.invalid", minPartSize: 1, recommendedPartSize: 10, buckets: []string{"old-bucket"}, pfx: "old/", capabilities: []string{"old-cap"}}
 	newState := &B2{accountID: "new", authToken: "new", apiURI: "https://new.invalid", downloadURI: "https://new.invalid", s3URI: "https://new.invalid", minPartSize: 2, recommendedPartSize: 20, buckets: []string{"new-bucket"}, pfx: "new/", capabilities: []string{"new-cap"}}
 	oldData, newData := oldState.AuthData(), newState.AuthData()
@@ -139,6 +143,8 @@ func TestConcurrentAuthDataUsesConsistentSnapshot(t *testing.T) {
 }
 
 func TestConcurrentUpdateWithKeyedDownloadByID(t *testing.T) {
+	// A torn snapshot needs an interleaving inside snapshot, which cannot be
+	// forced without a production test hook. CI runs this test with -race.
 	transport := authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
 		want := map[string]string{"old.invalid": "old", "new.invalid": "new"}[req.URL.Host]
 		if want == "" || req.Header.Get("Authorization") != want {

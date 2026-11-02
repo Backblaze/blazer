@@ -11,6 +11,8 @@ name: Require area-owner approvals
 # owners still need to review; merging stays at the team's discretion.
 #
 # Behaviour:
+# - Only owners with write, maintain or admin permission count, matching GitHub's native
+#   CODEOWNERS; an area with no such owner stays red.
 # - The PR author counts as implicitly approved for areas they own.
 # - An approval stays valid even after new commits are pushed (latest review per user).
 # - For each touched area: satisfied when >=1 owner's latest review is APPROVED and
@@ -99,12 +101,24 @@ jobs:
           gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" \
             > "$RUNNER_TEMP/reviews.json"
 
+          # GitHub ignores code owners without write access; so does this gate.
+          WRITERS_FILE="$RUNNER_TEMP/writers.txt"
+          export WRITERS_FILE
+          : > "$WRITERS_FILE"
+          for owner in $(grep -v '^[[:space:]]*#' "$CODEOWNERS_FILE" | awk '{for (i = 2; i <= NF; i++) print $i}' | tr -d '@' | sort -u); do
+            case $owner in */*) continue ;; esac # teams cannot submit reviews
+            perm=$(gh api "repos/$REPO/collaborators/$owner/permission" --jq .permission 2>/dev/null || echo none)
+            case $perm in admin | maintain | write) echo "$owner" >> "$WRITERS_FILE" ;; esac
+          done
+
           python3 - <<'PY'
           import json, os
           from pathspec.patterns import GitWildMatchPattern
 
           tmp = os.environ["RUNNER_TEMP"]
           author = os.environ.get("AUTHOR", "").lower()
+          with open(os.environ["WRITERS_FILE"]) as f:
+              writers = {line.strip().lower() for line in f if line.strip()}
 
           # --- parse CODEOWNERS into ordered (pattern, [owners_lc]) rules ---
           rules = []
@@ -157,7 +171,10 @@ jobs:
           # --- evaluate each touched area ---
           blocked = []  # (pattern, "changes"|"awaiting", [users])
           for pattern, owners in areas.items():
-              o = set(owners)
+              o = set(owners) & writers
+              if not o:
+                  blocked.append((pattern, "nowriters", sorted(owners)))
+                  continue
               o.discard(author)  # author implicitly approves their own area
               if not o:
                   continue
@@ -182,6 +199,8 @@ jobs:
               for pattern, kind, users in blocked:
                   if kind == "changes":
                       parts.append(f"{pattern}: changes requested by {','.join(users)}")
+                  elif kind == "nowriters":
+                      parts.append(f"{pattern}: no owner with write access ({','.join(users)})")
                   else:
                       parts.append(f"{pattern}: awaiting {','.join(users)}")
               desc = "; ".join(parts)

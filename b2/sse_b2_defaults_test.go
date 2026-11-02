@@ -26,10 +26,13 @@ func TestExplicitSSECOverridesDefaultSSEB2Wire(t *testing.T) {
 			wire := newSSECPublicWire(t)
 			bucket := sseB2DefaultBucket(t, wire)
 			writer := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
+			payload := []byte("x")
 			if large {
 				writer.ChunkSize = 1
+				// Payload exceeds ChunkSize to use the large-file path; exactly ChunkSize is a simple upload since #221.
+				payload = []byte("xy")
 			}
-			if _, err := writer.Write([]byte("x")); err != nil {
+			if _, err := writer.Write(payload); err != nil {
 				t.Fatal(err)
 			}
 			if err := writer.Close(); err != nil {
@@ -55,12 +58,14 @@ func TestExplicitSSECOverridesDefaultSSEB2Wire(t *testing.T) {
 				t.Errorf("large-file encryption = %#v, want only SSE-C", starts[0].body["serverSideEncryption"])
 			}
 			parts := wire.requestsTo("/upload-part")
-			if len(parts) != 1 {
-				t.Fatalf("part calls = %d, want 1", len(parts))
+			if len(parts) != 2 {
+				t.Fatalf("part calls = %d, want 2", len(parts))
 			}
-			assertSSECWireHeaders(t, parts[0].headers, wire.keyValue, wire.keyMD5)
-			if got := parts[0].headers.Get("X-Bz-Server-Side-Encryption"); got != "" {
-				t.Errorf("part sent inherited SSE-B2 header %q", got)
+			for _, part := range parts {
+				assertSSECWireHeaders(t, part.headers, wire.keyValue, wire.keyMD5)
+				if got := part.headers.Get("X-Bz-Server-Side-Encryption"); got != "" {
+					t.Errorf("part sent inherited SSE-B2 header %q", got)
+				}
 			}
 		})
 	}
@@ -110,7 +115,8 @@ func TestOverriddenSSECResumeUsesEffectiveEncryption(t *testing.T) {
 	w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(key))
 	w.Resume = true
 	w.ChunkSize = 1
-	if _, err := w.Write([]byte("x")); err != nil {
+	// Payload exceeds ChunkSize to use the large-file path; exactly ChunkSize is a simple upload since #221.
+	if _, err := w.Write([]byte("xy")); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Close(); err != nil {
@@ -131,7 +137,8 @@ func TestOverriddenSSECResumeRejectsDefaultMode(t *testing.T) {
 	w := bucket.Object("encrypted").NewWriter(context.Background(), WithSSECKey(wire.key))
 	w.Resume = true
 	w.ChunkSize = 1
-	if _, err := w.Write([]byte("x")); err == nil || !strings.Contains(err.Error(), "SSE-C") {
+	// Payload exceeds ChunkSize to use the large-file path; exactly ChunkSize is a simple upload since #221.
+	if _, err := w.Write([]byte("xy")); err == nil || !strings.Contains(err.Error(), "SSE-C") {
 		t.Fatalf("resume error = %v, want effective SSE-C mismatch", err)
 	}
 	if got := len(wire.requestsTo("/b2api/v4/b2_list_parts")); got != 0 {

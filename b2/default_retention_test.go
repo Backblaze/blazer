@@ -16,21 +16,11 @@ package b2
 
 import (
 	"testing"
-
-	"github.com/Backblaze/blazer/base"
-	"github.com/Backblaze/blazer/internal/b2types"
 )
 
 func TestBucketAttrsDefaultRetention(t *testing.T) {
-	bucket := &b2Bucket{b: &base.Bucket{
-		DefaultRetention: &b2types.Retention{
-			Mode: "governance",
-			Period: &b2types.RetentionPeriod{
-				Duration: 7,
-				Unit:     "days",
-			},
-		},
-	}}
+	// https://www.backblaze.com/apidocs/b2-create-bucket (fileLockConfiguration).
+	bucket := attrsWireBucket(t)
 
 	attrs := bucket.attrs()
 	if attrs.DefaultRetention == nil {

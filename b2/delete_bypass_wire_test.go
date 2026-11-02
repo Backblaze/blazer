@@ -58,6 +58,9 @@ func TestObjectDeleteBypassGovernanceReachesTheWire(t *testing.T) {
 	if v, ok := sent["bypassGovernance"]; ok {
 		t.Errorf("plain Delete sent bypassGovernance = %v, want the field omitted", v)
 	}
+	if sent["fileId"] != "id" || sent["fileName"] != "name" {
+		t.Errorf("plain Delete body = %v, want fileId=id and fileName=name", sent)
+	}
 
 	sent = nil
 	if err := newObject().Delete(ctx, BypassGovernance()); err != nil {
@@ -65,5 +68,8 @@ func TestObjectDeleteBypassGovernanceReachesTheWire(t *testing.T) {
 	}
 	if sent["bypassGovernance"] != true {
 		t.Errorf("Delete(BypassGovernance) sent bypassGovernance = %v, want true", sent["bypassGovernance"])
+	}
+	if sent["fileId"] != "id" || sent["fileName"] != "name" {
+		t.Errorf("bypass Delete body = %v, want fileId=id and fileName=name", sent)
 	}
 }

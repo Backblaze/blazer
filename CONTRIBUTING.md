@@ -50,6 +50,8 @@ When you're ready to submit, see the section below, [Submitting a Pull Request](
 
 ### Testing
 
+Changes whose behavior depends on B2 need a live test; see [docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test) for when and how.
+
 Automated tests are run with `go test`. Integration tests run against Backblaze B2, and require that you create an application key with "all buckets" access and set the following environment variables:
 
 ```shell

@@ -1,6 +1,7 @@
 # Blazer
 
 [![CI](https://github.com/Backblaze/blazer/actions/workflows/ci.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/ci.yml)
+[![Live tests](https://github.com/Backblaze/blazer/actions/workflows/test-live.yml/badge.svg?branch=main)](https://github.com/Backblaze/blazer/actions/workflows/test-live.yml?query=branch%3Amain)
 [![CodeQL](https://github.com/Backblaze/blazer/actions/workflows/codeql.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/codeql.yml)
 [![Security checks](https://github.com/Backblaze/blazer/actions/workflows/security.yml/badge.svg)](https://github.com/Backblaze/blazer/actions/workflows/security.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/Backblaze/blazer/b2.svg)](https://pkg.go.dev/github.com/Backblaze/blazer/b2)
@@ -123,8 +124,9 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, src, dst string) error {
 }
 ```
 
-If the file is smaller than the writer's `ChunkSize` (100 MB by default), Blazer buffers it and sends it
-with `b2_upload_file`. Larger files are uploaded in `ChunkSize` parts with B2's large file API.
+If the file is no larger than the writer's `ChunkSize` (100 MB by default), Blazer buffers it and sends
+it with `b2_upload_file`. Larger files are uploaded in `ChunkSize` parts with B2's large file API, which
+always produces at least two parts.
 
 ### Copy a file into B2, with multiple concurrent uploads
 

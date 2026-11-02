@@ -375,20 +375,54 @@ type onlyWriter struct{ w io.Writer }
 
 func (ow onlyWriter) Write(p []byte) (int, error) { return ow.w.Write(p) }
 
+var errCopyAbandoned = errors.New("b2: copy abandoned")
+
+type guardedCopyWriter struct {
+	mu      sync.Mutex
+	w       io.Writer
+	stopped bool
+}
+
+func (w *guardedCopyWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	unlock := sync.OnceFunc(w.mu.Unlock)
+	defer unlock()
+	if w.stopped {
+		return 0, errCopyAbandoned
+	}
+	if writer, ok := w.w.(*Writer); ok {
+		// Cancellation waits for an in-flight Write. Its network calls use the same
+		// context as copyContext, so their I/O is cancelled too. Only a RoundTripper
+		// ignoring the request context can prolong that network wait, as for any API call.
+		return writer.write(p, func(err error) {
+			unlock()
+			writer.setErr(err)
+		})
+	}
+	return w.w.Write(p)
+}
+
 func copyContext(ctx context.Context, w io.Writer, r io.Reader) (int64, error) {
 	return copyContextWithCloser(ctx, w, r, nil)
 }
 
 // copyContextWithCloser closes a download body on cancellation before waiting
 // for its copy goroutine. A blocked body Read must not outlive Reader.Close.
+// Without a closer, it stops destination writes before returning instead of
+// waiting for a source Read that may never finish.
 func copyContextWithCloser(ctx context.Context, w io.Writer, r io.Reader, closer io.Closer) (int64, error) {
+	var guarded *guardedCopyWriter
+	if closer == nil {
+		guarded = &guardedCopyWriter{w: w}
+		w = guarded
+	}
+	if _, ok := w.(*Writer); ok {
+		w = onlyWriter{w}
+	}
 	var n int64
 	var err error
 	done := make(chan struct{})
 	go func() {
-		if _, ok := w.(*Writer); ok {
-			w = onlyWriter{w}
-		}
 		n, err = io.Copy(w, r)
 		close(done)
 	}()
@@ -399,6 +433,10 @@ func copyContextWithCloser(ctx context.Context, w io.Writer, r io.Reader, closer
 		if closer != nil {
 			_ = closer.Close()
 			<-done
+		} else {
+			guarded.mu.Lock()
+			guarded.stopped = true
+			guarded.mu.Unlock()
 		}
 		return 0, ctx.Err()
 	}
