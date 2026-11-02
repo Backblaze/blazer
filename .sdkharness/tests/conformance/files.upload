@@ -13,6 +13,15 @@
 # "contain the same information they did when the file was uploaded".
 # https://www.backblaze.com/apidocs/b2-download-file-by-name
 #
+# Two further legs ride on the same scenario (same simulator, same bucket):
+#   buffer-init-failure  an upload whose write buffer cannot be created (an
+#       unusable FileBufferDir) must RETURN an error, never panic (Writer.Close
+#       used to dereference a nil buffer).
+#   readfrom-offset      Writer.ReadFrom of a seekable reader positioned at
+#       offset N > 0 must upload exactly the remaining bytes, not the bytes from
+#       offset 0 (Backblaze/blazer#181 item 3). The expected object is the
+#       io.ReaderFrom contract: "ReadFrom reads data from r until EOF".
+#
 # Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
 set -uo pipefail
 
@@ -93,6 +102,7 @@ package main
 //
 // Setup   an ephemeral bucket and a 1 KiB payload of known sha1
 // Action  upload it to st/upload.txt
+// Legs    buffer-init-failure and readfrom-offset (see the header above)
 // Assert  the call returns fileId + fileName; metadata reports contentLength
 //         1024 and the matching contentSha1; the downloaded bytes are
 //         identical to what went up
@@ -109,6 +119,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -179,6 +190,137 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 	if !bytes.Equal(got, payload) {
 		return failf("round trip", "downloaded %d bytes and they differ from the %d uploaded", len(got), len(payload))
+	}
+
+	// Legs. Each runs even if an earlier one failed, so one run names every
+	// defect; the failures are joined into one FAIL.
+	var failures []string
+	for _, leg := range []struct {
+		name string
+		run  func(context.Context, *b2.Bucket) error
+	}{
+		{"buffer-init-failure", legBufferInitFailure},
+		{"readfrom-offset", legReadFromOffset},
+	} {
+		if err := runLeg(ctx, bucket, leg.run); err != nil {
+			if amber, ok := err.(*amberErr); ok {
+				return amber
+			}
+			detail := err.Error()
+			if fe, ok := err.(*failErr); ok {
+				detail = fe.detail
+			}
+			failures = append(failures, leg.name+": "+detail)
+		}
+	}
+	if len(failures) > 0 {
+		return failf("legs", "%s", strings.Join(failures, " | "))
+	}
+	return nil
+}
+
+// runLeg turns a panic inside a leg into a FAIL of that leg, so the other legs
+// still run and the verdict names the leg that crashed.
+func runLeg(ctx context.Context, bucket *b2.Bucket, leg func(context.Context, *b2.Bucket) error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = failf("panic", "%v", r)
+		}
+	}()
+	return leg(ctx, bucket)
+}
+
+// legBufferInitFailure: Writer.Write/Close with a FileBufferDir that does not
+// exist. The buffer cannot be created, so the upload cannot succeed; blazer must
+// say so with an error from Write or Close and must not panic (the deferred
+// Close used to dereference the nil buffer, b2/writer.go Close).
+func legBufferInitFailure(ctx context.Context, bucket *b2.Bucket) error {
+	base, err := os.MkdirTemp("", "sdkharness-nobuf-")
+	if err != nil {
+		return failf("buffer-init-failure", "could not create a scratch directory: %v", err)
+	}
+	defer os.RemoveAll(base)
+	missing := filepath.Join(base, "does", "not", "exist")
+	name := objectName("badbuf.txt")
+
+	w := bucket.Object(name).NewWriter(ctx)
+	w.UseFileBuffer = true
+	w.FileBufferDir = missing
+	_, writeErr := w.Write([]byte("x"))
+	closeErr := w.Close() // a panic here is recovered by runLeg and reported
+	if writeErr == nil && closeErr == nil {
+		return failf("buffer-init-failure", "an upload with an unusable FileBufferDir reported success")
+	}
+	if closeErr == nil {
+		return failf("buffer-init-failure", "Write failed (%v) but Close returned nil", writeErr)
+	}
+	names, err := namesUnder(ctx, bucket, name)
+	if err != nil {
+		return err
+	}
+	if len(names) != 0 {
+		return failf("buffer-init-failure", "the failed upload left object %v in the bucket", names)
+	}
+	return nil
+}
+
+// plainReadSeeker hides every optional interface (WriterTo, ReaderAt) of the
+// reader it wraps, so ReadFrom takes its Seek-only path.
+type plainReadSeeker struct{ rs io.ReadSeeker }
+
+func (p plainReadSeeker) Read(b []byte) (int, error)         { return p.rs.Read(b) }
+func (p plainReadSeeker) Seek(o int64, w int) (int64, error) { return p.rs.Seek(o, w) }
+
+// startOf reports where in src the stored bytes begin (-1 when they do not
+// match any suffix-aligned slice), to make the failure self-explanatory.
+func startOf(src, got []byte) int {
+	for i := 0; i+len(got) <= len(src); i++ {
+		if bytes.Equal(src[i:i+len(got)], got) {
+			return i
+		}
+	}
+	return -1
+}
+
+// legReadFromOffset: ReadFrom of a seekable reader already advanced to offset N
+// must store exactly src[N:], and return len(src)-N. Writer.ReadFrom is called
+// directly because io.Copy prefers the reader's own WriteTo when it has one.
+func legReadFromOffset(ctx context.Context, bucket *b2.Bucket) error {
+	const skip = 300
+	src := payloadOf(1324)
+	want := src[skip:]
+	for _, variant := range []struct {
+		leaf string
+		wrap func(*bytes.Reader) io.Reader
+	}{
+		{"offset-readerat.bin", func(r *bytes.Reader) io.Reader { return r }},
+		{"offset-seekonly.bin", func(r *bytes.Reader) io.Reader { return plainReadSeeker{r} }},
+	} {
+		name := objectName(variant.leaf)
+		reader := bytes.NewReader(src)
+		if _, err := reader.Seek(skip, io.SeekStart); err != nil {
+			return failf("readfrom-offset", "could not position the source: %v", err)
+		}
+		w := bucket.Object(name).NewWriter(ctx)
+		n, copyErr := w.ReadFrom(variant.wrap(reader))
+		closeErr := w.Close()
+		if copyErr != nil {
+			return failf("readfrom-offset", "%s: ReadFrom: %v", variant.leaf, copyErr)
+		}
+		if closeErr != nil {
+			return failf("readfrom-offset", "%s: Close: %v", variant.leaf, closeErr)
+		}
+		got, err := download(ctx, bucket, name, nil)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, want) {
+			return failf("readfrom-offset", "%s: source at offset %d of %d, stored %d bytes from offset %d, ReadFrom returned %d, expected %d bytes",
+				variant.leaf, skip, len(src), len(got), startOf(src, got), n, len(want))
+		}
+		if n != int64(len(want)) {
+			return failf("readfrom-offset", "%s: ReadFrom returned %d, expected %d", variant.leaf, n, len(want))
+		}
 	}
 	return nil
 }

@@ -279,7 +279,19 @@ func TestAccountInfoFileAtomicReplacement(t *testing.T) {
 			}
 		}(item.store, item.value)
 	}
-	for i := 0; i < 200; i++ {
+	// Keep reading until both writers are done, so every read can land between
+	// a writer's truncate and write if Set is not atomic.
+	writersDone := make(chan struct{})
+	go func() { wg.Wait(); close(writersDone) }()
+read:
+	for i := 0; ; i++ {
+		select {
+		case <-writersDone:
+			if i >= 200 {
+				break read
+			}
+		default:
+		}
 		content, err := os.ReadFile(path)
 		// On Windows a reader momentarily collides with a concurrent writer's
 		// atomic rename (ERROR_SHARING_VIOLATION); that is expected OS behavior,
@@ -291,16 +303,16 @@ func TestAccountInfoFileAtomicReplacement(t *testing.T) {
 		}
 		if err != nil {
 			errors <- err
-			break
+			break read
 		}
 		var data AuthData
 		if err := json.Unmarshal(content, &data); err != nil {
 			errors <- fmt.Errorf("observed partial JSON: %w", err)
-			break
+			break read
 		}
 		if data.AccountID != data.AuthToken || (data.AccountID != "first" && data.AccountID != "second") {
 			errors <- fmt.Errorf("observed mixed snapshot: %+v", data)
-			break
+			break read
 		}
 	}
 	wg.Wait()

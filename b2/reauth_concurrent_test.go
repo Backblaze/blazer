@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -347,6 +349,7 @@ func TestCancelledRefreshLeaderHandsOff(t *testing.T) {
 			for i := 0; i < waiters; i++ {
 				go func() { results <- root.reauthorizeIfUnchanged(ctx, generation) }()
 			}
+			waitForBlockedRefreshWaiters(t, waiters)
 			cancel()
 			if err := <-leader; !errors.Is(err, context.Canceled) {
 				t.Fatalf("leader error = %v, want cancellation", err)
@@ -369,12 +372,16 @@ func TestCancelledRefreshLeaderHandsOff(t *testing.T) {
 func TestRefreshAuthorizationFailureReachesWaiters(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	refreshStarted := make(chan struct{}, 16)
+	var refreshCalls int32
 	rt := stalledRefreshTransport(func(req *http.Request) (*http.Response, error) {
 		if !strings.HasSuffix(req.URL.Path, "b2_authorize_account") {
 			return nil, fmt.Errorf("unexpected request %s", req.URL)
 		}
 		select {
 		case <-entered:
+			atomic.AddInt32(&refreshCalls, 1)
+			refreshStarted <- struct{}{}
 			<-release
 			return &http.Response{StatusCode: 403, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":403,"code":"bad_auth_token","message":"denied"}`)), Request: req}, nil
 		default:
@@ -390,13 +397,45 @@ func TestRefreshAuthorizationFailureReachesWaiters(t *testing.T) {
 	generation := root.authGeneration()
 	results := make(chan error, 9)
 	go func() { results <- root.reauthorizeIfUnchanged(context.Background(), generation) }()
+	<-refreshStarted // the leader's refresh is in flight and blocked
 	for i := 0; i < 8; i++ {
 		go func() { results <- root.reauthorizeIfUnchanged(context.Background(), generation) }()
 	}
+	time.Sleep(100 * time.Millisecond) // let the waiters reach the in-flight refresh
 	close(release)
 	for i := 0; i < 9; i++ {
 		if err := <-results; err == nil || !strings.Contains(err.Error(), "denied") {
 			t.Fatalf("refresh %d error = %v, want authorization failure", i, err)
 		}
+	}
+	// Waiters must share the leader's failed refresh instead of each sending its
+	// own authorize request. Allow a few late goroutines, but not one per caller.
+	if got := atomic.LoadInt32(&refreshCalls); got > 3 {
+		t.Fatalf("refresh authorize calls = %d for 9 callers, want the failure shared (at most 3)", got)
+	}
+}
+
+// waitForBlockedRefreshWaiters returns once n goroutines are parked in the
+// select inside reauthorizeIfUnchanged waiting on the refresh in flight, so a
+// test can cancel the leader knowing every waiter is really waiting on it.
+func waitForBlockedRefreshWaiters(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		buf := make([]byte, 1<<20)
+		buf = buf[:runtime.Stack(buf, true)]
+		blocked := 0
+		for _, g := range strings.Split(string(buf), "\n\n") {
+			if strings.Contains(g, "reauthorizeIfUnchanged") && strings.Contains(g, "[select") {
+				blocked++
+			}
+		}
+		if blocked >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d waiters blocked on the refresh", blocked, n)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

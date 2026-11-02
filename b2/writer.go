@@ -705,17 +705,27 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		return copyContext(w.ctx, w, rs)
 	}
 	blog.V(2).Info("streaming without buffer")
-	size, err := rs.Seek(0, io.SeekEnd)
+	// Upload only what is left of r: start at its current position, not at 0.
+	start, err := rs.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return 0, err
 	}
-	w.progressTotal = size
-	var ra io.ReaderAt
-	if rat, ok := r.(io.ReaderAt); ok {
-		ra = rat
-	} else {
-		ra = enReaderAt(rs)
+	end, err := rs.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
 	}
+	size := end - start
+	if size < 0 {
+		size = 0
+	}
+	w.progressTotal = size
+	var base io.ReaderAt
+	if rat, ok := r.(io.ReaderAt); ok {
+		base = rat
+	} else {
+		base = enReaderAt(rs)
+	}
+	ra := io.NewSectionReader(base, start, size)
 	var offset int64
 	var wrote int64
 	w.newBuffer = func() (writeBuffer, error) {
@@ -765,6 +775,9 @@ func (w *Writer) Close() error {
 		defer w.wg.Wait()
 		if !w.everStarted {
 			w.init()
+			if err := w.getErr(); err != nil {
+				return
+			}
 			w.setErr(w.simpleWriteFile())
 			return
 		}
@@ -772,6 +785,9 @@ func (w *Writer) Close() error {
 		defer func() {
 			w.wmux.Lock()
 			defer w.wmux.Unlock()
+			if w.w == nil {
+				return
+			}
 			if err := w.w.Close(); err != nil {
 				// this is non-fatal, but alarming
 				blog.V(1).Infof("b2 writer: buffer close failed (%T)", err)

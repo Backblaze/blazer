@@ -389,6 +389,9 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs == nil {
 		return nil
 	}
+	previousType := b.b.Type
+	previousCORS := b.b.CORSRules
+	previousSSE := b.b.DefaultServerSideEncryption
 	if attrs.Type != UnknownType {
 		b.b.Type = string(attrs.Type)
 	}
@@ -455,6 +458,9 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.Info = previousInfo
 		b.b.LifecycleRules = previousRules
 		b.b.ReplicationConfiguration = previousReplication
+		b.b.Type = previousType
+		b.b.CORSRules = previousCORS
+		b.b.DefaultServerSideEncryption = previousSSE
 	}
 	code, _ := base.Code(err)
 	if code == 409 {

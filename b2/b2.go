@@ -38,6 +38,7 @@ import (
 	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -727,7 +728,11 @@ func (b *Bucket) Object(name string) *Object {
 
 // URL returns the full URL to the given object.
 func (o *Object) URL() string {
-	return fmt.Sprintf("%s/file/%s/%s", o.b.BaseURL(), o.b.Name(), o.name)
+	segments := strings.Split(o.name, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return fmt.Sprintf("%s/file/%s/%s", o.b.BaseURL(), o.b.Name(), strings.Join(segments, "/"))
 }
 
 // NewWriter returns a new writer for the given object.  Objects that are
@@ -941,13 +946,14 @@ func (o *Object) AuthURL(ctx context.Context, valid time.Duration, b2cd string) 
 	if err != nil {
 		return nil, err
 	}
-	urlString := fmt.Sprintf("%s?Authorization=%s", o.URL(), url.QueryEscape(token))
-	if b2cd != "" {
-		urlString = fmt.Sprintf("%s&b2ContentDisposition=%s", urlString, url.QueryEscape(b2cd))
-	}
-	u, err := url.Parse(urlString)
+	u, err := url.Parse(o.URL())
 	if err != nil {
 		return nil, err
 	}
+	q := url.Values{"Authorization": {token}}
+	if b2cd != "" {
+		q.Set("b2ContentDisposition", b2cd)
+	}
+	u.RawQuery = q.Encode()
 	return u, nil
 }

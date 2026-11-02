@@ -1,0 +1,3 @@
+kind: Fixed
+body: "`Writer.ReadFrom` of a seekable reader that is not at offset 0 now uploads the bytes from the reader's current position instead of from the start (#181)."
+time: 2026-11-02T12:00:02.000000-05:00
