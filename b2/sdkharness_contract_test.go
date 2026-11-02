@@ -126,6 +126,15 @@ func sdkHarnessScenarioChecks(script string) error {
 	seenAssertions := make(map[string]bool)
 	var inspect func(ast.Node) bool
 	inspect = func(node ast.Node) bool {
+		if statement, ok := node.(*ast.IfStmt); ok {
+			if sdkHarnessAlwaysFalse(statement.Cond) {
+				if statement.Else != nil {
+					ast.Inspect(statement.Else, inspect)
+				}
+				return false
+			}
+			conditional = true
+		}
 		if call, ok := node.(*ast.CallExpr); ok {
 			switch name := call.Fun.(type) {
 			case *ast.Ident:
@@ -142,9 +151,6 @@ func sdkHarnessScenarioChecks(script string) error {
 				}
 			}
 		}
-		if _, ok := node.(*ast.IfStmt); ok {
-			conditional = true
-		}
 		return true
 	}
 	ast.Inspect(entry.Body, inspect)
@@ -159,7 +165,7 @@ func sdkHarnessResultConsumed(main, entry *ast.FuncDecl) bool {
 		return true
 	}
 	resultNames := make(map[string]bool)
-	consumed := false
+	consumed, failErrHandled := false, true
 	ast.Inspect(main.Body, func(node ast.Node) bool {
 		switch node := node.(type) {
 		case *ast.AssignStmt:
@@ -185,11 +191,101 @@ func sdkHarnessResultConsumed(main, entry *ast.FuncDecl) bool {
 		case *ast.TypeSwitchStmt:
 			if sdkHarnessReferencesResult(node.Assign, resultNames) {
 				consumed = consumed || sdkHarnessReportsFailure(node.Body, resultNames)
+				if hasFailErr, handlesFailErr := sdkHarnessFailErrArm(node); hasFailErr {
+					failErrHandled = failErrHandled && handlesFailErr
+				}
 			}
 		}
 		return true
 	})
-	return consumed
+	return consumed && failErrHandled
+}
+
+func sdkHarnessAlwaysFalse(expression ast.Expr) bool {
+	name, ok := expression.(*ast.Ident)
+	return ok && name.Name == "false"
+}
+
+func sdkHarnessFailErrArm(statement *ast.TypeSwitchStmt) (hasFailErr, handled bool) {
+	for _, branch := range statement.Body.List {
+		clause, ok := branch.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, expression := range clause.List {
+			pointer, ok := expression.(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			name, ok := pointer.X.(*ast.Ident)
+			if !ok || name.Name != "failErr" {
+				continue
+			}
+			return true, sdkHarnessFailErrReportsAndExits(clause.Body)
+		}
+	}
+	return false, false
+}
+
+func sdkHarnessFailErrReportsAndExits(body []ast.Stmt) bool {
+	reported, exited := false, false
+	var inspect func(ast.Node) bool
+	inspect = func(node ast.Node) bool {
+		if conditional, ok := node.(*ast.IfStmt); ok && sdkHarnessAlwaysFalse(conditional.Cond) {
+			if conditional.Else != nil {
+				ast.Inspect(conditional.Else, inspect)
+			}
+			return false
+		}
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sdkHarnessFailReport(call) {
+			reported = true
+		}
+		if sdkHarnessNonZeroExit(call) {
+			exited = true
+		}
+		return true
+	}
+	for _, statement := range body {
+		ast.Inspect(statement, inspect)
+	}
+	return reported && exited
+}
+
+func sdkHarnessFailReport(call *ast.CallExpr) bool {
+	name, ok := call.Fun.(*ast.Ident)
+	if !ok || name.Name != "say" {
+		return false
+	}
+	for _, argument := range call.Args {
+		if sdkHarnessFailureMessage(argument) {
+			return true
+		}
+	}
+	return false
+}
+
+func sdkHarnessFailureMessage(expression ast.Expr) bool {
+	switch expression := expression.(type) {
+	case *ast.BasicLit:
+		if expression.Kind != token.STRING {
+			return false
+		}
+		value, err := strconv.Unquote(expression.Value)
+		return err == nil && strings.HasPrefix(value, "FAIL")
+	case *ast.CallExpr:
+		selector, ok := expression.Fun.(*ast.SelectorExpr)
+		if !ok || len(expression.Args) == 0 {
+			return false
+		}
+		pkg, ok := selector.X.(*ast.Ident)
+		return ok && pkg.Name == "fmt" && selector.Sel.Name == "Sprintf" && sdkHarnessFailureMessage(expression.Args[0])
+	default:
+		return false
+	}
 }
 
 func sdkHarnessEntryResultNames(node ast.Node, entry string) map[string]bool {
@@ -283,6 +379,15 @@ func sdkHarnessReportsFailure(body *ast.BlockStmt, errors map[string]bool) bool 
 	return reported
 }
 
+func sdkHarnessNonZeroExit(call *ast.CallExpr) bool {
+	name, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := name.X.(*ast.Ident)
+	return ok && pkg.Name == "os" && name.Sel.Name == "Exit" && len(call.Args) == 1 && sdkHarnessNonZero(call.Args[0])
+}
+
 func sdkHarnessNonZero(expression ast.Expr) bool {
 	literal, ok := expression.(*ast.BasicLit)
 	if !ok || literal.Kind != token.INT {
@@ -294,7 +399,7 @@ func sdkHarnessNonZero(expression ast.Expr) bool {
 
 func TestSDKHarnessAcceptsScenario(t *testing.T) {
 	const script = "replace github.com/Backblaze/blazer => $REPO_ROOT\npackage main\n" +
-		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }
+		`func runCheck() error { if value := 1; value != 1 { return fmt.Errorf("failed") }; return nil }
 func main() { if err := runCheck(); err != nil { os.Exit(1) } }
 __EOF_GO__
 `
@@ -312,6 +417,50 @@ __EOF_GO__
 	}
 }
 
+func TestSDKHarnessRejectsBrokenFailErrArm(t *testing.T) {
+	const prefix = "replace github.com/Backblaze/blazer => $REPO_ROOT\npackage main\n" +
+		`type failErr struct{}
+func (*failErr) Error() string { return "failed" }
+func runCheck() error { if value := 1; value == 2 { return fmt.Errorf("failed") }; return &failErr{} }
+func main() {
+	err := runCheck()
+	switch err.(type) {
+	case nil:
+		say("PASS")
+	case *failErr:
+`
+	const suffix = `
+	default:
+		say("FAIL")
+		os.Exit(1)
+	}
+}
+__EOF_GO__
+`
+	for _, tc := range []struct {
+		name, arm string
+	}{
+		{name: "reports PASS and returns", arm: `		say("PASS")
+		return`},
+		{name: "reports FAIL without exit", arm: `		say("FAIL")
+		return`},
+		{name: "exits without reporting FAIL", arm: `		os.Exit(1)`},
+		{name: "reports FAIL then exits zero", arm: `		say("FAIL")
+		os.Exit(0)`},
+		{name: "reports and exits only in false branch", arm: `		if false {
+			say("FAIL")
+			os.Exit(1)
+		}
+		return`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := sdkHarnessScenarioChecks(prefix + tc.arm + suffix); err == nil {
+				t.Fatal("accepted broken *failErr arm")
+			}
+		})
+	}
+}
+
 func TestSDKHarnessRejectsNoOpScenario(t *testing.T) {
 	for _, program := range []string{
 		"func main() {}",
@@ -319,6 +468,7 @@ func TestSDKHarnessRejectsNoOpScenario(t *testing.T) {
 		"func fail() {}; func runCheck() error { if true { fail() }; return nil }; func main() { runCheck() }",
 		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }; func main() {}`,
 		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }; func main() { if err := runCheck(); false { fmt.Println(err); os.Exit(1) } }`,
+		`func runCheck() error { if false { return fmt.Errorf("failed") }; return nil }; func main() { if err := runCheck(); err != nil { os.Exit(1) } }`,
 	} {
 		if err := sdkHarnessScenarioChecks("replace github.com/Backblaze/blazer => $REPO_ROOT\npackage main\n" + program); err == nil {
 			t.Fatalf("accepted no-op scenario %q", program)
