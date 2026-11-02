@@ -144,8 +144,9 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 	gate := blockingHeadBucket{bucket.b, make(chan struct{}), make(chan struct{})}
 	bucket.b = gate
 	r := bucket.Object("file").NewRangeReader(context.Background(), 0, 7)
-	terminal := make(chan struct{}, 1)
-	r.Progress = func(_, _ int64) { terminal <- struct{}{} }
+	var mu sync.Mutex
+	var samples []progressSample
+	r.Progress = func(n, total int64) { mu.Lock(); samples = append(samples, progressSample{n, total}); mu.Unlock() }
 	readDone := make(chan struct{})
 	go func() { _, _ = io.ReadAll(r); close(readDone) }()
 	<-gate.entered
@@ -166,10 +167,15 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 		t.Fatal("Close did not finish after initialization")
 	}
 	<-readDone
-	select {
-	case <-terminal:
-	default:
-		t.Fatal("no terminal callback after Close")
+	got := progressSnapshot(&mu, &samples)
+	if len(got) != 1 {
+		t.Fatalf("progress calls = %+v, want exactly one terminal callback after Close", got)
+	}
+	// The channel the old test used held one value and could hide extra
+	// calls; count them. A second Close must not add another terminal call.
+	_ = r.Close()
+	if again := progressSnapshot(&mu, &samples); len(again) != len(got) {
+		t.Fatalf("progress calls after repeated Close = %d, want %d: %+v", len(again), len(got), again)
 	}
 }
 
