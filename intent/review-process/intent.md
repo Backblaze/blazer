@@ -50,8 +50,9 @@ Human review time goes where the risk is, with no rise in reverts or post-releas
    into a broken `main`, without rebasing each of the 15 open PRs by hand.
 6. **Past bugs become reviewer evals.** Build a set from bugs reviewers caught or that shipped, confirmed
    by the code owner, for example #78 (lifecycle rules sent on every update), #74 (empty SSE mode re-sent),
-   #30 (v4 key scope parsed from the wrong place), #131 (progress only per chunk), #147 (part SHA1 on
-   `ReadFrom`). Score the reviewer against the set whenever REVIEW.md, AGENTS.md or the model changes.
+   #30 (v4 key scope parsed from the wrong place) and #131 (progress only per chunk; both bugs sit in the
+   PR's own first commit, not on `main`), and the `ReadFrom` chunk-boundary bug (#230 is the best match; #147
+   is the simulator, not `Writer.ReadFrom`; to confirm with the code owner). See `docs/review-evals.md`. Score the reviewer against the set whenever REVIEW.md, AGENTS.md or the model changes.
 7. **Measure it.** Human approvals per PR (median, p95), review rounds to pass, time a PR waits on a
    person; reverts and post-release fix PRs as the guardrail.
 
