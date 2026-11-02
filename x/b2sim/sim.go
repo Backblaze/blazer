@@ -208,8 +208,9 @@ func verifiedUpload(data []byte, supplied string) ([]byte, string, bool) {
 
 func (b *bucket) response() map[string]any {
 	return map[string]any{
-		"bucketId": b.id, "bucketName": b.name, "bucketType": b.kind,
+		"accountId": "b2sim-account", "bucketId": b.id, "bucketName": b.name, "bucketType": b.kind,
 		"bucketInfo": b.info, "lifecycleRules": b.rules, "corsRules": b.cors,
+		"options":                     []any{},
 		"revision":                    b.revision,
 		"defaultServerSideEncryption": map[string]any{"isClientAuthorizedToRead": true, "value": b.sse},
 		"fileLockConfiguration": map[string]any{"isClientAuthorizedToRead": true, "value": map[string]any{

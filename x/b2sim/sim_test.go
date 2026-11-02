@@ -471,6 +471,57 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBucketResponsesIncludeAccountIDAndOptions(t *testing.T) {
+	sim := New()
+	created := bucketResponseFields(t, responseJSON(t, postSimulatorJSON(t, sim, "b2_create_bucket", map[string]any{
+		"accountId": "b2sim-account", "bucketName": "response-shape", "bucketType": "allPrivate",
+	})))
+	var bucketID string
+	if err := json.Unmarshal(created["bucketId"], &bucketID); err != nil {
+		t.Fatal(err)
+	}
+
+	bucketResponseFields(t, responseJSON(t, postSimulatorJSON(t, sim, "b2_update_bucket", map[string]any{
+		"accountId": "b2sim-account", "bucketId": bucketID, "bucketInfo": map[string]any{"updated": "true"},
+	})))
+
+	var listed struct {
+		Buckets []json.RawMessage `json:"buckets"`
+	}
+	if err := json.Unmarshal(responseJSON(t, postSimulatorJSON(t, sim, "b2_list_buckets", map[string]any{
+		"accountId": "b2sim-account", "bucketId": bucketID,
+	})), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Buckets) != 1 {
+		t.Fatalf("listed buckets = %d, want 1", len(listed.Buckets))
+	}
+	bucketResponseFields(t, listed.Buckets[0])
+}
+
+func bucketResponseFields(t *testing.T, body json.RawMessage) map[string]json.RawMessage {
+	t.Helper()
+	fields := requireJSONFields(t, body,
+		"accountId", "bucketId", "bucketName", "bucketType", "bucketInfo", "corsRules",
+		"defaultServerSideEncryption", "fileLockConfiguration", "lifecycleRules", "options",
+		"replicationConfiguration", "revision")
+	var accountID string
+	if err := json.Unmarshal(fields["accountId"], &accountID); err != nil {
+		t.Fatal(err)
+	}
+	if accountID != "b2sim-account" {
+		t.Errorf("accountId = %q, want b2sim-account", accountID)
+	}
+	var options []string
+	if err := json.Unmarshal(fields["options"], &options); err != nil {
+		t.Fatal(err)
+	}
+	if options == nil || len(options) != 0 {
+		t.Errorf("options = %#v, want []", options)
+	}
+	return fields
+}
+
 func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
 	sim := New()
 	ctx := context.Background()
