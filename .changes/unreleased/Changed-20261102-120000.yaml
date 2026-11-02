@@ -1,0 +1,3 @@
+kind: Changed
+body: "**Breaking:** `(*base.B2).CreateKey`, `CreateKeyMultiBucket`, and `(*base.Bucket).GetDownloadAuthorization` now reject positive lifetimes below one second. Callers must pass a lifetime of at least one second; key callers may instead pass zero for a non-expiring key."
+time: 2026-11-02T12:00:00.000000-06:00

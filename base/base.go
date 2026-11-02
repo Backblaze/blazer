@@ -1735,13 +1735,28 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 	return files, b2resp.NextName, b2resp.NextID, nil
 }
 
-// GetDownloadAuthorization wraps b2_get_download_authorization.
+// validDurationSeconds converts a key or authorization lifetime to the wire
+// validDurationInSeconds, rejecting a positive duration below its resolution.
+func validDurationSeconds(valid time.Duration) (int, error) {
+	secs := int(valid.Seconds())
+	if valid > 0 && secs == 0 {
+		return 0, fmt.Errorf("blazer/base: duration %v is below the one-second minimum resolution", valid)
+	}
+	return secs, nil
+}
+
+// GetDownloadAuthorization wraps b2_get_download_authorization. A positive
+// duration below one second returns an error before sending a request.
 func (b *Bucket) GetDownloadAuthorization(ctx context.Context, prefix string, valid time.Duration, contentDisposition string) (string, error) {
+	validSeconds, err := validDurationSeconds(valid)
+	if err != nil {
+		return "", err
+	}
 	state := b.b2.snapshot()
 	b2req := &b2types.GetDownloadAuthorizationRequest{
 		BucketID:           b.ID,
 		Prefix:             prefix,
-		Valid:              int(valid.Seconds()),
+		Valid:              validSeconds,
 		ContentDisposition: contentDisposition,
 	}
 	b2resp := &b2types.GetDownloadAuthorizationResponse{}
@@ -2042,15 +2057,21 @@ type Key struct {
 }
 
 // CreateKey wraps v3 b2_create_key, producing a single-bucket key (or, with an
-// empty bucketID, an unrestricted one) that v3-only clients can still use. For
-// a Multi-Bucket Application Key, use CreateKeyMultiBucket.
+// empty bucketID, an unrestricted one) that v3-only clients can still use. A
+// zero duration creates a non-expiring key; a positive duration below one
+// second returns an error before sending a request. For a Multi-Bucket
+// Application Key, use CreateKeyMultiBucket.
 func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid time.Duration, bucketID string, prefix string) (*Key, error) {
+	validSeconds, err := validDurationSeconds(valid)
+	if err != nil {
+		return nil, err
+	}
 	state := b.snapshot()
 	b2req := &b2types.CreateKeyRequestV3{
 		AccountID:    state.accountID,
 		Capabilities: caps,
 		Name:         name,
-		Valid:        int(valid.Seconds()),
+		Valid:        validSeconds,
 		BucketID:     bucketID,
 		Prefix:       prefix,
 	}
@@ -2058,15 +2079,21 @@ func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid ti
 }
 
 // CreateKeyMultiBucket wraps v4 b2_create_key, producing a Multi-Bucket
-// Application Key. Such keys are unusable by v3-only clients; for v3
-// compatibility, create one CreateKey per bucket instead.
+// Application Key. A zero duration creates a non-expiring key; a positive
+// duration below one second returns an error before sending a request. Such
+// keys are unusable by v3-only clients; for v3 compatibility, create one
+// CreateKey per bucket instead.
 func (b *B2) CreateKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (*Key, error) {
+	validSeconds, err := validDurationSeconds(valid)
+	if err != nil {
+		return nil, err
+	}
 	state := b.snapshot()
 	b2req := &b2types.CreateKeyRequestV4{
 		AccountID:    state.accountID,
 		Capabilities: caps,
 		Name:         name,
-		Valid:        int(valid.Seconds()),
+		Valid:        validSeconds,
 		BucketIDs:    bucketIDs,
 		Prefix:       prefix,
 	}

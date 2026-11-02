@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // v4AuthJSON builds a v4-shaped authorizeAccount response whose apiUrl points
@@ -257,6 +258,7 @@ func TestListBucketsFansOutForMultiBucketKeys(t *testing.T) {
 type createKeyFixture struct {
 	b2         *B2
 	srv        *httptest.Server
+	requests   int
 	lastPath   string
 	lastBody   map[string]any
 	lastMethod string
@@ -270,6 +272,7 @@ func newCreateKeyFixture(t *testing.T) *createKeyFixture {
 		case r.URL.Path == "/b2api/v4/b2_authorize_account":
 			fmt.Fprint(w, v4AuthJSON(f.srv.URL, nil, nil, ""))
 		case strings.HasSuffix(r.URL.Path, "/b2_create_key"):
+			f.requests++
 			f.lastPath = r.URL.Path
 			f.lastMethod = r.Method
 			body, err := io.ReadAll(r.Body)
@@ -282,6 +285,19 @@ func newCreateKeyFixture(t *testing.T) *createKeyFixture {
 			}
 			// Minimal Key response.
 			fmt.Fprint(w, `{"applicationKeyId":"k","applicationKey":"s","accountId":"a","capabilities":[],"keyName":"n","expirationTimestamp":0}`)
+		case strings.HasSuffix(r.URL.Path, "/b2_get_download_authorization"):
+			f.requests++
+			f.lastPath = r.URL.Path
+			f.lastMethod = r.Method
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read body: %v", err)
+			}
+			f.lastBody = map[string]any{}
+			if err := json.Unmarshal(body, &f.lastBody); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			_, _ = fmt.Fprint(w, `{"authorizationToken":"download-token"}`)
 		default:
 			t.Errorf("unexpected request path: %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -297,6 +313,131 @@ func newCreateKeyFixture(t *testing.T) *createKeyFixture {
 }
 
 func (f *createKeyFixture) close() { f.srv.Close() }
+
+func (f *createKeyFixture) resetRequests() {
+	f.requests = 0
+	f.lastPath = ""
+	f.lastBody = nil
+	f.lastMethod = ""
+}
+
+func assertDurationIsRejectedBeforeRequest(t *testing.T, f *createKeyFixture, call func(time.Duration) error) {
+	t.Helper()
+	f.resetRequests()
+	err := call(500 * time.Millisecond)
+	if got, want := errString(err), "blazer/base: duration 500ms is below the one-second minimum resolution"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if f.requests != 0 {
+		t.Fatalf("requests = %d, want 0", f.requests)
+	}
+}
+
+func assertDurationIsSentInSeconds(t *testing.T, f *createKeyFixture, zeroIsSent bool, call func(time.Duration) error) {
+	t.Helper()
+	for _, tc := range []struct {
+		name  string
+		valid time.Duration
+		want  float64
+	}{
+		{name: "one hour", valid: time.Hour, want: 3600},
+		{name: "no expiration", valid: 0, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.resetRequests()
+			if err := call(tc.valid); err != nil {
+				t.Fatal(err)
+			}
+			if f.requests != 1 {
+				t.Fatalf("requests = %d, want 1", f.requests)
+			}
+			got, ok := f.lastBody["validDurationInSeconds"]
+			if tc.valid == 0 && !zeroIsSent {
+				if ok {
+					t.Errorf("validDurationInSeconds = %v, want omitted", got)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("validDurationInSeconds = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func TestValidDurationSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		valid   time.Duration
+		want    int
+		wantErr bool
+	}{
+		{name: "sub-second", valid: 500 * time.Millisecond, wantErr: true},
+		{name: "zero", valid: 0, want: 0},
+		{name: "one second", valid: time.Second, want: 1},
+		{name: "ninety minutes", valid: 90 * time.Minute, want: 5400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validDurationSeconds(tc.valid)
+			if tc.wantErr {
+				if got != 0 || err == nil {
+					t.Fatalf("validDurationSeconds(%v) = (%d, %v), want (0, error)", tc.valid, got, err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("validDurationSeconds(%v) = (%d, %v), want (%d, nil)", tc.valid, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCreateKeyRejectsSubSecondLifetimeBeforeRequest(t *testing.T) {
+	f := newCreateKeyFixture(t)
+	defer f.close()
+	call := func(valid time.Duration) error {
+		_, err := f.b2.CreateKey(context.Background(), "keyname", []string{"readFiles"}, valid, "buck-single", "prefix/")
+		return err
+	}
+	assertDurationIsRejectedBeforeRequest(t, f, call)
+	assertDurationIsSentInSeconds(t, f, false, call)
+}
+
+func TestCreateKeyMultiBucketRejectsSubSecondLifetimeBeforeRequest(t *testing.T) {
+	f := newCreateKeyFixture(t)
+	defer f.close()
+	call := func(valid time.Duration) error {
+		_, err := f.b2.CreateKeyMultiBucket(context.Background(), "keyname", []string{"readFiles"}, valid, []string{"buck-a", "buck-b"}, "prefix/")
+		return err
+	}
+	assertDurationIsRejectedBeforeRequest(t, f, call)
+	assertDurationIsSentInSeconds(t, f, false, call)
+}
+
+func TestGetDownloadAuthorizationRejectsSubSecondLifetimeBeforeRequest(t *testing.T) {
+	f := newCreateKeyFixture(t)
+	defer f.close()
+	bucket := &Bucket{ID: "bucket-id", b2: f.b2}
+	call := func(valid time.Duration) error {
+		token, err := bucket.GetDownloadAuthorization(context.Background(), "prefix/", valid, "attachment")
+		if err != nil {
+			return err
+		}
+		if token != "download-token" {
+			return fmt.Errorf("token = %q, want %q", token, "download-token")
+		}
+		return nil
+	}
+	assertDurationIsRejectedBeforeRequest(t, f, call)
+	assertDurationIsSentInSeconds(t, f, true, call)
+}
 
 func TestCreateKeyUsesV3Endpoint(t *testing.T) {
 	f := newCreateKeyFixture(t)

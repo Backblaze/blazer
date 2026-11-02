@@ -61,7 +61,9 @@ type keyOptions struct {
 // KeyOption specifies desired properties for application keys.
 type KeyOption func(*keyOptions)
 
-// Lifetime requests a key with the given lifetime.
+// Lifetime requests a key with the given lifetime. A zero lifetime creates a
+// non-expiring key. A positive lifetime below one second returns an error from
+// CreateKey.
 func Lifetime(d time.Duration) KeyOption {
 	return func(k *keyOptions) {
 		k.lifetime = d
