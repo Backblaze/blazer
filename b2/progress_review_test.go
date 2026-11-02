@@ -222,15 +222,15 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 }
 
 type pipeProgressBody struct {
-	r               *io.PipeReader
-	entered, exited chan struct{}
-	once            sync.Once
+	r                   *io.PipeReader
+	entered, exited     chan struct{}
+	enterOnce, exitOnce sync.Once
 }
 
 func (b *pipeProgressBody) Read(p []byte) (int, error) {
-	b.once.Do(func() { close(b.entered) })
+	b.enterOnce.Do(func() { close(b.entered) })
 	n, err := b.r.Read(p)
-	close(b.exited)
+	b.exitOnce.Do(func() { close(b.exited) })
 	return n, err
 }
 func (b *pipeProgressBody) Close() error                                    { return b.r.Close() }
