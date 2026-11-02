@@ -62,7 +62,19 @@ func TestSyncConcurrentTree(t *testing.T) {
 }
 
 func TestSyncRejectsInvalidInputs(t *testing.T) {
-	bucket, _ := newSyncWire(t)
+	bucket, wire := newSyncWire(t)
+	requestCount := func() int {
+		wire.mu.Lock()
+		defer wire.mu.Unlock()
+		return len(wire.requests)
+	}
+	baselineRequests := requestCount()
+	assertNoRequest := func(t *testing.T, name string) {
+		t.Helper()
+		if got := requestCount(); got != baselineRequests {
+			t.Fatalf("%s: request reached B2: got %d requests, want baseline %d", name, got, baselineRequests)
+		}
+	}
 	root := t.TempDir()
 	for _, tc := range []struct {
 		name   string
@@ -77,27 +89,33 @@ func TestSyncRejectsInvalidInputs(t *testing.T) {
 			if _, err := Sync(context.Background(), bucket, "", root, tc.option); err == nil || err.Error() != tc.want {
 				t.Fatalf("invalid option error = %v, want %q", err, tc.want)
 			}
+			assertNoRequest(t, tc.name)
 		})
+	}
+	path := filepath.Join(root, "file")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("file root", func(t *testing.T) {
+		if _, err := Sync(context.Background(), bucket, "", path); err == nil || err.Error() != fmt.Sprintf("sync: local root %q is not a directory", path) {
+			t.Fatalf("file root error = %v, want not a directory", err)
+		}
+		assertNoRequest(t, "file root")
+	})
+	t.Run("missing root", func(t *testing.T) {
+		if _, err := Sync(context.Background(), bucket, "", path+"-missing"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing root error = %v, want os.ErrNotExist", err)
+		}
+		assertNoRequest(t, "missing root")
+	})
+	if _, err := fileSHA1(context.Background(), path+"-missing", nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing hash file error = %v, want os.ErrNotExist", err)
 	}
 	t.Run("valid options", func(t *testing.T) {
 		if _, err := Sync(context.Background(), bucket, "", root, WithConcurrency(1), WithCompare(CompareSHA1)); err != nil {
 			t.Fatalf("valid options: %v", err)
 		}
 	})
-
-	path := filepath.Join(root, "file")
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Sync(context.Background(), bucket, "", path); err == nil || err.Error() != fmt.Sprintf("sync: local root %q is not a directory", path) {
-		t.Fatalf("file root error = %v, want not a directory", err)
-	}
-	if _, err := Sync(context.Background(), bucket, "", path+"-missing"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing root error = %v, want os.ErrNotExist", err)
-	}
-	if _, err := fileSHA1(context.Background(), path+"-missing", nil); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing hash file error = %v, want os.ErrNotExist", err)
-	}
 }
 
 func TestSyncDryRunAndCancellation(t *testing.T) {
