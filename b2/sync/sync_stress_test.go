@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,14 +11,18 @@ import (
 )
 
 func TestSyncConcurrentTree(t *testing.T) {
-	bucket, _ := newSyncWire(t)
+	bucket, wire := newSyncWire(t)
 	root := t.TempDir()
+	wantUploads := make(map[string]string)
 	for i := 0; i < 96; i++ {
-		name := filepath.Join(root, fmt.Sprintf("dir%d", i%4), fmt.Sprintf("file%d", i))
+		rel := filepath.Join(fmt.Sprintf("dir%d", i%4), fmt.Sprintf("file%d", i))
+		name := filepath.Join(root, rel)
+		payload := fmt.Sprintf("file%03d", i)
+		wantUploads["tree/"+filepath.ToSlash(rel)] = payload
 		if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(name, []byte("payload"), 0o600); err != nil {
+		if err := os.WriteFile(name, []byte(payload), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -27,6 +32,25 @@ func TestSyncConcurrentTree(t *testing.T) {
 	}
 	if len(first.Uploaded) != 96 || len(first.Failed) != 0 || first.BytesUploaded != 96*7 {
 		t.Fatalf("first=%+v", first)
+	}
+	wire.mu.Lock()
+	uploads := append([]syncUpload(nil), wire.uploads...)
+	wire.mu.Unlock()
+	if len(uploads) != 96 {
+		t.Fatalf("upload requests = %d, want 96", len(uploads))
+	}
+	for _, upload := range uploads {
+		want, ok := wantUploads[upload.name]
+		if !ok {
+			t.Fatalf("unexpected or duplicate upload %q", upload.name)
+		}
+		if got := string(upload.body); got != want {
+			t.Fatalf("upload %q body = %q, want %q", upload.name, got, want)
+		}
+		delete(wantUploads, upload.name)
+	}
+	if len(wantUploads) != 0 {
+		t.Fatalf("missing uploads: %v", wantUploads)
 	}
 	second, err := Sync(context.Background(), bucket, "tree", root, WithConcurrency(24), WithCompare(CompareSize))
 	if err != nil {
@@ -38,24 +62,60 @@ func TestSyncConcurrentTree(t *testing.T) {
 }
 
 func TestSyncRejectsInvalidInputs(t *testing.T) {
-	for _, option := range []Option{WithConcurrency(0), WithCompare(CompareMode(-1)), WithCompare(CompareMode(99))} {
-		if _, err := Sync(context.Background(), nil, "", t.TempDir(), option); err == nil {
-			t.Fatal("invalid option accepted")
+	bucket, wire := newSyncWire(t)
+	requestCount := func() int {
+		wire.mu.Lock()
+		defer wire.mu.Unlock()
+		return len(wire.requests)
+	}
+	baselineRequests := requestCount()
+	assertNoRequest := func(t *testing.T, name string) {
+		t.Helper()
+		if got := requestCount(); got != baselineRequests {
+			t.Fatalf("%s: request reached B2: got %d requests, want baseline %d", name, got, baselineRequests)
 		}
 	}
-	path := filepath.Join(t.TempDir(), "file")
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name   string
+		option Option
+		want   string
+	}{
+		{"zero concurrency", WithConcurrency(0), "sync: concurrency must be positive"},
+		{"negative comparison", WithCompare(CompareMode(-1)), "sync: unknown comparison mode -1"},
+		{"unknown comparison", WithCompare(CompareMode(99)), "sync: unknown comparison mode 99"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Sync(context.Background(), bucket, "", root, tc.option); err == nil || err.Error() != tc.want {
+				t.Fatalf("invalid option error = %v, want %q", err, tc.want)
+			}
+			assertNoRequest(t, tc.name)
+		})
+	}
+	path := filepath.Join(root, "file")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sync(context.Background(), nil, "", path); err == nil {
-		t.Fatal("file root accepted")
+	t.Run("file root", func(t *testing.T) {
+		if _, err := Sync(context.Background(), bucket, "", path); err == nil || err.Error() != fmt.Sprintf("sync: local root %q is not a directory", path) {
+			t.Fatalf("file root error = %v, want not a directory", err)
+		}
+		assertNoRequest(t, "file root")
+	})
+	t.Run("missing root", func(t *testing.T) {
+		if _, err := Sync(context.Background(), bucket, "", path+"-missing"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing root error = %v, want os.ErrNotExist", err)
+		}
+		assertNoRequest(t, "missing root")
+	})
+	if _, err := fileSHA1(context.Background(), path+"-missing", nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing hash file error = %v, want os.ErrNotExist", err)
 	}
-	if _, err := Sync(context.Background(), nil, "", path+"-missing"); err == nil {
-		t.Fatal("missing root accepted")
-	}
-	if _, err := fileSHA1(context.Background(), path+"-missing", nil); err == nil {
-		t.Fatal("missing hash file accepted")
-	}
+	t.Run("valid options", func(t *testing.T) {
+		if _, err := Sync(context.Background(), bucket, "", root, WithConcurrency(1), WithCompare(CompareSHA1)); err != nil {
+			t.Fatalf("valid options: %v", err)
+		}
+	})
 }
 
 func TestSyncDryRunAndCancellation(t *testing.T) {

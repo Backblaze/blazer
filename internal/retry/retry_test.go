@@ -74,8 +74,10 @@ func TestDoReturnsContextErrorDuringDelay(t *testing.T) {
 }
 
 func TestBackoffCapsLongDelay(t *testing.T) {
-	if got := Backoff(31 * time.Second); got >= 32*time.Second {
-		t.Fatalf("Backoff(31s) = %v, want capped below 32s", got)
+	const min = 30310 * time.Millisecond
+	const max = 30930 * time.Millisecond
+	if got := Backoff(31 * time.Second); got < min || got >= max {
+		t.Fatalf("Backoff(31s) = %v, want [%v, %v)", got, min, max)
 	}
 }
 
