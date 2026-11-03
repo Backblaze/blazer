@@ -117,6 +117,20 @@ type syncUpload struct {
 	body                                 []byte
 }
 
+type cancelContextTransport struct {
+	mu       stdsync.Mutex
+	contexts []context.Context
+}
+
+func (t *cancelContextTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, "/b2_cancel_large_file") {
+		t.mu.Lock()
+		t.contexts = append(t.contexts, req.Context())
+		t.mu.Unlock()
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
 func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) {
 	t.Helper()
 	w := &syncWire{files: make(map[string]map[string]interface{})}
@@ -955,6 +969,38 @@ func TestUploadFileRejectsStaleWalkSHA1(t *testing.T) {
 	wire.mu.Unlock()
 	if published {
 		t.Fatal("file published with stale SHA1")
+	}
+}
+
+func TestSyncCancelsMultipartCleanupContext(t *testing.T) {
+	transport := &cancelContextTransport{}
+	bucket, wire := newSyncWire(t,
+		b2.DefaultWriterOptions(func(writer *b2.Writer) {
+			// The test wire deliberately accepts this small part size.
+			writer.ChunkSize = 3
+			writer.ConcurrentUploads = 1
+		}),
+		b2.Transport(transport),
+	)
+	wire.mu.Lock()
+	wire.failPart = true
+	wire.mu.Unlock()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "failed.bin"), []byte("failed multipart payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithConcurrency(1))
+	if err == nil || result == nil || len(result.Failed) != 1 {
+		t.Fatalf("Sync = (%+v, %v), want one failed multipart upload", result, err)
+	}
+	transport.mu.Lock()
+	contexts := append([]context.Context(nil), transport.contexts...)
+	transport.mu.Unlock()
+	if len(contexts) != 1 {
+		t.Fatalf("b2_cancel_large_file requests = %d, want exactly one", len(contexts))
+	}
+	if cleanupCtx := contexts[0]; !errors.Is(cleanupCtx.Err(), context.Canceled) {
+		t.Fatalf("cleanup context error after Sync = %v, want context.Canceled", cleanupCtx.Err())
 	}
 }
 
