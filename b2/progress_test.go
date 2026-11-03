@@ -656,7 +656,17 @@ func TestProgressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
 	}
 	<-readDone
 	before := progressSnapshot(&mu, &samples)
+	select {
+	case <-reader.reporter.wake: // finish may leave a pre-terminal wake queued.
+	default:
+	}
 	reader.reporter.add(1) // A late metered read must not produce another callback.
+	select {
+	case <-reader.reporter.wake:
+		t.Fatal("late progress update queued after terminal callback")
+	case <-time.After(100 * time.Millisecond):
+		// Give an incorrectly queued update time to reach the progress owner.
+	}
 	after := progressSnapshot(&mu, &samples)
 	if len(after) != len(before) {
 		t.Fatalf("callback after terminal call: before=%+v after=%+v", before, after)
