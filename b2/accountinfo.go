@@ -111,7 +111,11 @@ func (a *AccountInfoFile) Set(data AuthData) {
 func (a *AccountInfoFile) write(data AuthData) error {
 	return a.writeWith(data, accountInfoFileOps{
 		createTemp: func(dir, pattern string) (accountInfoTempFile, error) {
-			return os.CreateTemp(dir, pattern)
+			file, err := os.CreateTemp(dir, pattern)
+			if err != nil {
+				return nil, err
+			}
+			return file, nil
 		},
 		remove: os.Remove,
 		rename: renameReplace,

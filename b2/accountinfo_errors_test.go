@@ -191,17 +191,17 @@ func TestAccountInfoRenamePlatform(t *testing.T) {
 			name += " directory"
 		}
 		t.Run(name, func(t *testing.T) {
-			tmp, dest := filepath.Join(t.TempDir(), "new"), filepath.Join(t.TempDir(), "previous")
+			tempPath, destPath := filepath.Join(t.TempDir(), "new"), filepath.Join(t.TempDir(), "previous")
 			if test.destDir {
-				if err := os.Mkdir(dest, 0o700); err != nil {
+				if err := os.Mkdir(destPath, 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}
 			calls, clockCalls := 0, 0
-			rename := func(old, new string) error {
+			rename := func(tmp, dest string) error {
 				calls++
-				if old != tmp || new != dest {
-					t.Errorf("rename paths = %q, %q; want %q, %q", old, new, tmp, dest)
+				if tmp != tempPath || dest != destPath {
+					t.Errorf("rename paths = %q, %q; want %q, %q", tmp, dest, tempPath, destPath)
 				}
 				if calls == 1 || test.destDir {
 					return test.renameErr
@@ -212,7 +212,7 @@ func TestAccountInfoRenamePlatform(t *testing.T) {
 				clockCalls++
 				return time.Unix(int64(clockCalls), 0)
 			}
-			if err := renameReplaceWith(tmp, dest, rename, test.goos, now); !errors.Is(err, test.wantErr) {
+			if err := renameReplaceWith(tempPath, destPath, rename, test.goos, now); !errors.Is(err, test.wantErr) {
 				t.Errorf("rename error = %v, want %v", err, test.wantErr)
 			}
 			if calls != test.wantCalls {

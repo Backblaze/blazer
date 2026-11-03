@@ -290,14 +290,17 @@ func TestAccountInfoFileAtomicReplacement(t *testing.T) {
 		ops := accountInfoFileOps{
 			createTemp: func(dir, pattern string) (accountInfoTempFile, error) {
 				file, err := os.CreateTemp(dir, pattern)
-				return file, err
+				if err != nil {
+					return nil, err
+				}
+				return file, nil
 			},
 			remove: os.Remove,
 			rename: func(tmp, dest string) error {
-				return renameReplaceWith(tmp, dest, func(old, new string) error {
+				return renameReplaceWith(tmp, dest, func(tmp, dest string) error {
 					close(renameStarted)
 					<-continueRename
-					return os.Rename(old, new)
+					return os.Rename(tmp, dest)
 				}, "linux", time.Now)
 			},
 		}
