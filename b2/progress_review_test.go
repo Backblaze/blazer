@@ -19,6 +19,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +75,48 @@ func TestProgressZeroLengthVerifyDoesNotPanic(t *testing.T) {
 	}
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProgressCompletedReaderStatus(t *testing.T) {
+	bucket := newProgressReviewBucket(t)
+	ctx := context.Background()
+	object := bucket.Object("completed-status")
+	writer := object.NewWriter(ctx)
+	if n, err := io.WriteString(writer, "abcd"); n != 4 || err != nil {
+		t.Fatalf("Write = %d, %v; want 4, nil", n, err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		length   int64
+		body     string
+		progress []float64
+	}{
+		{"two chunks", 4, "abcd", []float64{1, 1}},
+		{"zero length", 0, "", []float64{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := object.NewRangeReader(ctx, 0, tc.length)
+			reader.ChunkSize = 2
+			reader.ConcurrentDownloads = 1
+			defer func() { _ = reader.Close() }()
+			if got, err := io.ReadAll(reader); string(got) != tc.body || err != nil {
+				t.Fatalf("ReadAll = %q, %v; want %q, nil", got, err, tc.body)
+			}
+			// EOF leaves the reader registered until Close.
+			status := bucket.c.Status()
+			if len(status.Readers) != 1 {
+				t.Fatalf("Client.Status readers = %d, want 1 before Close", len(status.Readers))
+			}
+			for _, current := range status.Readers {
+				if !reflect.DeepEqual(current.Progress, tc.progress) {
+					t.Fatalf("completed reader progress = %v, want %v", current.Progress, tc.progress)
+				}
+			}
+		})
 	}
 }
 
@@ -179,15 +222,15 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 }
 
 type pipeProgressBody struct {
-	r               *io.PipeReader
-	entered, exited chan struct{}
-	once            sync.Once
+	r                   *io.PipeReader
+	entered, exited     chan struct{}
+	enterOnce, exitOnce sync.Once
 }
 
 func (b *pipeProgressBody) Read(p []byte) (int, error) {
-	b.once.Do(func() { close(b.entered) })
+	b.enterOnce.Do(func() { close(b.entered) })
 	n, err := b.r.Read(p)
-	close(b.exited)
+	b.exitOnce.Do(func() { close(b.exited) })
 	return n, err
 }
 func (b *pipeProgressBody) Close() error                                    { return b.r.Close() }
