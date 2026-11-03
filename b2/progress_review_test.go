@@ -116,9 +116,8 @@ func TestProgressResumePastEOFReportsZero(t *testing.T) {
 	if _, err := input.Seek(3, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	var mu sync.Mutex
 	var samples []progressSample
-	w := newProgressReviewBucket(t).Object("past-eof").NewWriter(context.Background(), WithProgress(func(n, total int64) { mu.Lock(); samples = append(samples, progressSample{n, total}); mu.Unlock() }))
+	w := newProgressReviewBucket(t).Object("past-eof").NewWriter(context.Background(), WithProgress(func(n, total int64) { samples = append(samples, progressSample{n, total}) }))
 	w.Resume = true
 	if n, err := w.ReadFrom(input); n != 0 || err != nil {
 		t.Fatalf("ReadFrom = %d, %v", n, err)
@@ -126,9 +125,8 @@ func TestProgressResumePastEOFReportsZero(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got := progressSnapshot(&mu, &samples)
-	if len(got) == 0 || got[len(got)-1] != (progressSample{0, 0}) {
-		t.Fatalf("progress = %+v, want terminal 0/0", got)
+	if len(samples) == 0 || samples[len(samples)-1] != (progressSample{0, 0}) {
+		t.Fatalf("progress = %+v, want terminal 0/0", samples)
 	}
 }
 
@@ -151,12 +149,9 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 	gate := blockingHeadBucket{bucket.b, make(chan struct{}), make(chan struct{})}
 	bucket.b = gate
 	r := bucket.Object("file").NewRangeReader(context.Background(), 0, 7)
-	var mu sync.Mutex
 	var samples []progressSample
 	r.Progress = func(complete, total int64) {
-		mu.Lock()
 		samples = append(samples, progressSample{complete, total})
-		mu.Unlock()
 	}
 	readDone := make(chan struct{})
 	go func() { _, _ = io.ReadAll(r); close(readDone) }()
@@ -178,9 +173,8 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 		t.Fatal("Close did not finish after initialization")
 	}
 	<-readDone
-	got := progressSnapshot(&mu, &samples)
-	if len(got) == 0 || got[len(got)-1] != (progressSample{0, -1}) {
-		t.Fatalf("progress after Close = %+v, want final 0/-1 after cancelled initialization", got)
+	if len(samples) == 0 || samples[len(samples)-1] != (progressSample{0, -1}) {
+		t.Fatalf("progress after Close = %+v, want final 0/-1 after cancelled initialization", samples)
 	}
 }
 
