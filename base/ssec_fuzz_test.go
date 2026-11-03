@@ -11,10 +11,14 @@ func FuzzRedactSSECJSON(f *testing.F) {
 		f.Add([]byte(body))
 	}
 	f.Fuzz(func(t *testing.T, body []byte) {
+		var input interface{}
+		if json.Unmarshal(body, &input) != nil {
+			return
+		}
 		out := []byte(redactSensitiveJSON(body))
 		var value interface{}
-		if json.Unmarshal(out, &value) != nil {
-			return
+		if err := json.Unmarshal(out, &value); err != nil {
+			t.Fatalf("redacted JSON is invalid: %q: %v", out, err)
 		}
 		var check func(interface{})
 		check = func(value interface{}) {

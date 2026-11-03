@@ -27,6 +27,7 @@ conformance	large.compose_mixed	simulator	./.sdkharness/tests/run-conformance
 conformance	large.multipart	simulator	./.sdkharness/tests/run-conformance
 conformance	large.parallel_download	simulator	./.sdkharness/tests/run-conformance
 conformance	large.resume	simulator	./.sdkharness/tests/run-conformance
+conformance	large.unbound_incremental	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.bucket_default	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.bypass_governance	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.legal_hold	simulator	./.sdkharness/tests/run-conformance
