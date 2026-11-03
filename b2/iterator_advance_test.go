@@ -3,8 +3,8 @@ package b2
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -168,7 +168,7 @@ func TestListWalksManyConsecutiveEmptyPages(t *testing.T) {
 	if err := iter.Err(); err != nil {
 		t.Fatalf("Err: %v", err)
 	}
-	if want := []string{"a", "b", "c"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"a", "b", "c"}; !slices.Equal(got, want) {
 		t.Fatalf("listed %v after %d empty pages, want %v", got, empties, want)
 	}
 	if maximumDepth > firstDepth+4 {
