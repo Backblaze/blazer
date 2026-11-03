@@ -44,7 +44,7 @@ func TestComposeUploadedPartMaximumSize(t *testing.T) {
 }
 
 func FuzzComposeRange(f *testing.F) {
-	for _, seed := range []string{"", "bytes=0-4999999", "bytes=-1-2", "bytes=+0-+4999999", "bytes=0-9223372036854775807", "bytes=9-1", "bytes=0-1\r\n"} {
+	for _, seed := range []string{"", "bytes=0-4999999", "0-4999999", "bytes=-1-2", "bytes=+0-+4999999", "bytes=0-9223372036854775807", "bytes=9-1", "bytes=0-1\r\n"} {
 		f.Add(seed, true)
 	}
 	f.Fuzz(func(t *testing.T, value string, nonFinal bool) {

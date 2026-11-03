@@ -108,6 +108,13 @@ func TestZeroSSECKeyIsRejected(t *testing.T) {
 	if err := (&SSECKey{}).validate(); err == nil || !strings.Contains(err.Error(), "NewSSECKey") {
 		t.Fatalf("zero-value key validation = %v, want NewSSECKey guidance", err)
 	}
+	key, err := NewSSECKey([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewSSECKey(32-byte key) = %v, want nil", err)
+	}
+	if err := key.validate(); err != nil {
+		t.Fatalf("32-byte key validation = %v, want nil", err)
+	}
 }
 
 func TestSSECKeyEveryFormatRedactsMaterial(t *testing.T) {
