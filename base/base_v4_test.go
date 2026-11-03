@@ -17,6 +17,7 @@ package base
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -378,13 +379,21 @@ func (f *createKeyFixture) resetRequests() {
 
 func assertDurationIsRejectedBeforeRequest(t *testing.T, f *createKeyFixture, call func(time.Duration) error) {
 	t.Helper()
-	f.resetRequests()
-	err := call(500 * time.Millisecond)
-	if got, want := errString(err), "blazer/base: duration 500ms is below the one-second minimum resolution"; got != want {
-		t.Fatalf("error = %q, want %q", got, want)
-	}
-	if f.requests != 0 {
-		t.Fatalf("requests = %d, want 0", f.requests)
+	for _, valid := range []time.Duration{
+		-500 * time.Millisecond, -time.Nanosecond, -time.Second,
+		500 * time.Millisecond, 1500 * time.Millisecond,
+		1000 * 24 * time.Hour, 2147483648 * time.Second,
+	} {
+		t.Run(valid.String(), func(t *testing.T) {
+			f.resetRequests()
+			err := call(valid)
+			if !errors.Is(err, ErrInvalidDuration) {
+				t.Errorf("error = %v, want ErrInvalidDuration", err)
+			}
+			if f.requests != 0 {
+				t.Errorf("requests = %d, want 0", f.requests)
+			}
+		})
 	}
 }
 
@@ -395,6 +404,7 @@ func assertDurationIsSentInSeconds(t *testing.T, f *createKeyFixture, zeroIsSent
 		valid time.Duration
 		want  float64
 	}{
+		{name: "one second", valid: time.Second, want: 1},
 		{name: "one hour", valid: time.Hour, want: 3600},
 		{name: "no expiration", valid: 0, want: 0},
 	} {
@@ -420,30 +430,37 @@ func assertDurationIsSentInSeconds(t *testing.T, f *createKeyFixture, zeroIsSent
 	}
 }
 
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
 func TestValidDurationSeconds(t *testing.T) {
+	// https://www.backblaze.com/apidocs/b2-create-key requires whole seconds
+	// strictly below 1000 days (86400000 seconds).
 	for _, tc := range []struct {
 		name    string
 		valid   time.Duration
 		want    int
 		wantErr bool
 	}{
+		{name: "negative half second", valid: -500 * time.Millisecond, wantErr: true},
+		{name: "negative nanosecond", valid: -time.Nanosecond, wantErr: true},
+		{name: "negative second", valid: -time.Second, wantErr: true},
 		{name: "sub-second", valid: 500 * time.Millisecond, wantErr: true},
+		{name: "fractional second", valid: 1500 * time.Millisecond, wantErr: true},
 		{name: "zero", valid: 0, want: 0},
 		{name: "one second", valid: time.Second, want: 1},
 		{name: "ninety minutes", valid: 90 * time.Minute, want: 5400},
+		{name: "largest key lifetime", valid: 86399999 * time.Second, want: 86399999},
+		{name: "1000 days", valid: 86400000 * time.Second, wantErr: true},
+		{name: "above 1000 days", valid: 86400001 * time.Second, wantErr: true},
+		{name: "32-bit overflow", valid: 2147483648 * time.Second, wantErr: true},
+		{name: "largest whole seconds", valid: 9223372036 * time.Second, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := validDurationSeconds(tc.valid)
 			if tc.wantErr {
-				if got != 0 || err == nil {
-					t.Fatalf("validDurationSeconds(%v) = (%d, %v), want (0, error)", tc.valid, got, err)
+				if got != 0 || !errors.Is(err, ErrInvalidDuration) {
+					t.Fatalf("validDurationSeconds(%v) = (%d, %v), want (0, ErrInvalidDuration)", tc.valid, got, err)
+				}
+				if !strings.HasPrefix(err.Error(), "b2: ") {
+					t.Errorf("error = %q, want b2: prefix", err)
 				}
 				return
 			}
