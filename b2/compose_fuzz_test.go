@@ -30,6 +30,19 @@ func TestComposeUploadedPartPlatformSize(t *testing.T) {
 	}
 }
 
+func TestComposeUploadedPartMaximumSize(t *testing.T) {
+	if strconv.IntSize != 64 {
+		t.Skip("the documented 5,000,000,000-byte part limit needs a 64-bit int")
+	}
+	// https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
+	if err := PartFromReader(strings.NewReader(""), 5_000_000_000).validate(false); err != nil {
+		t.Fatalf("validate 5,000,000,000-byte part = %v, want nil", err)
+	}
+	if err := PartFromReader(strings.NewReader(""), 5_000_000_001).validate(false); err == nil {
+		t.Fatal("validate 5,000,000,001-byte part = nil, want maximum-size error")
+	}
+}
+
 func FuzzComposeRange(f *testing.F) {
 	for _, seed := range []string{"", "bytes=0-4999999", "bytes=-1-2", "bytes=+0-+4999999", "bytes=0-9223372036854775807", "bytes=9-1", "bytes=0-1\r\n"} {
 		f.Add(seed, true)

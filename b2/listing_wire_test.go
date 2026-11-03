@@ -2,6 +2,7 @@ package b2
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -30,6 +31,64 @@ func listingPages(pages [2]string, cursor map[string]string) func(b2wiretest.Req
 				Body: `{"status":400,"code":"bad_request","message":"unexpected listing cursor"}`}
 		}
 		return b2wiretest.Response{Status: http.StatusOK, Body: pages[page-1]}
+	}
+}
+
+func TestListDefaultPageSizeUsesB2Default(t *testing.T) {
+	// https://www.backblaze.com/apidocs/b2-list-file-names documents zero as its default of 100.
+	for _, tc := range []struct {
+		name string
+		opts []ListOption
+	}{
+		{"no option", nil},
+		{"explicit zero", []ListOption{ListPageSize(0)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv := b2wiretest.New(t)
+			page := 0
+			srv.Handle("b2_list_file_names", func(b2wiretest.Request) b2wiretest.Response {
+				page++
+				switch page {
+				case 1:
+					files := make([]map[string]string, 100)
+					for i := range files {
+						files[i] = map[string]string{"fileName": fmt.Sprintf("file-%03d", i+1), "fileId": fmt.Sprintf("id-%03d", i+1), "action": "upload"}
+					}
+					body, err := json.Marshal(map[string]any{"files": files, "nextFileName": "file-101"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return b2wiretest.Response{Status: http.StatusOK, Body: string(body)}
+				case 2:
+					return b2wiretest.Response{Status: http.StatusOK, Body: `{"files":[{"fileName":"file-101","fileId":"id-101","action":"upload"}],"nextFileName":null}`}
+				default:
+					return b2wiretest.Response{Status: http.StatusBadRequest, Body: `{"status":400,"code":"bad_request","message":"unexpected listing page"}`}
+				}
+			})
+			bucket := newListingWireBucket(t, ctx, srv)
+			iter := bucket.List(ctx, tc.opts...)
+			var names []string
+			for iter.Next() {
+				names = append(names, iter.Object().Name())
+			}
+			if err := iter.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if len(names) != 101 || names[0] != "file-001" || names[99] != "file-100" || names[100] != "file-101" {
+				t.Fatalf("listed names = %d (%q, %q, %q), want 101 fixed names", len(names), names[0], names[99], names[100])
+			}
+			calls := srv.Calls("b2_list_file_names")
+			if len(calls) != 2 {
+				t.Fatalf("listing requests = %d, want 2", len(calls))
+			}
+			for _, call := range calls {
+				b2wiretest.AssertJSON(t, call, "maxFileCount", 0)
+			}
+			b2wiretest.AssertNoJSON(t, calls[0], "startFileName")
+			b2wiretest.AssertJSON(t, calls[1], "startFileName", "file-101")
+		})
 	}
 }
 
