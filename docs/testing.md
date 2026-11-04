@@ -12,6 +12,11 @@ how to run it, and how to show that a test pins the behavior a PR claims.
 | Repo-owned SDK harness contract | `.sdkharness/` ([README](../.sdkharness/README.md)) | See below | Behavior against the B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator)), one scenario per capability | Behavior the simulator does not model (encryption keys, retention, replication effects) |
 | Live integration | `b2/integration_test.go`, `base/integration_test.go`, `b2/lock_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/ ./base/` | Real B2 behavior for that account on that day | Other accounts, regions or later B2 releases |
 
+Object Lock behavior in `b2/lock.go` is live-only for service semantics. The existing
+`TestObjectLockLive` in `b2/lock_test.go` exercises retention and legal hold uploads and updates
+against B2; it skips without credentials. Local validation and wire tests cannot prove B2 enforces
+those settings.
+
 `make ci` runs build, vet, gofmt, tidy, verify, lint, the race tests, b2keys, cross-compiles and the
 changelog check. Cross-compiling proves the code builds for a platform, not that it runs there; native
 Windows and macOS runs happen in CI.
@@ -104,6 +109,11 @@ For every behavior a PR adds or fixes:
 
 Tests must also fail for the right reason. An unrelated error, such as an aborted request or a test
 server that returns an empty `200`, must not satisfy an assertion meant for a specific failure.
+
+Gremlins v0.6.0 can mark a constant declaration as not covered even when its uses are tested:
+Go's coverage profile has no executable block for `maxReplicationPriority` in `b2/replication.go`.
+`TestNextReplicationPriority` and `TestMappingReplicationPriorityBounds` pin the actual bound at its
+use sites. Adding another assertion against the declaration cannot change that coverage marker.
 
 ## Repo-owned SDK harness contract
 
