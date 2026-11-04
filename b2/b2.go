@@ -928,14 +928,20 @@ func (b *Bucket) getObject(ctx context.Context, name string, ssec *SSECKey) (*Ob
 
 // AuthToken returns an authorization token that can be used to access objects
 // in a private bucket.  Only objects that begin with prefix can be accessed.
-// The token expires after the given duration.
+// The token expires after the given duration. Negative, sub-second or excessive
+// lifetimes return base.ErrInvalidDuration. Longer fractional durations
+// truncate to whole seconds. Pass at least one second; the server rejects zero
+// for download authorization.
 func (b *Bucket) AuthToken(ctx context.Context, prefix string, valid time.Duration) (string, error) {
 	return b.b.getDownloadAuthorization(ctx, prefix, valid, "")
 }
 
 // AuthURL returns a URL for the given object with embedded token and,
 // possibly, b2ContentDisposition arguments.  Leave b2cd blank for no content
-// disposition.
+// disposition. Negative, sub-second or excessive lifetimes return
+// base.ErrInvalidDuration. Longer fractional durations truncate to whole
+// seconds. Pass at least one second; the server rejects zero for download
+// authorization.
 func (o *Object) AuthURL(ctx context.Context, valid time.Duration, b2cd string) (*url.URL, error) {
 	token, err := o.b.b.getDownloadAuthorization(ctx, o.name, valid, b2cd)
 	if err != nil {
