@@ -206,9 +206,10 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 			if !reflect.DeepEqual(events, test.wantEvents) {
 				t.Errorf("file operations = %v, want %v", events, test.wantEvents)
 			}
-			// Write/sync errors preserve the old session; cleanup errors happen
-			// after replacement, so that case must contain the new session.
-			if test.writeErr != nil || test.syncErr != nil {
+			// Failures before the rename (write, sync, chmod, close) preserve the
+			// old session; cleanup errors happen after replacement, so that case
+			// must contain the new session.
+			if test.writeErr != nil || test.syncErr != nil || test.chmodErr != nil || test.closeErr != nil {
 				content, err := os.ReadFile(path)
 				if err != nil {
 					t.Fatal(err)
