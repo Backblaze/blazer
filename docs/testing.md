@@ -16,6 +16,38 @@ how to run it, and how to show that a test pins the behavior a PR claims.
 changelog check. Cross-compiling proves the code builds for a platform, not that it runs there; native
 Windows and macOS runs happen in CI.
 
+## Mutation testing
+
+[Gremlins](https://github.com/go-gremlins/gremlins) v0.6.0 mutates Go source and runs the package tests
+against each change. It is installed as a CLI, so it adds no `go.mod` dependency. Install the pinned
+version once, then run the whole baseline or only code changed from `origin/main`:
+
+```sh
+go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+make mutation
+make mutation-diff
+```
+
+The pull-request `changed-code` job in [mutation.yml](../.github/workflows/mutation.yml) runs the latter
+against changed `b2` and `base` code. The scheduled and manually dispatched `full-suite` job runs the
+whole `b2` and `base` mutation suite and uploads its JSON reports.
+
+Gremlins reports **efficacy** as killed mutations divided by killed plus lived mutations: it describes how
+well the tests distinguish the mutations they exercise. **Mutator coverage** is killed plus lived divided
+by killed plus lived plus not covered: it describes how much source the unit test run exercised. `not
+covered` is expected in this repository: much B2 behavior is live-only and cannot run without credentials.
+Timeouts are reported separately.
+
+The refreshed main baseline, measured at `c3b00f1` with `--timeout-coefficient 20 --workers 2`, unit tests
+only and no `-race`, is:
+
+| Package | Killed | Lived | Not covered | Timed out | Efficacy | Mutator coverage | Previous efficacy / coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `base` | 208 | 17 | 61 | 0 | 92.44% | 78.67% | 71.88% / 20.25% |
+| `b2` | 754 | 27 | 27 | 17 | 96.54% | 96.66% | 64.05% / 47.96% |
+
+See [#290](https://github.com/Backblaze/blazer/issues/290) for the remaining surviving and uncovered gaps.
+
 ## Showing a test pins the fix
 
 For every behavior a PR adds or fixes:
