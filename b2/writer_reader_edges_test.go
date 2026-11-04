@@ -30,8 +30,7 @@ func TestReaderChunkSizeOneAndDefaults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := newSHA1WireBucket(t)
 			srv.Handle("one-byte", func(req b2wiretest.Request) b2wiretest.Response {
-				body := map[string]string{"bytes=0-0": "a", "bytes=1-1": "b", "bytes=2-2": "c", "bytes=0-2": "abc"}[req.Header.Get("Range")]
-				return b2wiretest.Response{Status: http.StatusPartialContent, Body: body}
+				return b2wiretest.RangeDownload("abc", req.Header.Get("Range"))
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

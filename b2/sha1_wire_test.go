@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/Backblaze/blazer/internal/b2wiretest"
@@ -150,29 +148,13 @@ func TestReaderVerify(t *testing.T) {
 
 func downloadResponse(body []byte, sha1 string) func(b2wiretest.Request) b2wiretest.Response {
 	return func(req b2wiretest.Request) b2wiretest.Response {
-		offset := 0
-		if value := req.Header.Get("Range"); value != "" {
-			start, _, ok := strings.Cut(strings.TrimPrefix(value, "bytes="), "-")
-			parsed, err := strconv.Atoi(start)
-			if !ok || err != nil {
-				return b2wiretest.Response{Status: http.StatusBadRequest, Body: `{"status":400,"code":"bad_request","message":"invalid range"}`}
-			}
-			offset = parsed
+		response := b2wiretest.RangeDownload(string(body), req.Header.Get("Range"))
+		if response.Status == http.StatusOK || response.Status == http.StatusPartialContent {
+			response.Header.Set("Content-Type", "application/octet-stream")
+			response.Header.Set("X-Bz-File-Id", "file-"+req.Call)
+			response.Header.Set("X-Bz-File-Name", req.Call)
+			response.Header.Set("X-Bz-Content-Sha1", sha1)
 		}
-		if offset >= len(body) {
-			return b2wiretest.Response{Status: http.StatusRequestedRangeNotSatisfiable, Body: `{"status":416,"code":"range_not_satisfiable","message":"past end"}`}
-		}
-		chunk := body[offset:]
-		headers := make(http.Header)
-		headers.Set("Content-Length", strconv.Itoa(len(chunk)))
-		headers.Set("Content-Type", "application/octet-stream")
-		headers.Set("X-Bz-File-Id", "file-"+req.Call)
-		headers.Set("X-Bz-File-Name", req.Call)
-		headers.Set("X-Bz-Content-Sha1", sha1)
-		status := http.StatusOK
-		if req.Header.Get("Range") != "" {
-			status = http.StatusPartialContent
-		}
-		return b2wiretest.Response{Status: status, Header: headers, Body: string(chunk)}
+		return response
 	}
 }
