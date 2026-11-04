@@ -4,14 +4,17 @@ The #290 baseline used Gremlins v0.6.0, no race detector, two workers, and a tim
 coefficient of 20 on `c3b00f1`. It reported 754 killed, 27 lived, 27 not covered,
 and 17 timed out (96.54% efficacy, 96.66% mutator coverage).
 
-Three of those survivors change observable behavior. The other 24 are equivalent
-for reachable SDK states and are annotated in `b2/mutation_equivalence_test.go`.
-No source file or mutation operator is excluded from normal testing to hide them.
+Three of those survivors change observable behavior. The other 24 remain `LIVED`
+in Gremlins and are classified equivalent by human review of reachable SDK states.
+The equivalence table below is the sole record of those classifications; comments
+do not suppress mutants, and no source file or mutation operator is excluded from
+the complete B2 run.
 
 ## Whole-package remeasurement
 
-The complete B2 subtree was remeasured with Gremlins v0.6.0, no race detector,
-and live credentials unset:
+The complete B2 subtree was remeasured after rebasing on #291 (`2c1d1c8`), using
+Gremlins v0.6.0, no race detector, and live credentials unset. The measured test
+commit is `286f28d`:
 
 ```sh
 env -u B2_APPLICATION_KEY_ID -u B2_APPLICATION_KEY -u B2_ACCOUNT_ID -u B2_ACCOUNT_KEY \
@@ -21,19 +24,34 @@ env -u B2_APPLICATION_KEY_ID -u B2_APPLICATION_KEY -u B2_ACCOUNT_ID -u B2_ACCOUN
 | Run | Killed | Lived | Not covered | Timed out | Efficacy | Mutator coverage |
 | --- | --- | --- | --- | --- | --- | --- |
 | #290 baseline (`c3b00f1`, coefficient 20) | 754 | 27 | 27 | 17 | 96.54% | 96.66% |
-| Part A (coefficient 40) | 774 | 24 | 27 | 0 | 96.99% | 96.73% |
+| Part A review rerun (`286f28d`, coefficient 40) | 774 | 24 | 27 | 0 | 96.99% | 96.73% |
 
 ```text
-Mutation testing completed in 40 minutes 59 seconds
+Mutation testing completed in 46 minutes 48 seconds
 Killed: 774, Lived: 24, Not covered: 27
 Timed out: 0, Not viable: 0, Skipped: 0
 Test efficacy: 96.99%
 Mutator coverage: 96.73%
 ```
 
-Matching the full report to the original mutation types and locations confirms
-all three behavioral survivors and all 17 historical timeouts are `KILLED`.
-All 24 equivalent survivors are `LIVED`. The 27 uncovered mutations remain Part B.
+The final report below classifies mutants by file, line, column, and operator.
+This matters at `writer.go:610:26`: its boundary mutation was a baseline survivor,
+while its negation mutation was a baseline timeout. They are different mutants,
+and each receives exactly one current status. Historical timeout is provenance,
+not a second current classification.
+
+Matching those identities against the saved baseline confirms **3 of the 27
+original survivors are now KILLED and 24 remain LIVED**, with no additional LIVED
+mutants. All **17 historical timeout mutants are now KILLED**; none is currently
+timed out. The boundary mutant at `writer.go:610:26` remains LIVED, while the
+negation mutant at the same location is KILLED.
+
+**96.99% is the efficacy Part A delivers**, up from 96.54%. For the unchanged
+production code and reviewed equivalents, this is the realistic ceiling:
+`774 / (774 + 24) = 96.99%`. Equivalent LIVED mutants remain in that denominator;
+they are not suppressed to inflate the score. The 27 not-covered mutations are
+Part B's separate coverage work, including live-only limitations; they affect
+mutator coverage, not efficacy's denominator.
 
 ## Scoped remeasurement
 
@@ -48,19 +66,21 @@ Test efficacy: 70.13%
 Mutator coverage: 100.00%
 ```
 
-All three real survivors and all 17 historical timeouts are now `KILLED`.
-The remaining 24 original survivors are equivalent. Gremlins reported 23 of
-them as `LIVED`; its `KILLED` result for the equal-value clamp at `reader.go:269`
-did not reproduce with the exact mutation applied alone:
+This earlier scoped run reported the three behavioral survivors and the 17
+historical timeouts `KILLED`, but also reported `reader.go:269:18`
+(`CONDITIONALS_BOUNDARY`) `KILLED`, leaving 23 `LIVED`. Applying that exact mutation
+alone did not reproduce its kill in three full test-suite replays:
 
 ```text
 go test -count=3 -failfast ./b2
 ok  github.com/Backblaze/blazer/b2  33.060s
 ```
 
-That anomalous result is not counted as a behavioral kill; the later full run
-also reports it as `LIVED`. The scoped run deliberately concentrates on known
-survivors, so its percentages are not comparable to a whole-package baseline.
+The source review classifies that equal-value clamp as equivalent. Its earlier
+scoped kill is anomalous and is not counted among the three behavioral kills;
+the current whole-package result above is the authoritative measured status.
+The scoped run concentrates on known survivors, so its percentages are not
+comparable to a whole-package baseline.
 
 ## Behavioral gaps and break proofs
 
@@ -79,6 +99,10 @@ counts, and check that the complete replacement remains readable after a cleanup
 failure.
 
 ## Equivalent survivors
+
+All 24 mutants represented below remain visible as `LIVED`; "equivalent" is a
+human classification, not a Gremlins status or suppression directive. Locations
+refer to the unchanged production code from `c3b00f1`.
 
 | Baseline site(s) | Mutation | Why behavior is unchanged |
 | --- | --- | --- |
@@ -101,17 +125,45 @@ failure.
 
 ## Mutation timeout checks
 
-`.gremlins.yaml` raises the coefficient to 40, retains two workers, and keeps both
-quality thresholds at zero. Completion checks use a five-second failure bound
-and channels; ordinary runs complete without waiting for that bound. An isolated
-test process contains the worker-launch loop, which can otherwise spawn enough
-goroutines to strand context cancellation. In Gremlins'
+`.gremlins.yaml` retains main's comments, two workers, and advisory zero thresholds;
+its only change from main is coefficient 20 to 40. The two Make targets and both
+workflow commands no longer pass `--timeout-coefficient 20`, so the config is the
+single source of the timeout coefficient for local and CI runs. A diagnostic using
+Gremlins v0.6.0's CLI entrypoint with no timeout flag resolved
+`unleash.timeout-coefficient` to 40 from this repository's config. Both
+`make mutation` and `make mutation-diff` completed for `b2` and `base` with the
+real CLI in dry-run mode; the complete mutation measurement is the run above.
+
+Transfer and startup-error checks share a five-second context helper that cancels
+and joins the operation
+before reporting timeout, so fixture cleanup cannot race the operation. An isolated
+test process contains both writer startup and transfers: mutated reader/writer
+launch loops can ignore cancellation or block on internal channels. The common
+one-minute process deadline allows slow race-enabled startup; cancellation kills
+and joins the child and its goroutines. In Gremlins'
 unshuffled, fail-fast invocation they run before longer suites, so broken loops
 and lost wakeups produce test failures instead of a mutation timeout.
 
 New checks cover multipart `Write`/seekable `ReadFrom`, exact uploaded part bytes,
 bounded downloads, empty progress ranges, startup errors, final listing pages,
 resumed part pagination, reader-at offsets, context readers, and hashing.
+
+The review reran the two reader mutations that ignore cancellation, one at a time:
+`reader.go:294:23` (`INCREMENT_DECREMENT`) and `reader.go:301:28`
+(`CONDITIONALS_NEGATION`). Each failed `TestTransferOperationsComplete` normally
+with the parent killing and joining its child, before the outer 90-second test
+timeout:
+
+```text
+--- FAIL: TestTransferOperationsComplete (60.00s)
+operation did not complete within 1m0s; after cancellation: isolated completion: signal: killed
+```
+
+After restoring both production lines, the same focused command passed:
+
+```text
+ok  github.com/Backblaze/blazer/b2  3.601s
+```
 
 Install the CLI outside the SDK module dependencies:
 
@@ -141,26 +193,28 @@ This work changes tests and tooling only. Live B2 and the simulator contract are
 NOT RUN: no SDK behavior, request implementation, or harness scenario changes.
 The untested-code work and all `base` survivors remain separate work.
 
-The 17 historical timeouts were also applied individually. Every row exited 1
-through its regression test (no `go test` timeout), then passed in the restored
-focused suite:
+The 17 historical timeouts were also applied individually before this review.
+The excerpts below are those saved historical proofs, not fresh output from the
+revised helper. Every row exited 1 through its regression test (no `go test`
+timeout), then passed in the restored focused suite. The operator and column
+identify each distinct mutant; the current full-run status is reconciled below.
 
-| Baseline site | Test | Red output (excerpt) | Restored |
-| --- | --- | --- | --- |
-| `compose.go:325` | `TestComposeContextReaderReturnsBytes` | `Read = 0, <nil>, "\x00\x00\x00"; want 3, nil, abc` | PASS |
-| `iterator.go:263` | `TestTerminalListingPageReturnsEOF` | `terminal page = [], <nil>, <nil>; want no objects, nil cursor, EOF` | PASS |
-| `iterator.go:301` | `TestTerminalListingPageReturnsEOF` | `terminal page = [], <nil>, <nil>; want no objects, nil cursor, EOF` | PASS |
-| `reader.go:257` | `TestZeroLengthProgressRangeDoesNotHead` | `Read = 0, context deadline exceeded; want 0, EOF` | PASS |
-| `reader.go:294` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS |
-| `reader.go:301` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS |
-| `readerat.go:33` | `TestReaderAtReturnsRequestedBytesAndPreservesPosition` | `ReadAt = 0, <nil>, "\x00\x00"; want 2, nil, bc` | PASS |
-| `readerat.go:38` | `TestReaderAtReturnsRequestedBytesAndPreservesPosition` | `ReadAt = 0, <nil>, "\x00\x00"; want 2, nil, bc` | PASS |
-| `sync/sync.go:345` | `TestHashReaderCompletesWithDigest` | `hashReader = "", hash reader received an empty buffer; want abc SHA-1, nil` | PASS |
-| `sync/sync.go:357` | `TestHashReaderCompletesWithDigest` | `hashReader = "", <nil>; want abc SHA-1, nil` | PASS |
-| `writer.go:475` | `TestResumeStopsAtFinalPartPage` | `getLargeFile = <nil>, b2_list_parts: 400: unexpected extra part page; want resumed file, nil` | PASS |
-| `writer.go:610` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS |
-| `writer.go:613` | `TestWriterWorkerStartupCompletes` | `one-worker startup did not complete within 5s` | PASS |
-| `writer.go:617` | `TestSendChunkReturnsStartupError` | `sendChunk blocked instead of returning its startup error` | PASS |
-| `writer.go:646` | `TestTransferOperationsComplete` | `panic: runtime error: invalid memory address or nil pointer dereference` | PASS |
-| `writer.go:723` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS |
-| `writer.go:745` | `TestTransferOperationsComplete` | `upload = 6, <nil>; want 9, nil` | PASS |
+| Baseline site | Operator | Test | Historical red output (excerpt) | Restored | Current full run |
+| --- | --- | --- | --- | --- | --- |
+| `compose.go:325:29` | `CONDITIONALS_NEGATION` | `TestComposeContextReaderReturnsBytes` | `Read = 0, <nil>, "\x00\x00\x00"; want 3, nil, abc` | PASS | KILLED |
+| `iterator.go:263:9` | `CONDITIONALS_NEGATION` | `TestTerminalListingPageReturnsEOF` | `terminal page = [], <nil>, <nil>; want no objects, nil cursor, EOF` | PASS | KILLED |
+| `iterator.go:301:9` | `CONDITIONALS_NEGATION` | `TestTerminalListingPageReturnsEOF` | `terminal page = [], <nil>, <nil>; want no objects, nil cursor, EOF` | PASS | KILLED |
+| `reader.go:257:35` | `CONDITIONALS_NEGATION` | `TestZeroLengthProgressRangeDoesNotHead` | `Read = 0, context deadline exceeded; want 0, EOF` | PASS | KILLED |
+| `reader.go:294:23` | `INCREMENT_DECREMENT` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS | KILLED |
+| `reader.go:301:28` | `CONDITIONALS_NEGATION` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS | KILLED |
+| `readerat.go:33:9` | `CONDITIONALS_NEGATION` | `TestReaderAtReturnsRequestedBytesAndPreservesPosition` | `ReadAt = 0, <nil>, "\x00\x00"; want 2, nil, bc` | PASS | KILLED |
+| `readerat.go:38:49` | `CONDITIONALS_NEGATION` | `TestReaderAtReturnsRequestedBytesAndPreservesPosition` | `ReadAt = 0, <nil>, "\x00\x00"; want 2, nil, bc` | PASS | KILLED |
+| `sync/sync.go:345:24` | `ARITHMETIC_BASE` | `TestHashReaderCompletesWithDigest` | `hashReader = "", hash reader received an empty buffer; want abc SHA-1, nil` | PASS | KILLED |
+| `sync/sync.go:357:10` | `CONDITIONALS_NEGATION` | `TestHashReaderCompletesWithDigest` | `hashReader = "", <nil>; want abc SHA-1, nil` | PASS | KILLED |
+| `writer.go:475:11` | `CONDITIONALS_NEGATION` | `TestResumeStopsAtFinalPartPage` | `getLargeFile = <nil>, b2_list_parts: 400: unexpected extra part page; want resumed file, nil` | PASS | KILLED |
+| `writer.go:610:26` | `CONDITIONALS_NEGATION` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS | KILLED |
+| `writer.go:613:41` | `INCREMENT_DECREMENT` | `TestWriterWorkerStartupCompletes` | `one-worker startup did not complete within 5s` | PASS | KILLED |
+| `writer.go:617:9` | `CONDITIONALS_NEGATION` | `TestSendChunkReturnsStartupError` | `sendChunk blocked instead of returning its startup error` | PASS | KILLED |
+| `writer.go:646:9` | `CONDITIONALS_NEGATION` | `TestTransferOperationsComplete` | `panic: runtime error: invalid memory address or nil pointer dereference` | PASS | KILLED |
+| `writer.go:723:11` | `CONDITIONALS_BOUNDARY` | `TestTransferOperationsComplete` | `nine-byte upload and download did not complete within 5s` | PASS | KILLED |
+| `writer.go:745:32` | `CONDITIONALS_NEGATION` | `TestTransferOperationsComplete` | `upload = 6, <nil>; want 9, nil` | PASS | KILLED |
