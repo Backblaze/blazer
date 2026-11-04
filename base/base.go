@@ -1808,15 +1808,15 @@ type limitedReadCloser struct {
 var ErrInvalidRangeResponse = errors.New("invalid range response")
 
 func validateRangeResponse(resp *http.Response, b2Method string, offset, size int64) error {
+	// Reject overlong declared bodies for both 200 and 206 before the reader
+	// can expose bytes. Reject chunked replies because their missing length
+	// prevents that check before data reaches the caller.
 	if resp.StatusCode == http.StatusOK && offset == 0 {
-		if size <= 0 {
-			return nil
-		}
 		contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
 		if err != nil || contentLength < 0 {
 			return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Length %q", ErrInvalidRangeResponse, b2Method, offset, resp.Header.Get("Content-Length"))
 		}
-		if contentLength <= size {
+		if size <= 0 || contentLength <= size {
 			return nil
 		}
 		return fmt.Errorf("%w: %s: range request at offset %d requested %d bytes but HTTP 200 returned %d", ErrInvalidRangeResponse, b2Method, offset, size, contentLength)
@@ -1829,14 +1829,32 @@ func validateRangeResponse(resp *http.Response, b2Method string, offset, size in
 	if !strings.HasPrefix(contentRange, prefix) {
 		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
 	}
-	startEnd := strings.TrimPrefix(contentRange, prefix)
-	dash := strings.IndexByte(startEnd, '-')
-	if dash < 1 {
+	startText, endTotal, ok := strings.Cut(strings.TrimPrefix(contentRange, prefix), "-")
+	if !ok {
 		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
 	}
-	start, err := strconv.ParseInt(startEnd[:dash], 10, 64)
-	if err != nil || start != offset {
+	endText, totalText, ok := strings.Cut(endTotal, "/")
+	if !ok {
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
+	}
+	start, startErr := strconv.ParseInt(startText, 10, 64)
+	end, endErr := strconv.ParseInt(endText, 10, 64)
+	total, totalErr := strconv.ParseInt(totalText, 10, 64)
+	if startErr != nil || endErr != nil || totalErr != nil ||
+		strings.HasPrefix(startText, "+") || strings.HasPrefix(endText, "+") || strings.HasPrefix(totalText, "+") ||
+		start != offset || start < 0 || end < start || total <= end {
 		return fmt.Errorf("%w: %s: range request at offset %d returned Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
+	}
+	expected := total - start
+	if size > 0 && size < expected {
+		expected = size
+	}
+	if end-start+1 != expected {
+		return fmt.Errorf("%w: %s: range request at offset %d returned Content-Range %q, want %d bytes", ErrInvalidRangeResponse, b2Method, offset, contentRange, expected)
+	}
+	contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+	if err != nil || contentLength != expected {
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Length %q, want %d", ErrInvalidRangeResponse, b2Method, offset, resp.Header.Get("Content-Length"), expected)
 	}
 	return nil
 }
@@ -1907,9 +1925,6 @@ func (b *Bucket) downloadFile(ctx context.Context, state authState, uri, b2Metho
 		}
 		if size > 0 {
 			resp.Body = limitedReadCloser{Reader: io.LimitReader(resp.Body, size), Closer: resp.Body}
-			if contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64); err == nil && contentLength > size {
-				resp.Header.Set("Content-Length", strconv.FormatInt(size, 10))
-			}
 		}
 	}
 	return newFileReader(resp)

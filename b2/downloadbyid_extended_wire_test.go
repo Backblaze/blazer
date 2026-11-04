@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/Backblaze/blazer/base"
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 type downloadByIDRequest struct {
@@ -98,22 +99,20 @@ func (w *downloadByIDWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprint(rw, `{"status":404,"code":"not_found","message":"file ID not found"}`)
 			return
 		}
-		if byteRange := r.Header.Get("Range"); status == http.StatusOK && byteRange != "" && !ignoreRange {
-			var start, requestedEnd int
-			if _, err := fmt.Sscanf(byteRange, "bytes=%d-%d", &start, &requestedEnd); err != nil {
-				w.t.Errorf("invalid Range %q: %v", byteRange, err)
-				rw.WriteHeader(http.StatusBadRequest)
+		if status == http.StatusOK {
+			byteRange := r.Header.Get("Range")
+			if ignoreRange {
+				byteRange = ""
+			}
+			response := b2wiretest.RangeDownload(body, byteRange)
+			status, body = response.Status, response.Body
+			if status >= http.StatusBadRequest {
+				rw.WriteHeader(status)
+				_, _ = fmt.Fprint(rw, body)
 				return
 			}
-			if start != 0 || requestedEnd < len(body)-1 {
-				total := start + len(body)
-				end := requestedEnd
-				if end >= total {
-					end = total - 1
-				}
-				body = body[:end-start+1]
-				status = http.StatusPartialContent
-				rw.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, total))
+			for name, values := range response.Header {
+				rw.Header()[name] = values
 			}
 		}
 		if partialBody {
@@ -212,7 +211,7 @@ func TestDownloadFileByIDHeadAndRangeWire(t *testing.T) {
 	bucket := wire.baselineBucket(t)
 	ctx := context.Background()
 
-	reader, err := bucket.downloadFileByID(ctx, "file-id", 2, 3, false, nil)
+	reader, err := bucket.downloadFileByID(ctx, "historical-id", 2, 3, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

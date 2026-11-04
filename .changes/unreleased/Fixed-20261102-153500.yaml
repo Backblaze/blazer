@@ -1,3 +1,0 @@
-kind: Fixed
-body: Range downloads now accept HTTP 200 only at offset 0 for a whole-file response; any other offset requires a 206 whose Content-Range starts at the requested offset, and each response is capped to the requested size (#179).
-time: 2026-11-02T15:35:00-06:00

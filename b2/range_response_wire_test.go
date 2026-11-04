@@ -19,253 +19,174 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/Backblaze/blazer/base"
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
-func TestRangeReaderRejectsFullObjectResponse(t *testing.T) {
-	const object = "abcdef"
-	bucket, ranges := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Length": {"6"}},
-			Body:       io.NopCloser(strings.NewReader(object)),
-			Request:    req,
-		}, nil
-	})
+func newRangeReaderWireBucket(t *testing.T, download func(b2wiretest.Request) b2wiretest.Response) (*Bucket, *b2wiretest.Server) {
+	t.Helper()
+	srv := b2wiretest.New(t)
+	srv.Handle("object", download)
+	return newListingWireBucket(t, context.Background(), srv), srv
+}
 
-	ctx := context.Background()
-	r := bucket.Object("object").NewRangeReader(ctx, 2, 2)
+func assertRangeCalls(t *testing.T, srv *b2wiretest.Server, want ...string) {
+	t.Helper()
+	calls := srv.Calls("object")
+	if len(calls) != len(want) {
+		t.Fatalf("range calls = %d, want %d", len(calls), len(want))
+	}
+	for i, call := range calls {
+		b2wiretest.AssertHeader(t, call, "Range", want[i])
+	}
+}
+
+func TestRangeReaderRejectsFullObjectResponse(t *testing.T) {
+	bucket, srv := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.RangeDownload("abcdef", "")
+	})
+	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
 	r.ChunkSize = 3
 	t.Cleanup(func() { _ = r.Close() })
 
 	n, err := io.ReadFull(r, make([]byte, 3))
-	if n != 0 {
-		t.Fatalf("NewRangeReader read %d bytes from a rejected full-object response, want 0", n)
+	if n != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader = (%d bytes, %v), want (0, invalid range response)", n, err)
 	}
-	if err == nil {
-		t.Fatal("NewRangeReader accepted a full-object response for a range request")
-	}
-	if !errors.Is(err, base.ErrInvalidRangeResponse) {
-		t.Fatalf("NewRangeReader error = %v, want an invalid range response", err)
-	}
-	if got, want := *ranges, []string{"bytes=2-3"}; len(got) != len(want) || got[0] != want[0] {
-		t.Errorf("Range requests = %v, want %v", got, want)
-	}
+	assertRangeCalls(t, srv, "bytes=2-3")
 }
 
 func TestRangeReaderRejectsNonPartialRangeResponse(t *testing.T) {
-	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header: http.Header{
-				"Content-Length": {"2"},
-				"Content-Range":  {"bytes 2-3/6"},
-			},
-			Body:    io.NopCloser(strings.NewReader("cd")),
-			Request: req,
-		}, nil
+	bucket, _ := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+		response := b2wiretest.RangeDownload("cd", "")
+		response.Header.Set("Content-Range", "bytes 2-3/6")
+		return response
 	})
-
 	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
 	t.Cleanup(func() { _ = r.Close() })
 	got, err := io.ReadAll(r)
-	if len(got) != 0 {
-		t.Fatalf("NewRangeReader returned %q from a non-partial range response, want no bytes", got)
-	}
-	if !errors.Is(err, base.ErrInvalidRangeResponse) {
-		t.Fatalf("NewRangeReader error = %v, want an invalid range response", err)
+	if len(got) != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader = (%q, %v), want (empty, invalid range response)", got, err)
 	}
 }
 
 func TestNewReaderAcceptsWholeFileResponse(t *testing.T) {
-	const object = "abcdef"
-	bucket, ranges := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		if req.Header.Get("Range") == "bytes=0-6" {
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Length": {"6"}},
-				Body:       io.NopCloser(strings.NewReader(object)),
-				Request:    req,
-			}, nil
-		}
-		return drJSON(req, http.StatusRequestedRangeNotSatisfiable, map[string]interface{}{
-			"status": http.StatusRequestedRangeNotSatisfiable, "code": "range_not_satisfiable", "message": "past end",
-		})
+	bucket, srv := newRangeReaderWireBucket(t, func(req b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.RangeDownload("abcdef", req.Header.Get("Range"))
 	})
-
 	r := bucket.Object("object").NewReader(context.Background())
 	r.ChunkSize = 7
 	t.Cleanup(func() { _ = r.Close() })
 	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || string(got) != "abcdef" {
+		t.Fatalf("NewReader = (%q, %v), want (abcdef, nil)", got, err)
 	}
-	if string(got) != object {
-		t.Errorf("NewReader returned %q, want %q", got, object)
-	}
-	if want := []string{"bytes=0-6", "bytes=7-13"}; len(*ranges) != len(want) || (*ranges)[0] != want[0] || (*ranges)[1] != want[1] {
-		t.Errorf("Range requests = %v, want %v", *ranges, want)
-	}
+	assertRangeCalls(t, srv, "bytes=0-6", "bytes=7-13")
 }
 
 func TestRangeReaderRejectsOversizedOffsetZeroResponse(t *testing.T) {
-	const object = "abcdef"
-	bucket, ranges := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Length": {"6"}},
-			Body:       io.NopCloser(strings.NewReader(object)),
-			Request:    req,
-		}, nil
+	bucket, srv := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.RangeDownload("abcdef", "")
 	})
-
 	r := bucket.Object("object").NewRangeReader(context.Background(), 0, 2)
 	t.Cleanup(func() { _ = r.Close() })
 	got, err := io.ReadAll(r)
-	if len(got) != 0 {
-		t.Fatalf("NewRangeReader returned %q from an oversized HTTP 200 response, want no bytes", got)
+	if len(got) != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader = (%q, %v), want (empty, invalid range response)", got, err)
 	}
-	if !errors.Is(err, base.ErrInvalidRangeResponse) {
-		t.Fatalf("NewRangeReader error = %v, want an invalid range response", err)
-	}
-	if got, want := *ranges, []string{"bytes=0-1"}; len(got) != len(want) || got[0] != want[0] {
-		t.Errorf("Range requests = %v, want %v", got, want)
-	}
+	assertRangeCalls(t, srv, "bytes=0-1")
 }
 
 func TestRangeReaderRejectsUnboundedFullObjectResponse(t *testing.T) {
-	const object = "abcdef"
-	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Length": {"6"}},
-			Body:       io.NopCloser(strings.NewReader(object)),
-			Request:    req,
-		}, nil
+	bucket, _ := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.RangeDownload("abcdef", "")
 	})
-
 	r := bucket.Object("object").NewRangeReader(context.Background(), 0, -1)
 	r.ChunkSize = 3
 	t.Cleanup(func() { _ = r.Close() })
 	got := make([]byte, 4)
 	n, err := io.ReadFull(r, got)
-	if n != 0 {
-		t.Fatalf("NewRangeReader returned %q (%d bytes) from an oversized HTTP 200 response, want no bytes", got[:n], n)
-	}
-	if !errors.Is(err, base.ErrInvalidRangeResponse) {
-		t.Fatalf("NewRangeReader error = %v, want an invalid range response", err)
+	if n != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader = (%q, %v), want (empty, invalid range response)", got[:n], err)
 	}
 }
 
 func TestRangeReaderRejectsWrongContentRange(t *testing.T) {
-	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusPartialContent,
-			Header: http.Header{
-				"Content-Length": {"2"},
-				"Content-Range":  {"bytes 0-1/6"},
-			},
-			Body:    io.NopCloser(strings.NewReader("ab")),
-			Request: req,
-		}, nil
-	})
-
-	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
-	t.Cleanup(func() { _ = r.Close() })
-	if _, err := io.ReadFull(r, make([]byte, 2)); err == nil {
-		t.Fatal("NewRangeReader accepted a response whose Content-Range starts before the requested offset")
-	}
-}
-
-func TestRangeReaderCapsOversizedRangeResponse(t *testing.T) {
-	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusPartialContent,
-			Header: http.Header{
-				"Content-Length": {"6"},
-				"Content-Range":  {"bytes 2-3/6"},
-			},
-			Body:    io.NopCloser(strings.NewReader("cdefgh")),
-			Request: req,
-		}, nil
-	})
-
-	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
-	t.Cleanup(func() { _ = r.Close() })
-	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "cd"; string(got) != want {
-		t.Errorf("NewRangeReader returned %q, want %q", got, want)
-	}
-}
-
-func TestRangeReaderPreservesEqualContentLength(t *testing.T) {
-	var response *http.Response
-	bucket, _ := newRangeReaderWireBucket(t, func(req *http.Request) (*http.Response, error) {
-		// A leading zero is valid Content-Length syntax. Its spelling lets this
-		// test observe that an equal length was not rewritten by the clamp.
-		response = &http.Response{
-			StatusCode: http.StatusPartialContent,
-			Header: http.Header{
-				"Content-Length": {"02"},
-				"Content-Range":  {"bytes 2-3/6"},
-			},
-			Body:    io.NopCloser(strings.NewReader("cd")),
-			Request: req,
-		}
-		return response, nil
-	})
-
-	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
-	t.Cleanup(func() { _ = r.Close() })
-	got, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "cd"; string(got) != want {
-		t.Errorf("NewRangeReader returned %q, want %q", got, want)
-	}
-	if got, want := response.Header.Get("Content-Length"), "02"; got != want {
-		t.Errorf("Content-Length after an equal range response = %q, want unchanged %q", got, want)
-	}
-}
-
-func newRangeReaderWireBucket(t *testing.T, download func(*http.Request) (*http.Response, error)) (*Bucket, *[]string) {
-	t.Helper()
-	var ranges []string
-	transport := drTransport(func(req *http.Request) (*http.Response, error) {
-		switch req.Header.Get("X-Blazer-Method") {
-		case "b2_authorize_account":
-			return drJSON(req, http.StatusOK, map[string]interface{}{
-				"accountId": "account", "authorizationToken": "token",
-				"apiInfo": map[string]interface{}{"storageApi": map[string]interface{}{
-					"apiUrl": "https://b2.test", "downloadUrl": "https://b2.test",
-				}},
+	for _, span := range []string{"bytes 0-1/6", "bytes 2-999999/10"} {
+		t.Run(span, func(t *testing.T) {
+			bucket, _ := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+				response := b2wiretest.RangeDownload("abcdef", "bytes=2-3")
+				response.Header.Set("Content-Range", span)
+				return response
 			})
-		case "b2_list_buckets":
-			return drJSON(req, http.StatusOK, map[string]interface{}{"buckets": []interface{}{map[string]interface{}{
-				"bucketId": "bucket-id", "bucketName": "bucket", "bucketType": "allPrivate", "bucketInfo": map[string]string{},
-			}}})
-		case "b2_download_file_by_name":
-			ranges = append(ranges, req.Header.Get("Range"))
-			return download(req)
-		default:
-			return drJSON(req, http.StatusNotFound, map[string]interface{}{"status": 404, "code": "not_found", "message": "unexpected"})
-		}
-	})
+			r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
+			t.Cleanup(func() { _ = r.Close() })
+			got, err := io.ReadAll(r)
+			if len(got) != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+				t.Fatalf("NewRangeReader = (%q, %v), want (empty, invalid range response)", got, err)
+			}
+		})
+	}
+}
 
-	client, err := NewClient(context.Background(), "account", "key", APIBase("https://b2.test"), Transport(transport))
+func TestRangeReaderRejectsOversizedPartialResponse(t *testing.T) {
+	bucket, _ := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+		response := b2wiretest.RangeDownload("abcdef", "bytes=2-3")
+		response.Body = "cdefgh"
+		response.Header.Set("Content-Length", "6")
+		return response
+	})
+	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
+	t.Cleanup(func() { _ = r.Close() })
+	got, err := io.ReadAll(r)
+	if len(got) != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader = (%q, %v), want (empty, invalid range response)", got, err)
+	}
+}
+
+func TestRangeReaderAcceptsMatchingContentLength(t *testing.T) {
+	bucket, srv := newRangeReaderWireBucket(t, func(req b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.RangeDownload("abcdef", req.Header.Get("Range"))
+	})
+	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
+	t.Cleanup(func() { _ = r.Close() })
+	got, err := io.ReadAll(r)
+	if err != nil || string(got) != "cd" {
+		t.Fatalf("NewRangeReader = (%q, %v), want (cd, nil)", got, err)
+	}
+	assertRangeCalls(t, srv, "bytes=2-3")
+}
+
+func TestRangeReaderRejectsMissingContentRange(t *testing.T) {
+	bucket, _ := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.Response{Status: http.StatusPartialContent, Header: http.Header{"Content-Length": {"2"}}, Body: "cd"}
+	})
+	r := bucket.Object("object").NewRangeReader(context.Background(), 2, 2)
+	t.Cleanup(func() { _ = r.Close() })
+	got, err := io.ReadAll(r)
+	if len(got) != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader = (%q, %v), want (empty, invalid range response)", got, err)
+	}
+}
+
+func TestRangeReaderRejectsChunkedWholeFileResponse(t *testing.T) {
+	bucket, srv := newRangeReaderWireBucket(t, func(b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.Response{Status: http.StatusOK, Header: http.Header{"Transfer-Encoding": {"chunked"}}, Body: "aa"}
+	})
+	probe, err := http.Get(srv.URL() + "/file/bucket/object")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := client.Bucket(context.Background(), "bucket")
-	if err != nil {
-		t.Fatal(err)
+	_ = probe.Body.Close()
+	if got := probe.Header.Get("Content-Length"); got != "" {
+		t.Fatalf("chunked fixture Content-Length = %q, want absent", got)
 	}
-	return bucket, &ranges
+	r := bucket.Object("object").NewRangeReader(context.Background(), 0, 2)
+	t.Cleanup(func() { _ = r.Close() })
+	got, err := io.ReadAll(r)
+	if len(got) != 0 || !errors.Is(err, base.ErrInvalidRangeResponse) {
+		t.Fatalf("NewRangeReader = (%q, %v), want (empty, invalid range response)", got, err)
+	}
 }

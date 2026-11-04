@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/Backblaze/blazer/internal/b2types"
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 type ssecWireRequest struct {
@@ -73,27 +74,15 @@ func newSSECWireFixture(t *testing.T) (*B2, *Bucket, *httptest.Server, *[]ssecWi
 		case strings.HasSuffix(r.URL.Path, "/b2_copy_file"):
 			_, _ = fmt.Fprint(w, `{"fileId":"copy","fileName":"dst","action":"copy","contentLength":1,"uploadTimestamp":1}`)
 		case strings.HasPrefix(r.URL.Path, "/file/bucket/"):
-			body := "xxxxx"
-			status := http.StatusOK
-			if byteRange := r.Header.Get("Range"); byteRange != "" {
-				var start, end int
-				if _, err := fmt.Sscanf(byteRange, "bytes=%d-%d", &start, &end); err != nil {
-					t.Errorf("invalid Range %q: %v", byteRange, err)
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				if start != 0 || end != len(body)-1 {
-					body = body[start : end+1]
-					status = http.StatusPartialContent
-					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/5", start, end))
-				}
+			response := b2wiretest.RangeDownload("xxxxx", r.Header.Get("Range"))
+			for name, values := range response.Header {
+				w.Header()[name] = values
 			}
-			w.Header().Set("Content-Length", fmt.Sprint(len(body)))
 			w.Header().Set("Content-Type", "text/plain")
 			w.Header().Set("X-Bz-File-Id", "small")
 			if r.Method != http.MethodHead {
-				w.WriteHeader(status)
-				_, _ = fmt.Fprint(w, body)
+				w.WriteHeader(response.Status)
+				_, _ = fmt.Fprint(w, response.Body)
 			}
 		default:
 			http.NotFound(w, r)

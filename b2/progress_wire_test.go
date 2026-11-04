@@ -26,6 +26,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 type progressWireRequest struct {
@@ -110,50 +112,17 @@ func (w *progressWire) download(t *testing.T, rw http.ResponseWriter, r *http.Re
 		rw.Header().Set("Content-Length", strconv.Itoa(len(data)))
 		return
 	}
-	start, end := int64(0), int64(len(data)-1)
-	byteRange := r.Header.Get("Range")
-	if byteRange != "" {
-		bounds := strings.SplitN(strings.TrimPrefix(byteRange, "bytes="), "-", 2)
-		if len(bounds) != 2 {
-			t.Errorf("invalid Range %q", byteRange)
-			rw.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		var err error
-		start, err = strconv.ParseInt(bounds[0], 10, 64)
-		if err != nil {
-			t.Errorf("invalid Range %q: %v", byteRange, err)
-			rw.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if bounds[1] != "" {
-			end, err = strconv.ParseInt(bounds[1], 10, 64)
-			if err != nil {
-				t.Errorf("invalid Range %q: %v", byteRange, err)
-				rw.WriteHeader(http.StatusBadRequest)
-				return
-			}
-		}
+	response := b2wiretest.RangeDownload(string(data), r.Header.Get("Range"))
+	for name, values := range response.Header {
+		rw.Header()[name] = values
 	}
-	if start < 0 || start >= int64(len(data)) {
-		rw.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-		_, _ = fmt.Fprint(rw, `{"status":416,"code":"range_not_satisfiable","message":"past end"}`)
+	if response.Status >= http.StatusBadRequest {
+		rw.WriteHeader(response.Status)
+		_, _ = fmt.Fprint(rw, response.Body)
 		return
 	}
-	if end >= int64(len(data)) {
-		end = int64(len(data)) - 1
-	}
-	if end < start {
-		t.Errorf("invalid download range: %d-%d", start, end)
-		rw.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	chunk := data[int(start) : int(end)+1]
-	rw.Header().Set("Content-Length", strconv.Itoa(len(chunk)))
-	if byteRange != "" && (start != 0 || end != int64(len(data)-1)) {
-		rw.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(data)))
-		rw.WriteHeader(http.StatusPartialContent)
-	}
+	chunk := []byte(response.Body)
+	rw.WriteHeader(response.Status)
 	first := len(chunk)
 	if first > 1024 {
 		first = 1024
