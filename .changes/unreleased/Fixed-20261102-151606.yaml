@@ -1,0 +1,3 @@
+kind: Fixed
+body: x/b2sim bucket responses from b2_list_buckets, b2_create_bucket, and b2_update_bucket now include the documented accountId and options fields (#234).
+time: 2026-11-02T15:16:06-06:00
