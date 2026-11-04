@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"testing"
 	"time"
 
@@ -35,22 +36,14 @@ func completionResult(t *testing.T, timeout time.Duration, operation func(contex
 	}
 }
 
-func TestWriterWorkerStartupCompletes(t *testing.T) {
-	const child = "BLAZER_WORKER_STARTUP_CHILD"
-	if os.Getenv(child) == "1" {
-		writer := newProgressReviewBucket(t).Object("startup").NewWriter(context.Background())
-		writer.ChunkSize = 3 // Deliberately below B2's 5MB minimum to exercise multipart with the test fake.
-		writer.ConcurrentUploads = 1
-		if n, err := io.WriteString(writer, "abcdefghi"); n != 9 || err != nil {
-			t.Fatalf("Write = %d, %v; want 9, nil", n, err)
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatal(err)
-		}
-		return
+func inCompletionProcess(t *testing.T) bool {
+	t.Helper()
+	const child = "BLAZER_COMPLETION_CHILD"
+	if os.Getenv(child) == t.Name() {
+		return true
 	}
-	// An unbounded worker-launch loop can exhaust memory or stall context
-	// cancellation. Isolate it so the failure bound cannot itself be stranded.
+	// Mutated reader/writer launch loops can ignore cancellation or block on
+	// internal channels. A process boundary lets the parent stop and join them.
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -58,19 +51,38 @@ func TestWriterWorkerStartupCompletes(t *testing.T) {
 	// Allow slow race-enabled runners ample startup time. CommandContext kills
 	// an unbounded launch loop, and completionResult waits for the child to exit.
 	if err := completionResult(t, time.Minute, func(ctx context.Context) error {
-		command := exec.CommandContext(ctx, executable, "-test.run=^TestWriterWorkerStartupCompletes$", "-test.timeout=2m")
-		command.Env = append(os.Environ(), child+"=1")
+		command := exec.CommandContext(ctx, executable, "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.timeout=2m")
+		command.Env = append(os.Environ(), child+"="+t.Name())
 		output, err := command.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("worker startup: %w\n%s", err, output)
+			return fmt.Errorf("isolated completion: %w\n%s", err, output)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return false
+}
+
+func TestWriterWorkerStartupCompletes(t *testing.T) {
+	if !inCompletionProcess(t) {
+		return
+	}
+	writer := newProgressReviewBucket(t).Object("startup").NewWriter(context.Background())
+	writer.ChunkSize = 3 // Deliberately below B2's 5MB minimum to exercise multipart with the test fake.
+	writer.ConcurrentUploads = 1
+	if n, err := io.WriteString(writer, "abcdefghi"); n != 9 || err != nil {
+		t.Fatalf("Write = %d, %v; want 9, nil", n, err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestTransferOperationsComplete(t *testing.T) {
+	if !inCompletionProcess(t) {
+		return
+	}
 	for _, seekable := range []bool{false, true} {
 		t.Run(fmt.Sprintf("seekable=%t", seekable), func(t *testing.T) {
 			srv, bucket := newSHA1WireBucket(t)
