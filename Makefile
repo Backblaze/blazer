@@ -66,12 +66,12 @@ scripts-test:
 # Install the pinned CLI first: go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 mutation:
 	@set -e; for package in $(MUTATION_PACKAGES); do \
-		$(GREMLINS) unleash --timeout-coefficient 20 --workers 2 "$$package"; \
+		$(GREMLINS) unleash --workers 2 "$$package"; \
 	done
 
 mutation-diff:
 	@set -e; for package in $(MUTATION_PACKAGES); do \
-		$(GREMLINS) unleash --diff $(BASE_REF) --timeout-coefficient 20 --workers 2 "$$package"; \
+		$(GREMLINS) unleash --diff $(BASE_REF) --workers 2 "$$package"; \
 	done
 
 # Holds a release while solvable security or quality findings are open (see RELEASE.md).
