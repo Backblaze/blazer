@@ -118,6 +118,11 @@ use sites. Adding another assertion against the declaration cannot change that c
 The [B2 mutation-testing audit](mutation-testing.md) records #290's survivor classifications,
 break proofs, timeout checks, and the Gremlins v0.6.0 commands used to reproduce them.
 
+The `a_` prefix on `b2/a_transfer_termination_test.go` and
+`b2/sync/a_hash_completion_test.go` deliberately places their completion checks before
+longer suites in Gremlins' unshuffled, fail-fast test order. This lets a broken loop fail
+within the mutation budget; ordinary shuffled test runs do not depend on that order.
+
 ## Repo-owned SDK harness contract
 
 `.sdkharness/tests.tsv` lists one row per scenario: level (`conformance`, `resilience`, `health`), scenario

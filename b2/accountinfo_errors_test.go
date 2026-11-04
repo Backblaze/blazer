@@ -206,6 +206,8 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 			if !reflect.DeepEqual(events, test.wantEvents) {
 				t.Errorf("file operations = %v, want %v", events, test.wantEvents)
 			}
+			// Write/sync errors preserve the old session; cleanup errors happen
+			// after replacement, so that case must contain the new session.
 			if test.writeErr != nil || test.syncErr != nil {
 				content, err := os.ReadFile(path)
 				if err != nil {
@@ -279,7 +281,11 @@ func TestAccountInfoRenameRetriesUntilSuccessOrDeadline(t *testing.T) {
 	sharingErr := errors.New("sharing violation")
 	lastErr := errors.New("last sharing violation")
 	for _, succeed := range []bool{true, false} {
-		t.Run(map[bool]string{true: "third attempt succeeds", false: "deadline returns last error"}[succeed], func(t *testing.T) {
+		name := "deadline returns last error"
+		if succeed {
+			name = "third attempt succeeds"
+		}
+		t.Run(name, func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "session")
 			calls := 0
 			rename := func(tmp, target string) error {

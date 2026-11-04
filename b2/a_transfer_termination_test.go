@@ -15,8 +15,26 @@ import (
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
-// Gremlins runs these before the larger suites without shuffle, so a broken
-// loop or lost wakeup reports a test failure within the mutation budget.
+const completionABCSHA1 = "a9993e364706816aba3e25717850c26c9cd0d89d"
+
+func completionResult(t *testing.T, timeout time.Duration, operation func(context.Context) error) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- operation(ctx) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		cancel()
+		// Join before failing so fixture cleanup cannot race a running operation.
+		err := <-done
+		t.Fatalf("operation did not complete within %s; after cancellation: %v", timeout, err)
+		return nil
+	}
+}
+
 func TestWriterWorkerStartupCompletes(t *testing.T) {
 	const child = "BLAZER_WORKER_STARTUP_CHILD"
 	if os.Getenv(child) == "1" {
@@ -37,16 +55,18 @@ func TestWriterWorkerStartupCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, executable, "-test.run=^TestWriterWorkerStartupCompletes$", "-test.timeout=1m")
-	command.Env = append(os.Environ(), child+"=1")
-	output, err := command.CombinedOutput()
-	if ctx.Err() != nil {
-		t.Fatal("one-worker startup did not complete within 5s")
-	}
-	if err != nil {
-		t.Fatalf("worker startup: %v\n%s", err, output)
+	// Allow slow race-enabled runners ample startup time. CommandContext kills
+	// an unbounded launch loop, and completionResult waits for the child to exit.
+	if err := completionResult(t, time.Minute, func(ctx context.Context) error {
+		command := exec.CommandContext(ctx, executable, "-test.run=^TestWriterWorkerStartupCompletes$", "-test.timeout=2m")
+		command.Env = append(os.Environ(), child+"=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("worker startup: %w\n%s", err, output)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -64,12 +84,10 @@ func TestTransferOperationsComplete(t *testing.T) {
 				}
 				return responses[request.Header.Get("Range")]
 			})
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			done := make(chan error, 1)
-			go func() {
+			if err := completionResult(t, 5*time.Second, func(ctx context.Context) error {
 				object := bucket.Object("completion")
 				writer := object.NewWriter(ctx)
+				defer writer.Close()
 				writer.ChunkSize = 3         // Deliberately below B2's 5MB minimum to exercise multipart with the recording fake.
 				writer.ConcurrentUploads = 0 // Must still start one worker.
 				const payload = "abcdefghi"
@@ -84,12 +102,10 @@ func TestTransferOperationsComplete(t *testing.T) {
 					n = int64(written)
 				}
 				if err != nil || n != 9 {
-					done <- fmt.Errorf("upload = %d, %v; want 9, nil", n, err)
-					return
+					return fmt.Errorf("upload = %d, %v; want 9, nil", n, err)
 				}
 				if err := writer.Close(); err != nil {
-					done <- err
-					return
+					return err
 				}
 				reader := object.NewRangeReader(ctx, 0, 9)
 				reader.ChunkSize = 3
@@ -97,18 +113,11 @@ func TestTransferOperationsComplete(t *testing.T) {
 				got, err := io.ReadAll(reader)
 				closeErr := reader.Close()
 				if err != nil || closeErr != nil || string(got) != payload {
-					done <- fmt.Errorf("download = %q, %v; Close = %v; want %q, nil, nil", got, err, closeErr, payload)
-					return
+					return fmt.Errorf("download = %q, %v; Close = %v; want %q, nil, nil", got, err, closeErr, payload)
 				}
-				done <- nil
-			}()
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatal(err)
-				}
-			case <-ctx.Done():
-				t.Fatal("nine-byte upload and download did not complete within 5s")
+				return nil
+			}); err != nil {
+				t.Fatal(err)
 			}
 			parts := srv.Calls("upload_part")
 			if len(parts) != 3 {
@@ -161,18 +170,12 @@ func TestSendChunkReturnsStartupError(t *testing.T) {
 	bucket := newProgressReviewBucket(t)
 	want := errors.New("start large file failed")
 	bucket.b = startupErrorBucket{bucket.b, want}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	writer := bucket.Object("startup").NewWriter(ctx)
-	done := make(chan error, 1)
-	go func() { done <- writer.sendChunk() }()
-	select {
-	case err := <-done:
-		if !errors.Is(err, want) {
-			t.Fatalf("sendChunk = %v, want startup error", err)
-		}
-	case <-ctx.Done():
-		t.Fatal("sendChunk blocked instead of returning its startup error")
+	err := completionResult(t, 5*time.Second, func(ctx context.Context) error {
+		writer := bucket.Object("startup").NewWriter(ctx)
+		return writer.sendChunk()
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("sendChunk = %v, want startup error", err)
 	}
 }
 
@@ -212,7 +215,7 @@ func TestResumeStopsAtFinalPartPage(t *testing.T) {
 	srv, bucket := newSHA1WireBucket(t)
 	srv.Reply("b2_list_unfinished_large_files", http.StatusOK, `{"files":[{"fileId":"resume-id","fileName":"resume","action":"start"}],"nextFileId":null}`)
 	srv.ReplySequence("b2_list_parts",
-		b2wiretest.Response{Body: `{"parts":[{"partNumber":1,"contentLength":3,"contentSha1":"a9993e364706816aba3e25717850c26c9cd0d89d"}],"nextPartNumber":null}`},
+		b2wiretest.Response{Body: fmt.Sprintf(`{"parts":[{"partNumber":1,"contentLength":3,"contentSha1":%q}],"nextPartNumber":null}`, completionABCSHA1)},
 		b2wiretest.Response{Status: http.StatusBadRequest, Body: `{"status":400,"code":"bad_request","message":"unexpected extra part page"}`})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -225,7 +228,7 @@ func TestResumeStopsAtFinalPartPage(t *testing.T) {
 	if got := len(srv.Calls("b2_list_parts")); got != 1 {
 		t.Errorf("list parts requests = %d, want 1", got)
 	}
-	if len(writer.seen) != 1 || writer.seen[1] != "a9993e364706816aba3e25717850c26c9cd0d89d" {
+	if len(writer.seen) != 1 || writer.seen[1] != completionABCSHA1 {
 		t.Errorf("resumed hashes = %v, want part 1 abc SHA-1", writer.seen)
 	}
 }
