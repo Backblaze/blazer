@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -72,9 +73,12 @@ func TestClientServeHTTPStatus(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("ServeHTTP status = %d, want 200", response.Code)
 	}
-	for _, want := range []string{"b2 client status", "b2_list_buckets", "<td>1</td>"} {
+	for _, want := range []string{"b2 client status"} {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Errorf("ServeHTTP body missing %q: %s", want, response.Body.String())
 		}
+	}
+	if !regexp.MustCompile(`(?s)<tr>\s*<td>b2_list_buckets</td>\s*<td>1</td>\s*</tr>`).MatchString(response.Body.String()) {
+		t.Errorf("ServeHTTP body missing b2_list_buckets count row: %s", response.Body.String())
 	}
 }
