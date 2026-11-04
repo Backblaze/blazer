@@ -1745,17 +1745,17 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 	return files, b2resp.NextName, b2resp.NextID, nil
 }
 
-// ErrInvalidDuration reports a negative, fractional-second or excessive
-// key or download-authorization lifetime.
+// ErrInvalidDuration reports a negative, sub-second or excessive key or
+// download-authorization lifetime.
 var ErrInvalidDuration = errors.New("b2: invalid duration")
 
-// validDurationSeconds converts a lifetime without truncation or int overflow.
+// validDurationSeconds converts a lifetime to wire seconds without int overflow.
 func validDurationSeconds(valid time.Duration) (int, error) {
 	if valid < 0 {
 		return 0, fmt.Errorf("%w %v: must not be negative", ErrInvalidDuration, valid)
 	}
-	if valid > 0 && valid%time.Second != 0 {
-		return 0, fmt.Errorf("%w %v: must be a whole number of seconds", ErrInvalidDuration, valid)
+	if valid > 0 && valid < time.Second {
+		return 0, fmt.Errorf("%w %v: must be at least one second", ErrInvalidDuration, valid)
 	}
 	// b2_create_key requires less than 1000 days; this also fits a 32-bit int.
 	// https://www.backblaze.com/apidocs/b2-create-key
@@ -1766,9 +1766,10 @@ func validDurationSeconds(valid time.Duration) (int, error) {
 }
 
 // GetDownloadAuthorization wraps b2_get_download_authorization. Negative
-// durations, fractional seconds and lifetimes of 1000 days or more return
-// ErrInvalidDuration before sending a request. The server requires a duration
-// from one second to one week; zero is still sent for the server to reject.
+// durations, positive durations below one second and lifetimes of 1000 days or
+// more return ErrInvalidDuration before sending a request. Longer fractional
+// durations truncate to whole seconds. The server requires a duration from one
+// second to one week; zero is still sent for the server to reject.
 func (b *Bucket) GetDownloadAuthorization(ctx context.Context, prefix string, valid time.Duration, contentDisposition string) (string, error) {
 	validSeconds, err := validDurationSeconds(valid)
 	if err != nil {
@@ -2095,10 +2096,10 @@ func keyBucketIDs(key b2types.Key) []string {
 
 // CreateKey wraps v3 b2_create_key, producing a single-bucket key (or, with an
 // empty bucketID, an unrestricted one) that v3-only clients can still use. A
-// zero duration creates a non-expiring key; otherwise the lifetime must be a
-// positive whole number of seconds below 1000 days. Invalid lifetimes return
-// ErrInvalidDuration before sending a request. For a Multi-Bucket Application
-// Key, use CreateKeyMultiBucket.
+// zero duration creates a non-expiring key; otherwise the lifetime must be at
+// least one second and below 1000 days. Longer fractional durations truncate
+// to whole seconds. Invalid lifetimes return ErrInvalidDuration before sending
+// a request. For a Multi-Bucket Application Key, use CreateKeyMultiBucket.
 func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid time.Duration, bucketID string, prefix string) (*Key, error) {
 	validSeconds, err := validDurationSeconds(valid)
 	if err != nil {
@@ -2118,10 +2119,11 @@ func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid ti
 
 // CreateKeyMultiBucket wraps v4 b2_create_key, producing a Multi-Bucket
 // Application Key. A zero duration creates a non-expiring key; otherwise the
-// lifetime must be a positive whole number of seconds below 1000 days. Invalid
-// lifetimes return ErrInvalidDuration before sending a request. Such keys are
-// unusable by v3-only clients; for v3 compatibility, create one CreateKey per
-// bucket instead.
+// lifetime must be at least one second and below 1000 days. Longer fractional
+// durations truncate to whole seconds. Invalid lifetimes return
+// ErrInvalidDuration before sending a request. Such keys are unusable by
+// v3-only clients; for v3 compatibility, create one CreateKey per bucket
+// instead.
 func (b *B2) CreateKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (*Key, error) {
 	validSeconds, err := validDurationSeconds(valid)
 	if err != nil {

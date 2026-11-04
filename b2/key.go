@@ -72,8 +72,9 @@ type keyOptions struct {
 type KeyOption func(*keyOptions)
 
 // Lifetime requests a key with the given lifetime. A zero lifetime creates a
-// non-expiring key. Otherwise the lifetime must be a positive whole number of
-// seconds below 1000 days; CreateKey returns base.ErrInvalidDuration if invalid.
+// non-expiring key. Otherwise the lifetime must be at least one second and
+// below 1000 days; longer fractional durations truncate to whole seconds.
+// CreateKey returns base.ErrInvalidDuration if invalid.
 func Lifetime(d time.Duration) KeyOption {
 	return func(k *keyOptions) {
 		k.lifetime = d
@@ -81,10 +82,10 @@ func Lifetime(d time.Duration) KeyOption {
 }
 
 // Deadline requests a key that expires after the given date. The duration from
-// the time Deadline is called must satisfy Lifetime's whole-second bounds;
-// CreateKey rejects past deadlines and fractional-second lifetimes.
+// the time Deadline is called must satisfy Lifetime's bounds; CreateKey rejects
+// past deadlines and deadlines less than one second away.
 func Deadline(t time.Time) KeyOption {
-	d := t.Sub(time.Now())
+	d := time.Until(t)
 	return Lifetime(d)
 }
 

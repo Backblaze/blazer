@@ -25,7 +25,7 @@ import (
 )
 
 func TestCredentialLifetimeValidationWire(t *testing.T) {
-	// Whole-second bounds: https://www.backblaze.com/apidocs/b2-create-key
+	// Lifetime bounds: https://www.backblaze.com/apidocs/b2-create-key
 	// and https://www.backblaze.com/apidocs/b2-get-download-authorization.
 	srv, client := newCreateKeyWire(t)
 	bucket := createKeyWireBucket(t, srv, client)
@@ -60,7 +60,7 @@ func TestCredentialLifetimeValidationWire(t *testing.T) {
 		t.Run(method.name, func(t *testing.T) {
 			for _, valid := range []time.Duration{
 				500 * time.Millisecond, -500 * time.Millisecond, -time.Nanosecond, -time.Second,
-				1500 * time.Millisecond, 86400000 * time.Second, 2147483648 * time.Second,
+				86400000 * time.Second, 2147483648 * time.Second,
 			} {
 				t.Run(valid.String(), func(t *testing.T) {
 					before := len(srv.Requests())
@@ -86,8 +86,36 @@ func TestCredentialLifetimeValidationWire(t *testing.T) {
 					t.Errorf("validDurationInSeconds = %v, want %v", got, want)
 				}
 			})
+			t.Run("one and a half seconds", func(t *testing.T) {
+				before := len(srv.Requests())
+				if err := method.call(1500 * time.Millisecond); err != nil {
+					t.Fatal(err)
+				}
+				requests := srv.Requests()[before:]
+				if len(requests) != 1 || requests[0].Path != method.path {
+					t.Fatalf("credential requests = %v, want one to %s", requests, method.path)
+				}
+				if got, want := requests[0].JSON["validDurationInSeconds"], float64(1); got != want {
+					t.Errorf("validDurationInSeconds = %v, want %v", got, want)
+				}
+			})
 		})
 	}
+	t.Run("future deadline", func(t *testing.T) {
+		deadline := time.Now().Add(time.Hour)
+		want := float64(time.Until(deadline) / time.Second)
+		before := len(srv.Requests())
+		if _, err := client.CreateKey(ctx, "key", Deadline(deadline)); err != nil {
+			t.Fatal(err)
+		}
+		requests := srv.Requests()[before:]
+		if len(requests) != 1 || requests[0].Path != "/b2api/v3/b2_create_key" {
+			t.Fatalf("credential requests = %v, want one to /b2api/v3/b2_create_key", requests)
+		}
+		if got := requests[0].JSON["validDurationInSeconds"]; got != want {
+			t.Errorf("validDurationInSeconds = %v, want %v", got, want)
+		}
+	})
 	t.Run("past deadline", func(t *testing.T) {
 		before := len(srv.Requests())
 		_, err := client.CreateKey(ctx, "key", Deadline(time.Now().Add(-500*time.Millisecond)))

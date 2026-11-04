@@ -381,7 +381,7 @@ func assertDurationIsRejectedBeforeRequest(t *testing.T, f *createKeyFixture, ca
 	t.Helper()
 	for _, valid := range []time.Duration{
 		-500 * time.Millisecond, -time.Nanosecond, -time.Second,
-		500 * time.Millisecond, 1500 * time.Millisecond,
+		500 * time.Millisecond,
 		1000 * 24 * time.Hour, 2147483648 * time.Second,
 	} {
 		t.Run(valid.String(), func(t *testing.T) {
@@ -405,6 +405,7 @@ func assertDurationIsSentInSeconds(t *testing.T, f *createKeyFixture, zeroIsSent
 		want  float64
 	}{
 		{name: "one second", valid: time.Second, want: 1},
+		{name: "one and a half seconds", valid: 1500 * time.Millisecond, want: 1},
 		{name: "one hour", valid: time.Hour, want: 3600},
 		{name: "no expiration", valid: 0, want: 0},
 	} {
@@ -431,8 +432,8 @@ func assertDurationIsSentInSeconds(t *testing.T, f *createKeyFixture, zeroIsSent
 }
 
 func TestValidDurationSeconds(t *testing.T) {
-	// https://www.backblaze.com/apidocs/b2-create-key requires whole seconds
-	// strictly below 1000 days (86400000 seconds).
+	// https://www.backblaze.com/apidocs/b2-create-key limits keys to less than
+	// 1000 days (86400000 seconds).
 	for _, tc := range []struct {
 		name    string
 		valid   time.Duration
@@ -443,7 +444,7 @@ func TestValidDurationSeconds(t *testing.T) {
 		{name: "negative nanosecond", valid: -time.Nanosecond, wantErr: true},
 		{name: "negative second", valid: -time.Second, wantErr: true},
 		{name: "sub-second", valid: 500 * time.Millisecond, wantErr: true},
-		{name: "fractional second", valid: 1500 * time.Millisecond, wantErr: true},
+		{name: "fractional second", valid: 1500 * time.Millisecond, want: 1},
 		{name: "zero", valid: 0, want: 0},
 		{name: "one second", valid: time.Second, want: 1},
 		{name: "ninety minutes", valid: 90 * time.Minute, want: 5400},
