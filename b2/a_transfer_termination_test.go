@@ -21,7 +21,7 @@ func TestWriterWorkerStartupCompletes(t *testing.T) {
 	const child = "BLAZER_WORKER_STARTUP_CHILD"
 	if os.Getenv(child) == "1" {
 		writer := newProgressReviewBucket(t).Object("startup").NewWriter(context.Background())
-		writer.ChunkSize = 3
+		writer.ChunkSize = 3 // Deliberately below B2's 5MB minimum to exercise multipart with the test fake.
 		writer.ConcurrentUploads = 1
 		if n, err := io.WriteString(writer, "abcdefghi"); n != 9 || err != nil {
 			t.Fatalf("Write = %d, %v; want 9, nil", n, err)
@@ -70,7 +70,7 @@ func TestTransferOperationsComplete(t *testing.T) {
 			go func() {
 				object := bucket.Object("completion")
 				writer := object.NewWriter(ctx)
-				writer.ChunkSize = 3
+				writer.ChunkSize = 3         // Deliberately below B2's 5MB minimum to exercise multipart with the recording fake.
 				writer.ConcurrentUploads = 0 // Must still start one worker.
 				const payload = "abcdefghi"
 				var n int64

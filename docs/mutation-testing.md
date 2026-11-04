@@ -8,6 +8,33 @@ Three of those survivors change observable behavior. The other 24 are equivalent
 for reachable SDK states and are annotated in `b2/mutation_equivalence_test.go`.
 No source file or mutation operator is excluded from normal testing to hide them.
 
+## Whole-package remeasurement
+
+The complete B2 subtree was remeasured with Gremlins v0.6.0, no race detector,
+and live credentials unset:
+
+```sh
+env -u B2_APPLICATION_KEY_ID -u B2_APPLICATION_KEY -u B2_ACCOUNT_ID -u B2_ACCOUNT_KEY \
+  gremlins unleash --timeout-coefficient 40 --workers 2 --output mutation-b2-full.json ./b2
+```
+
+| Run | Killed | Lived | Not covered | Timed out | Efficacy | Mutator coverage |
+| --- | --- | --- | --- | --- | --- | --- |
+| #290 baseline (`c3b00f1`, coefficient 20) | 754 | 27 | 27 | 17 | 96.54% | 96.66% |
+| Part A (coefficient 40) | 774 | 24 | 27 | 0 | 96.99% | 96.73% |
+
+```text
+Mutation testing completed in 40 minutes 59 seconds
+Killed: 774, Lived: 24, Not covered: 27
+Timed out: 0, Not viable: 0, Skipped: 0
+Test efficacy: 96.99%
+Mutator coverage: 96.73%
+```
+
+Matching the full report to the original mutation types and locations confirms
+all three behavioral survivors and all 17 historical timeouts are `KILLED`.
+All 24 equivalent survivors are `LIVED`. The 27 uncovered mutations remain Part B.
+
 ## Scoped remeasurement
 
 The selected run evaluated all 27 original survivors and all 17 original
@@ -31,9 +58,9 @@ go test -count=3 -failfast ./b2
 ok  github.com/Backblaze/blazer/b2  33.060s
 ```
 
-That anomalous result is not counted as a behavioral kill. The run deliberately
-concentrates on known survivors, so its percentages are not comparable to the
-whole-package baseline above. A new whole-package baseline is NOT RUN.
+That anomalous result is not counted as a behavioral kill; the later full run
+also reports it as `LIVED`. The scoped run deliberately concentrates on known
+survivors, so its percentages are not comparable to a whole-package baseline.
 
 ## Behavioral gaps and break proofs
 
