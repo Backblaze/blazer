@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,8 +60,17 @@ func TestAccountInfoFileIOErrorsAndRecovery(t *testing.T) {
 type recordingAccountInfoFile struct {
 	*os.File
 	events   *[]string
+	chmodErr error
 	writeErr error
 	syncErr  error
+	closeErr error
+}
+
+func (f *recordingAccountInfoFile) Chmod(mode os.FileMode) error {
+	if f.chmodErr != nil {
+		return f.chmodErr
+	}
+	return f.File.Chmod(mode)
 }
 
 func (f *recordingAccountInfoFile) Write(p []byte) (int, error) {
@@ -81,20 +91,29 @@ func (f *recordingAccountInfoFile) Sync() error {
 
 func (f *recordingAccountInfoFile) Close() error {
 	*f.events = append(*f.events, "close")
-	return f.File.Close()
+	if err := f.File.Close(); err != nil {
+		return err
+	}
+	return f.closeErr
 }
 
 func TestAccountInfoFilePersistence(t *testing.T) {
 	syncErr := errors.New("session sync failed")
 	writeErr := errors.New("session write failed")
 	cleanupErr := errors.New("temporary file cleanup failed")
+	chmodErr := errors.New("session chmod failed")
+	closeErr := errors.New("session close failed")
 	for _, test := range []struct {
-		name       string
-		writeErr   error
-		syncErr    error
-		cleanupErr error
-		wantErr    error
-		wantEvents []string
+		name          string
+		chmodErr      error
+		writeErr      error
+		syncErr       error
+		closeErr      error
+		cleanupErr    error
+		wantErr       error
+		wantExactErr  bool
+		wantErrorText []string
+		wantEvents    []string
 	}{
 		{
 			name:       "write sync close rename",
@@ -107,6 +126,21 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 		{
 			name: "primary error survives cleanup", writeErr: writeErr, cleanupErr: cleanupErr, wantErr: writeErr,
 			wantEvents: []string{"write", "close", "remove"},
+		},
+		{
+			name:          "chmod and close failure",
+			chmodErr:      chmodErr,
+			closeErr:      closeErr,
+			wantErr:       closeErr,
+			wantErrorText: []string{"chmod:", "close:"},
+			wantEvents:    []string{"close", "remove"},
+		},
+		{
+			name:         "chmod failure",
+			chmodErr:     chmodErr,
+			wantErr:      chmodErr,
+			wantExactErr: true,
+			wantEvents:   []string{"close", "remove"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -129,7 +163,10 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 					}
 					tempName = file.Name()
 					t.Cleanup(func() { _ = file.Close() })
-					return &recordingAccountInfoFile{File: file, events: &events, writeErr: test.writeErr, syncErr: test.syncErr}, nil
+					return &recordingAccountInfoFile{
+						File: file, events: &events, chmodErr: test.chmodErr,
+						writeErr: test.writeErr, syncErr: test.syncErr, closeErr: test.closeErr,
+					}, nil
 				},
 				remove: func(name string) error {
 					events = append(events, "remove")
@@ -150,8 +187,17 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 				},
 			}
 			store := NewAccountInfoFile(path)
-			if err := store.writeWith(sampleAuthData(), ops); !errors.Is(err, test.wantErr) {
+			err := store.writeWith(sampleAuthData(), ops)
+			if !errors.Is(err, test.wantErr) {
 				t.Errorf("write error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantExactErr && err != test.wantErr {
+				t.Errorf("write error = %v, want plain %v", err, test.wantErr)
+			}
+			for _, text := range test.wantErrorText {
+				if err == nil || !strings.Contains(err.Error(), text) {
+					t.Errorf("write error = %q, want it to contain %q", err, text)
+				}
 			}
 			if !reflect.DeepEqual(events, test.wantEvents) {
 				t.Errorf("file operations = %v, want %v", events, test.wantEvents)
