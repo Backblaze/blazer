@@ -142,6 +142,10 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 			wantExactErr: true,
 			wantEvents:   []string{"close", "remove"},
 		},
+		{
+			name: "cleanup failure after replacement", cleanupErr: cleanupErr, wantErr: cleanupErr,
+			wantEvents: []string{"write", "sync", "close", "rename", "remove"},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			parent := filepath.Join(t.TempDir(), "private")
@@ -202,7 +206,10 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 			if !reflect.DeepEqual(events, test.wantEvents) {
 				t.Errorf("file operations = %v, want %v", events, test.wantEvents)
 			}
-			if test.wantErr != nil {
+			// Failures before the rename (write, sync, chmod, close) preserve the
+			// old session; cleanup errors happen after replacement, so that case
+			// must contain the new session.
+			if test.writeErr != nil || test.syncErr != nil || test.chmodErr != nil || test.closeErr != nil {
 				content, err := os.ReadFile(path)
 				if err != nil {
 					t.Fatal(err)
@@ -266,6 +273,53 @@ func TestAccountInfoRenamePlatform(t *testing.T) {
 			}
 			if (test.goos != "windows" || test.destDir) && clockCalls != 0 {
 				t.Errorf("rename entered retry deadline: clock calls = %d, want 0", clockCalls)
+			}
+		})
+	}
+}
+
+func TestAccountInfoRenameRetriesUntilSuccessOrDeadline(t *testing.T) {
+	sharingErr := errors.New("sharing violation")
+	lastErr := errors.New("last sharing violation")
+	for _, succeed := range []bool{true, false} {
+		name := "deadline returns last error"
+		if succeed {
+			name = "third attempt succeeds"
+		}
+		t.Run(name, func(t *testing.T) {
+			dest := filepath.Join(t.TempDir(), "session")
+			calls := 0
+			rename := func(tmp, target string) error {
+				if tmp != "temporary" || target != dest {
+					t.Fatalf("rename(%q, %q), want temporary, %q", tmp, target, dest)
+				}
+				calls++
+				if calls < 3 {
+					return sharingErr
+				}
+				if succeed {
+					return nil
+				}
+				return lastErr
+			}
+			clock := time.Unix(0, 0)
+			now := func() time.Time {
+				clock = clock.Add(500 * time.Millisecond)
+				return clock
+			}
+			wantErr := lastErr
+			if succeed {
+				wantErr = nil
+			}
+			if err := renameReplaceWith("temporary", dest, rename, "windows", now); !errors.Is(err, wantErr) {
+				t.Errorf("rename error = %v, want %v", err, wantErr)
+			}
+			wantCalls := 4
+			if succeed {
+				wantCalls = 3
+			}
+			if calls != wantCalls {
+				t.Errorf("rename calls = %d, want %d", calls, wantCalls)
 			}
 		})
 	}

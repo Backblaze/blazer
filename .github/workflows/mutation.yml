@@ -44,7 +44,7 @@ jobs:
           {
             status=0
             for package in b2 base; do
-              if ! gremlins unleash --diff "origin/${BASE_REF}" --timeout-coefficient 20 --workers 2 --output "mutation-${package}.json" "./${package}"; then
+              if ! gremlins unleash --diff "origin/${BASE_REF}" --workers 2 --output "mutation-${package}.json" "./${package}"; then
                 status=1
               fi
             done
@@ -105,7 +105,7 @@ jobs:
           {
             status=0
             for package in b2 base; do
-              if ! gremlins unleash --timeout-coefficient 20 --workers 2 --output "mutation-${package}.json" "./${package}"; then
+              if ! gremlins unleash --workers 2 --output "mutation-${package}.json" "./${package}"; then
                 status=1
               fi
             done
