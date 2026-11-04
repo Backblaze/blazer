@@ -14,7 +14,10 @@ name: Require area-owner approvals
 # - Only owners with write, maintain or admin permission count, matching GitHub's native
 #   CODEOWNERS; an area with no such owner stays red.
 # - The PR author counts as implicitly approved for areas they own.
-# - An approval stays valid even after new commits are pushed (latest review per user).
+# - An approval counts only for the commit it was given on: a review whose commit_id is not
+#   the PR's current head SHA is ignored, so a new push needs fresh approvals. A
+#   CHANGES_REQUESTED review keeps blocking whatever commit it was given on (latest review
+#   per user), so a new commit never silently clears it.
 # - For each touched area: satisfied when >=1 owner's latest review is APPROVED and
 #   no owner's latest review is CHANGES_REQUESTED.
 # - A trailing `*` catch-all in CODEOWNERS makes the default owners responsible for any
@@ -85,7 +88,7 @@ jobs:
           HEAD_SHA=$(jq -r .head.sha <<<"$PR_JSON")
           BASE_SHA=$(jq -r .base.sha <<<"$PR_JSON")
           AUTHOR=$(jq -r .user.login <<<"$PR_JSON")
-          export AUTHOR
+          export AUTHOR HEAD_SHA
 
           # Read CODEOWNERS from the PR's BASE commit, not the checked-out merge ref, so a
           # PR that edits CODEOWNERS cannot grade itself against its own modified version.
@@ -117,6 +120,7 @@ jobs:
 
           tmp = os.environ["RUNNER_TEMP"]
           author = os.environ.get("AUTHOR", "").lower()
+          head_sha = os.environ["HEAD_SHA"]
           with open(os.environ["WRITERS_FILE"]) as f:
               writers = {line.strip().lower() for line in f if line.strip()}
 
@@ -158,7 +162,7 @@ jobs:
                   if owners:
                       areas.setdefault(pattern, set()).update(owners)
 
-          # --- latest review state per user ---
+          # --- latest review state per user (an APPROVED review on an older commit is stale) ---
           with open(os.path.join(tmp, "reviews.json")) as f:
               reviews = json.load(f)
           state_by_user = {}
@@ -166,6 +170,8 @@ jobs:
               login = ((r.get("user") or {}).get("login") or "").lower()
               st = r.get("state")
               if st in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+                  if st == "APPROVED" and r.get("commit_id") != head_sha:
+                      st = "STALE_APPROVED"  # not the head commit: does not count
                   state_by_user[login] = st
 
           # --- evaluate each touched area ---
