@@ -132,7 +132,7 @@ func TestAccountInfoFilePersistence(t *testing.T) {
 			chmodErr:      chmodErr,
 			closeErr:      closeErr,
 			wantErr:       closeErr,
-			wantErrorText: []string{"chmod:", "close:"},
+			wantErrorText: []string{"chmod:", chmodErr.Error(), "close:", closeErr.Error()},
 			wantEvents:    []string{"close", "remove"},
 		},
 		{
