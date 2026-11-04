@@ -103,7 +103,6 @@ func TestCredentialLifetimeValidationWire(t *testing.T) {
 	}
 	t.Run("future deadline", func(t *testing.T) {
 		deadline := time.Now().Add(time.Hour)
-		want := float64(time.Until(deadline) / time.Second)
 		before := len(srv.Requests())
 		if _, err := client.CreateKey(ctx, "key", Deadline(deadline)); err != nil {
 			t.Fatal(err)
@@ -112,8 +111,10 @@ func TestCredentialLifetimeValidationWire(t *testing.T) {
 		if len(requests) != 1 || requests[0].Path != "/b2api/v3/b2_create_key" {
 			t.Fatalf("credential requests = %v, want one to /b2api/v3/b2_create_key", requests)
 		}
-		if got := requests[0].JSON["validDurationInSeconds"]; got != want {
-			t.Errorf("validDurationInSeconds = %v, want %v", got, want)
+		// Deadline and CreateKey each read the clock. Their reads can straddle a
+		// one-second truncation boundary, so either whole-second value is correct.
+		if got := requests[0].JSON["validDurationInSeconds"]; got != float64(3599) && got != float64(3600) {
+			t.Errorf("validDurationInSeconds = %v, want 3599 or 3600", got)
 		}
 	})
 	t.Run("past deadline", func(t *testing.T) {
