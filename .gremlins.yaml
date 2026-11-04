@@ -1,0 +1,12 @@
+unleash:
+  # Only ./b2 and ./base are mutated; neither contains generated non-test files.
+  # internal/b2assets, examples and bin are outside this scope; Gremlins skips _test.go.
+  # Some B2 and base tests take longer under mutation; avoid false timeout kills.
+  timeout-coefficient: 20
+  # Keep local and CI mutation runs within the runner's memory and CPU budget.
+  workers: 2
+  threshold:
+    # Mutation testing reports trends for now; it must not gate merges or releases.
+    efficacy: 0
+    # Mutation coverage is advisory while live-only behavior remains unexercised offline.
+    mutant-coverage: 0
