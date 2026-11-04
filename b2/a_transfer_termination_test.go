@@ -87,7 +87,7 @@ func TestTransferOperationsComplete(t *testing.T) {
 			if err := completionResult(t, 5*time.Second, func(ctx context.Context) error {
 				object := bucket.Object("completion")
 				writer := object.NewWriter(ctx)
-				defer writer.Close()
+				defer func() { _ = writer.Close() }()
 				writer.ChunkSize = 3         // Deliberately below B2's 5MB minimum to exercise multipart with the recording fake.
 				writer.ConcurrentUploads = 0 // Must still start one worker.
 				const payload = "abcdefghi"
