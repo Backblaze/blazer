@@ -115,6 +115,9 @@ Go's coverage profile has no executable block for `maxReplicationPriority` in `b
 `TestNextReplicationPriority` and `TestMappingReplicationPriorityBounds` pin the actual bound at its
 use sites. Adding another assertion against the declaration cannot change that coverage marker.
 
+The [B2 mutation-testing audit](mutation-testing.md) records #290's survivor classifications,
+break proofs, timeout checks, and the Gremlins v0.6.0 commands used to reproduce them.
+
 ## Repo-owned SDK harness contract
 
 `.sdkharness/tests.tsv` lists one row per scenario: level (`conformance`, `resilience`, `health`), scenario
