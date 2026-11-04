@@ -32,6 +32,30 @@ The pull-request `changed-code` job in [mutation.yml](../.github/workflows/mutat
 against changed `b2` and `base` code. The scheduled and manually dispatched `full-suite` job runs the
 whole `b2` and `base` mutation suite and uploads its JSON reports.
 
+Both jobs upload `mutation-*.json` and `mutation.log`, including reports from partial or failed runs.
+For discovery without executing mutants, run `gremlins unleash --dry-run ./base`, then
+`gremlins unleash --dry-run ./b2`. Version v0.6.0 accepts one package path per invocation.
+
+### Why Gremlins
+
+The [candidate comparison in #97](https://github.com/Backblaze/blazer/issues/97)
+evaluated these approaches:
+
+| Tool | Strengths | Tradeoffs for blazer |
+| --- | --- | --- |
+| Gremlins v0.6.0 | Coverage-guided CLI, diff mode, JSON reports and configurable workers, timeouts and thresholds. | Pre-1.0 flags can change, so pin the version. Timeouts need tuning. No per-line suppression was found in the reviewed documentation. |
+| go-mutesting (Avito fork) v2.3.1 | CLI with more mutation types, custom test commands, a blacklist and comment-based exclusions. | Its documentation warns about false positives. The #97 review found no coverage guidance, so more mutants and longer runs are expected. It requires Go 1.27. |
+| Ooze v0.2.0 | Runs from a Go test with configurable commands and prints living-mutant diffs. | Imported as a library, so it would add a dependency or require a separate module. It runs the whole test command per mutant and defaults to serial execution. |
+
+Gremlins is the primary tool because its CLI preserves the zero-dependency library, and coverage guidance
+and diff mode fit the cost of PR runs. The comparison above summarizes #97's repository and documentation
+review, not a measured Avito benchmark. Avito remains a candidate for a separate cross-check; Ooze is
+deferred because adopting a mutation library would require a separate module.
+
+Only `./b2` and `./base` are mutation targets. Neither contains generated non-test files;
+`internal/b2assets`, `examples` and `bin` are outside those packages, and Gremlins skips `_test.go` files.
+There is no additional `exclude-files` configuration to maintain for this scope.
+
 Gremlins reports **efficacy** as killed mutations divided by killed plus lived mutations: it describes how
 well the tests distinguish the mutations they exercise. **Mutator coverage** is killed plus lived divided
 by killed plus lived plus not covered: it describes how much source the unit test run exercised. `not
@@ -47,6 +71,25 @@ only and no `-race`, is:
 | `b2` | 754 | 27 | 27 | 17 | 96.54% | 96.66% | 64.05% / 47.96% |
 
 See [#290](https://github.com/Backblaze/blazer/issues/290) for the remaining surviving and uncovered gaps.
+
+### How to accept or suppress a surviving mutant
+
+Download the mutation report from either workflow job and inspect each `lived` mutant's file, line and
+operator. If it changes observable behavior, add a focused test with an independent expected value.
+Apply the mutation alone, show that the test fails for that behavior, then restore it and show a pass.
+
+If a mutant is equivalent, record the location, mutation and reason in the PR or a linked issue, and
+add a nearby comment when it explains a lasting invariant. Accept it explicitly rather than weakening
+an assertion to improve the score. Keep accepted mutants visible in the advisory report.
+
+Gremlins v0.6.0 has file-level `exclude-files` patterns, but no documented per-line suppression. Use a
+file exclusion only for generated or non-library code if the target scope expands. Do not exclude a
+library file just to suppress one accepted mutant.
+
+`not covered` means the credential-free test run did not reach the code. Add a hermetic test where
+possible, or record the live-only limitation. A `timed out` mutant is unresolved, not proof of a kill:
+investigate test stability and timeout tuning, and keep mutation runs free of `-race` to avoid false
+kills from the known `TestReuploadPart*` race. Thresholds remain zero during this advisory rollout.
 
 ## Showing a test pins the fix
 
