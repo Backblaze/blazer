@@ -100,9 +100,11 @@ failure.
 
 ## Equivalent survivors
 
-All 24 mutants represented below remain visible as `LIVED`; "equivalent" is a
-human classification, not a Gremlins status or suppression directive. Locations
-refer to the unchanged production code from `c3b00f1`.
+The 24 historical mutants represented below remain visible as `LIVED`;
+"equivalent" is a human classification, not a Gremlins status or suppression
+directive. Locations refer to the unchanged production code from `c3b00f1`.
+The final three rows are additional audits for #295; they do not revise the
+historical whole-package measurements above.
 
 | Baseline site(s) | Mutation | Why behavior is unchanged |
 | --- | --- | --- |
@@ -122,8 +124,34 @@ refer to the unchanged production code from `c3b00f1`.
 | `progress.go:49:19` | `<= 0` → `< 0` | The extra zero wake produces no callback; terminal delivery is unchanged. |
 | `sync/sync.go:351` | `> 0` → `>= 0` | Hashing an empty slice does not change SHA-1. |
 | `backend.go:101` | `++` → `--` | Only equality of generation tokens is observed; both directions distinguish refreshes with the same uint64 wrap period. |
+| `b2.go:901` (#295 audit) | `obj.Name() > name` → `>=` | The `== name` branch immediately above always returns. Control reaches this comparison only when `Name() != name`, where `>` and `>=` are identical. |
+| `monitor.go:226` (#295 audit) | `ds[i] < ds[j]` → `<=` | Durations come from distinct map keys, so there is no equality case for the boundary to affect. |
+| `sync/sync.go:298` (#295 audit) | `Failed[i].Rel < Failed[j].Rel` → `<=` | Only equal-Rel entries can be reordered; their order is unspecified either way. Pinning their relative order would require an over-fit test. |
 
 ## Mutation timeout checks
+
+The Sync worker-startup check in #295 was measured separately at test commit
+`e7e471e`, using Gremlins v0.6.0, unit tests without `-race`, and all four B2
+credential variables blank:
+
+```sh
+gremlins unleash --workers 2 --timeout-coefficient 40 --output mutation-sync.json ./b2/sync
+```
+
+```text
+KILLED INCREMENT_DECREMENT at sync.go:266:41
+Mutation testing completed in 51 seconds 530 milliseconds
+Killed: 72, Lived: 2, Not covered: 2
+Timed out: 0, Not viable: 0, Skipped: 0
+Test efficacy: 97.30%
+Mutator coverage: 97.37%
+```
+
+The worker-loop decrement is now `KILLED`, rather than timed out, with the
+early `a_worker_pool_test.go` regression. Only the boundary mutations at
+`sync/sync.go:298:78` and `sync/sync.go:351:8` remain `LIVED`; both are equivalent
+as audited above. This scoped result does not replace the historical
+whole-package measurement.
 
 `.gremlins.yaml` retains main's comments, two workers, and advisory zero thresholds;
 its only change from main is coefficient 20 to 40. The two Make targets and both
