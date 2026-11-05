@@ -147,8 +147,8 @@ Test efficacy: 97.30%
 Mutator coverage: 97.37%
 ```
 
-The worker-loop decrement is now `KILLED`, rather than timed out, with the
-early `a_worker_pool_test.go` regression. Only the boundary mutations at
+The worker-loop decrement is `KILLED` in this scoped run with the early
+`a_worker_pool_test.go` regression. Only the boundary mutations at
 `sync/sync.go:298:78` and `sync/sync.go:351:8` remain `LIVED`; both are equivalent
 as audited above. This scoped result does not replace the historical
 whole-package measurement.
