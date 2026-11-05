@@ -24,8 +24,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Backblaze/blazer/internal/b2types"
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 const corsAndLockBucketJSON = `{
@@ -152,6 +154,104 @@ func TestCreateBucketOmitsUnsetCORSAndFileLock(t *testing.T) {
 	}
 	if bucket.FileLockEnabled || len(bucket.CORSRules) != 0 {
 		t.Errorf("bucket = %+v, want no CORS and no file lock", bucket)
+	}
+}
+
+func TestCreateBucketNormalizesTypeAndEncryption(t *testing.T) {
+	for _, tc := range []struct {
+		name, bucketType, wantType string
+		sse                        *b2types.ServerSideEncryption
+		wantSSE                    any
+	}{
+		{name: "public", bucketType: "allPublic", wantType: "allPublic"},
+		{name: "private", bucketType: "allPrivate", wantType: "allPrivate"},
+		{name: "unknown type", bucketType: "unknown", wantType: "allPrivate"},
+		{name: "empty encryption", wantType: "allPrivate", sse: &b2types.ServerSideEncryption{}},
+		{name: "SSE-B2", wantType: "allPrivate", sse: &b2types.ServerSideEncryption{Mode: "SSE-B2", Algorithm: "AES256"},
+			wantSSE: map[string]any{"mode": "SSE-B2", "algorithm": "AES256"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			b, sent, closeSrv := bucketFixture(t, plainBucketJSON)
+			defer closeSrv()
+			if _, err := b.CreateBucket(ctx, "name", tc.bucketType, nil, nil, tc.sse, nil, false, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := (*sent)["bucketType"]; got != tc.wantType {
+				t.Errorf("request bucketType = %#v, want %q", got, tc.wantType)
+			}
+			got, present := (*sent)["defaultServerSideEncryption"]
+			if !reflect.DeepEqual(got, tc.wantSSE) || present != (tc.wantSSE != nil) {
+				t.Errorf("request defaultServerSideEncryption = %#v (present=%t), want %#v", got, present, tc.wantSSE)
+			}
+		})
+	}
+}
+
+func TestCreateBucketReadsEachReplicationRole(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        *b2types.ReplicationConfiguration
+	}{
+		{"source only", `{"asReplicationSource":{"sourceApplicationKeyId":"source-key","replicationRules":[]},"asReplicationDestination":null}`,
+			&b2types.ReplicationConfiguration{AsReplicationSource: &b2types.AsReplicationSource{KeyID: "source-key", ReplicationRules: []b2types.ReplicationRules{}}}},
+		{"destination only", `{"asReplicationSource":null,"asReplicationDestination":{"sourceToDestinationKeyMapping":{"source-key":"destination-key"}}}`,
+			&b2types.ReplicationConfiguration{AsReplicationDestination: &b2types.AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"}}}},
+		{"neither role", `{"asReplicationSource":null,"asReplicationDestination":null}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			response := fmt.Sprintf(`{"bucketId":"bid","replicationConfiguration":{"isClientAuthorizedToRead":true,"value":%s}}`, tc.value)
+			b, _, closeSrv := bucketFixture(t, response)
+			defer closeSrv()
+			bucket, err := b.CreateBucket(ctx, "name", "allPrivate", nil, nil, nil, nil, false, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(bucket.ReplicationConfiguration, tc.want) {
+				t.Errorf("replication configuration = %#v, want %#v", bucket.ReplicationConfiguration, tc.want)
+			}
+		})
+	}
+}
+
+func TestUpdateBucketDistinguishesUnsetEmptyAndPopulatedFields(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		info      map[string]string
+		rules     []LifecycleRule
+		wantInfo  any
+		wantRules any
+	}{
+		{name: "unset"},
+		{name: "clear", info: map[string]string{}, rules: []LifecycleRule{}, wantInfo: map[string]any{}, wantRules: []any{}},
+		{name: "set", info: map[string]string{"owner": "app"}, rules: []LifecycleRule{{Prefix: "logs/", DaysNewUntilHidden: 7, DaysHiddenUntilDeleted: 30}},
+			wantInfo:  map[string]any{"owner": "app"},
+			wantRules: []any{map[string]any{"fileNamePrefix": "logs/", "daysFromUploadingToHiding": float64(7), "daysFromHidingToDeleting": float64(30)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv := b2wiretest.New(t)
+			srv.Reply("b2_update_bucket", http.StatusOK, `{"bucketId":"bid","bucketName":"name","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":2,"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false}},"replicationConfiguration":{"isClientAuthorizedToRead":true,"value":null}}`)
+			root, err := AuthorizeAccount(ctx, "account-id", "application-key", SetAPIBase(srv.URL()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			bucket := &Bucket{ID: "bid", b2: root, Info: tc.info, LifecycleRules: tc.rules}
+			if _, err := bucket.Update(ctx); err != nil {
+				t.Fatal(err)
+			}
+			request := srv.Last(t, "b2_update_bucket")
+			for field, want := range map[string]any{"bucketInfo": tc.wantInfo, "lifecycleRules": tc.wantRules} {
+				got, present := request.JSON[field]
+				if present != (want != nil) || !reflect.DeepEqual(got, want) {
+					t.Errorf("request %s = %#v (present=%t), want %#v", field, got, present, want)
+				}
+			}
+		})
 	}
 }
 
