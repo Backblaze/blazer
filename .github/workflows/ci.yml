@@ -131,9 +131,50 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
 
+  consumer:
+    name: external consumer
+    if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache-dependency-path: '**/go.sum'
+      - name: Build offline external consumer
+        shell: bash
+        run: |
+          consumer=$(mktemp -d "${RUNNER_TEMP:-/tmp}/blazerconsumer.XXXXXX")
+          trap 'rm -rf "$consumer"' EXIT
+          cd "$consumer"
+          go mod init blazerconsumer
+          go mod edit -require=github.com/Backblaze/blazer@v0.0.0
+          go mod edit -replace=github.com/Backblaze/blazer="$GITHUB_WORKSPACE"
+          cat > main.go <<'EOF'
+          package main
+
+          import (
+            "github.com/Backblaze/blazer/b2"
+            b2sync "github.com/Backblaze/blazer/b2/sync"
+            "github.com/Backblaze/blazer/base"
+          )
+
+          var (
+            _ = b2.NewClient
+            _ = b2sync.WithConcurrency
+            _ = base.AuthorizeAccount
+          )
+
+          func main() {}
+          EOF
+          GOFLAGS=-mod=mod GOWORK=off GOPROXY=off go build ./...
+
   ci-summary:
     name: ci-summary
-    needs: [checks, lint, test, b2keys, crosscompile]
+    needs: [checks, lint, test, b2keys, crosscompile, consumer]
     if: ${{ always() && github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -145,8 +186,9 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           B2KEYS_RESULT: ${{ needs.b2keys.result }}
           CROSSCOMPILE_RESULT: ${{ needs.crosscompile.result }}
+          CONSUMER_RESULT: ${{ needs.consumer.result }}
         run: |
-          for result in "$CHECKS_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$B2KEYS_RESULT" "$CROSSCOMPILE_RESULT"; do
+          for result in "$CHECKS_RESULT" "$LINT_RESULT" "$TEST_RESULT" "$B2KEYS_RESULT" "$CROSSCOMPILE_RESULT" "$CONSUMER_RESULT"; do
             if [ "$result" != success ]; then
               echo "::error::A required CI job finished with result: $result"
               exit 1
