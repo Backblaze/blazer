@@ -57,9 +57,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Test a patched Go 1.27 release and the latest stable release.
+        # Test the declared Go 1.26.10 minimum on Ubuntu, plus Go 1.27.3 and stable on every OS.
         go-version: ['1.27.3', stable]
         os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - {go-version: '1.26.10', os: ubuntu-latest}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

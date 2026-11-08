@@ -63,8 +63,9 @@ first six years._
 go get github.com/Backblaze/blazer/b2
 ```
 
-Blazer supports the Go version in [`go.mod`](go.mod) and newer; CI tests it on the current stable Go
-release as well. Releases follow [semantic versioning](https://semver.org) and are listed in the
+Blazer supports the Go version in [`go.mod`](go.mod) and newer; CI tests the Go 1.26.10 minimum on
+Ubuntu and Go 1.27.3 plus the current stable release on Ubuntu, macOS, and Windows. Releases follow
+[semantic versioning](https://semver.org) and are listed in the
 [changelog](CHANGELOG.md).
 
 You need a B2 [application key](https://www.backblaze.com/docs/cloud-storage-application-keys). Give it
