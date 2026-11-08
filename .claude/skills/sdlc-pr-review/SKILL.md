@@ -5,7 +5,7 @@ description: Set up REVIEW.md and run structured AI review passes (bugs, securit
 
 # AI in the PR review loop
 
-Claude both gives and receives reviews. Every PR gets the same review passes with findings ranked by severity, so human attention moves up to whether the change does what the plan intended and whether the risk is acceptable. Separation of duties holds: the agent that wrote the code has no way to approve it. Approval comes from a human code owner through branch protection.
+Claude both gives and receives reviews. Every PR gets the same review passes with findings ranked by severity, so human attention moves up to whether the change does what the plan intended and whether the risk is acceptable. Separation of duties holds: the agent that wrote the code has no way to approve it. Code-owner approval is a repository policy and advisory guardrail, not an enforced branch-protection requirement.
 
 ## Mode A: set up `REVIEW.md` (tech lead)
 
@@ -52,8 +52,8 @@ When tagged on a comment, make the fix, push, and reply on the thread so it reco
 
 ## Feedback into the system
 
-- A mistake flagged a second time goes into `CLAUDE.md` in that PR (`sdlc-claude-md`).
-- Flag when a change makes `CLAUDE.md` outdated.
+- A mistake flagged a second time goes into `AGENTS.md` in that PR (`sdlc-claude-md`).
+- Flag when a change makes `AGENTS.md` outdated.
 - Monthly: rate findings, cap noisy categories in `REVIEW.md`.
 
 ## Measure

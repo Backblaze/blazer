@@ -55,7 +55,7 @@ If artifacts live in `intent/`, add a line saying `intent/` holds `intent.md`, `
 
 ## Maintenance rule
 
-When Claude makes the same mistake twice, the correction goes into `CLAUDE.md` in the same PR. PR review should also flag changes that make `CLAUDE.md` outdated (`sdlc-pr-review`). Trimming changes agent behavior, so watch the next few PRs for regressions.
+When Claude makes the same mistake twice, the correction goes into `AGENTS.md` in the same PR. PR review should also flag changes that make `AGENTS.md` outdated (`sdlc-pr-review`). Trimming changes agent behavior, so watch the next few PRs for regressions.
 
 ## Measure
 
