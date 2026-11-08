@@ -158,7 +158,9 @@ change, so this test-infrastructure change cannot affect simulator contract beha
 `b2/integration_test.go` skips unless `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` are set. Use a
 throwaway account or key, never one with production data. The tests create and delete their own buckets;
 clean up leftovers with `go run ./internal/bin/cleanup`. Some tests have a one-minute deadline and can
-time out when the network is busy; re-run before treating that as a failure.
+time out when the network is busy; a single passing re-run does not make a failure flaky; treat a failure
+as flaky or pre-existing only when the same test has failed intermittently across unrelated commits, and
+until then record it as unresolved and note the re-run.
 
 In CI, `.github/workflows/test-live.yml` runs them on every push to `main` (each merged PR), weekly, and
 on demand. Pull requests do not trigger them, so the live key is not automatically exposed to PR code.
