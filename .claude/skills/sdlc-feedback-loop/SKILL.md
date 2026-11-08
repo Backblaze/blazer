@@ -10,7 +10,7 @@ Always give the session a way to check its own work before a person sees it. A l
 ## Set up
 
 1. Wrap verification in one command per concern that exits non-zero on failure (`make test`, `npm test`, `make lint`, `make build`). Create the targets if only a command sequence exists today.
-2. List them in `CLAUDE.md` (see `sdlc-claude-md`) with a sample of healthy output, plus the instruction: run the tests before reporting a task complete and show the output.
+2. List them in `AGENTS.md` (see `sdlc-claude-md`) with a sample of healthy output, plus the instruction: run the tests before reporting a task complete and show the output.
 3. State a quantifiable target for the task so Claude can check without asking: "all tests in X pass", "screenshot matches the attached mock", "the endpoint returns 200 with the new field". Take targets from `plan.md` Proof when it exists.
 4. For UI work, give Claude a browser or screenshot tool (e.g. via MCP) and the mock: implement, screenshot, compare, adjust. Two or three rounds is normal.
 
@@ -24,7 +24,7 @@ Always give the session a way to check its own work before a person sees it. A l
 
 An agent fixing code must not be able to weaken the check on that code. Either:
 
-- block edits to existing test files once the failing-test commit exists, with a `PreToolUse` hook (`sdlc-policy-skill` shows the pattern), or
+- block edits to existing test files once the failing-test commit exists, with a `PreToolUse` hook, or
 - check the diff in review: new regression tests are expected, but reject any change after the failing-test commit that weakens, skips or rewrites a test (`sdlc-pr-review`).
 
 ## Report format

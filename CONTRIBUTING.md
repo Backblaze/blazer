@@ -62,35 +62,35 @@ export B2_APPLICATION_KEY=<your application key>
 To simply run all tests from the `blazer` directory, do:
 
 ```shell
-go test ./... 
+go test ./...
 ```
 
 The `-v` flag is useful to generate more verbose output, such as passing package tests:
 
 ```shell
-go test -v ./... 
+go test -v ./...
 ```
 
 When developing, it's often useful to have `go test` exit as soon as it encounters a failing test; add the `-failfast` flag to do this:
 
 ```shell
-go test -v -failfast ./... 
+go test -v -failfast ./...
 ```
 
-You can supply a regular expression to limit the tests that are to be run. For example, to run all tests with names 
+You can supply a regular expression to limit the tests that are to be run. For example, to run all tests with names
 containing `TestResumeWriter`:
 
 ```shell
 go test -v ./... -run 'TestResumeWriter'
 ```
 
-This will run both `TestResumeWriter` and `TestResumeWriterWithoutExtantFile`, and `TestTestResumeWriter`, if such a test existed. To run only `TestResumeWriter`, use the caret, `^`, and dollar sign, `$`, to represent the beginning and end of the test name: 
+This will run both `TestResumeWriter` and `TestResumeWriterWithoutExtantFile`, and `TestTestResumeWriter`, if such a test existed. To run only `TestResumeWriter`, use the caret, `^`, and dollar sign, `$`, to represent the beginning and end of the test name:
 
 ```shell
 go test -v ./... -run '^TestResumeWriter$'
 ```
 
-By default, `go test` caches test output, rerunning tests only when the code has changed. To avoid using cached results, do: 
+By default, `go test` caches test output, rerunning tests only when the code has changed. To avoid using cached results, do:
 
 ```shell
 go test -v -count=1 ./...
