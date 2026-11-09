@@ -92,6 +92,33 @@ func (t *cleanupTB) Errorf(format string, args ...any) {
 	t.TB.Errorf(format, args...)
 }
 
+type cleanupRecordingTB struct {
+	*recordingTB
+	cleanup func()
+}
+
+func (t *cleanupRecordingTB) Cleanup(f func()) { t.cleanup = f }
+
+func (t *cleanupRecordingTB) runCleanup(tester *testing.T) {
+	tester.Helper()
+	if t.cleanup == nil {
+		tester.Fatal("b2wiretest did not register cleanup")
+	}
+	t.cleanup()
+}
+
+func strictGet(t *testing.T, server *Server, call string) int {
+	t.Helper()
+	response, err := http.Get(server.URL() + "/b2api/v4/" + call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return response.StatusCode
+}
+
 func TestLateRequestAfterCleanupDoesNotReport(t *testing.T) {
 	fake := &cleanupTB{TB: t}
 	s := New(fake)
@@ -386,6 +413,52 @@ func TestReplySequenceRepeatsLast(t *testing.T) {
 	s.Reply("b2_copy_file", 201, "replacement")
 	if response := get(t, s.URL()+"/b2api/v4/b2_copy_file"); response.StatusCode != 201 {
 		t.Errorf("replacement status = %d, want 201", response.StatusCode)
+	}
+}
+
+func TestStrictReplySequenceReportsUnexpectedExtraRequest(t *testing.T) {
+	fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+	s := New(fake)
+	s.StrictReplySequence("once", Response{Body: `{"response":1}`})
+	if got := strictGet(t, s, "once"); got != http.StatusOK {
+		t.Fatalf("first response status = %d, want 200", got)
+	}
+	if got := strictGet(t, s, "once"); got != http.StatusBadRequest {
+		t.Fatalf("extra response status = %d, want 400", got)
+	}
+	want := "b2wiretest: unexpected extra request for once: got 2, want 1"
+	if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+		t.Errorf("extra request reports = %v, want [%q]", reports, want)
+	}
+	fake.runCleanup(t)
+}
+
+func TestStrictReplySequenceReportsUnusedResponse(t *testing.T) {
+	fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+	s := New(fake)
+	s.StrictReplySequence("twice", Response{Body: `{"response":1}`}, Response{Body: `{"response":2}`})
+	if got := strictGet(t, s, "twice"); got != http.StatusOK {
+		t.Fatalf("response status = %d, want 200", got)
+	}
+	fake.runCleanup(t)
+	want := "b2wiretest: unused scripted responses for twice: got 1, want 2"
+	if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+		t.Errorf("unused response reports = %v, want [%q]", reports, want)
+	}
+}
+
+func TestStrictReplySequenceAcceptsExactRequests(t *testing.T) {
+	fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+	s := New(fake)
+	s.StrictReplySequence("twice", Response{Body: `{"response":1}`}, Response{Body: `{"response":2}`})
+	for i := range 2 {
+		if got := strictGet(t, s, "twice"); got != http.StatusOK {
+			t.Fatalf("response %d status = %d, want 200", i+1, got)
+		}
+	}
+	fake.runCleanup(t)
+	if reports := fake.errors(); len(reports) != 0 {
+		t.Errorf("exact request reports = %v, want none", reports)
 	}
 }
 
