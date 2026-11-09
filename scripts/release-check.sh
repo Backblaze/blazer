@@ -12,7 +12,8 @@ for tool in gh jq go; do
 done
 
 repo=${1:-Backblaze/blazer}
-govulncheck="golang.org/x/vuln/cmd/govulncheck@v1.1.4"
+# Track latest: an old govulncheck pin bundles an x/tools too old for newer Go and panics.
+govulncheck="golang.org/x/vuln/cmd/govulncheck@latest"
 hold=0
 unverified=0
 
