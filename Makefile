@@ -8,7 +8,7 @@ GREMLINS ?= gremlins
 MUTATION_PACKAGES := ./b2 ./base
 BASE_REF ?= origin/main
 
-.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test mutation mutation-diff
+.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test mutation mutation-diff api-compat
 
 ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check scripts-test
 
@@ -73,6 +73,9 @@ mutation-diff:
 	@set -e; for package in $(MUTATION_PACKAGES); do \
 		$(GREMLINS) unleash --diff $(BASE_REF) --workers 2 "$$package"; \
 	done
+
+api-compat:
+	BASE_REF="$(BASE_REF)" scripts/api-compat.sh
 
 # Holds a release while solvable security or quality findings are open (see RELEASE.md).
 release-check:
