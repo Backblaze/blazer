@@ -2,13 +2,10 @@
 
 GOLANGCI_LINT_VERSION := v2.14.0
 CHANGIE_VERSION := v1.24.0
-GREMLINS_VERSION := v0.6.0
 CHANGIE := go run github.com/miniscruff/changie@$(CHANGIE_VERSION)
-GREMLINS ?= gremlins
-MUTATION_PACKAGES := ./b2 ./base
 BASE_REF ?= origin/main
 
-.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test mutation mutation-diff api-compat
+.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test api-compat
 
 ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check scripts-test
 
@@ -62,17 +59,6 @@ changelog-new:
 # Runs the shell tests for scripts/ (scripts/*_test.sh).
 scripts-test:
 	for t in scripts/*_test.sh; do "$$t" || exit 1; done
-
-# Install the pinned CLI first: go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
-mutation:
-	@set -e; for package in $(MUTATION_PACKAGES); do \
-		$(GREMLINS) unleash --workers 2 "$$package"; \
-	done
-
-mutation-diff:
-	@set -e; for package in $(MUTATION_PACKAGES); do \
-		$(GREMLINS) unleash --diff $(BASE_REF) --workers 2 "$$package"; \
-	done
 
 api-compat:
 	BASE_REF="$(BASE_REF)" scripts/api-compat.sh
