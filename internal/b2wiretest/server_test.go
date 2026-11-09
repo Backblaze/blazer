@@ -447,6 +447,65 @@ func TestStrictReplySequenceReportsUnusedResponse(t *testing.T) {
 	}
 }
 
+func TestStrictReplySequenceReportsUnusedResponseWhenReplaced(t *testing.T) {
+	for _, test := range strictScriptReplacements() {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+			s := New(fake)
+			s.StrictReplySequence("twice", Response{Body: `{"response":1}`}, Response{Body: `{"response":2}`})
+			if got := strictGet(t, s, "twice"); got != http.StatusOK {
+				t.Fatalf("first response status = %d, want 200", got)
+			}
+			test.replace(t, s)
+			fake.runCleanup(t)
+			want := "b2wiretest: unused scripted responses for twice: got 1, want 2"
+			if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+				t.Errorf("replacement reports = %v, want [%q]", reports, want)
+			}
+		})
+	}
+}
+
+func TestStrictReplySequenceReplacementAcceptsUsedResponses(t *testing.T) {
+	for _, test := range strictScriptReplacements() {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+			s := New(fake)
+			s.StrictReplySequence("twice", Response{Body: `{"response":1}`})
+			if got := strictGet(t, s, "twice"); got != http.StatusOK {
+				t.Fatalf("response status = %d, want 200", got)
+			}
+			test.replace(t, s)
+			fake.runCleanup(t)
+			if reports := fake.errors(); len(reports) != 0 {
+				t.Errorf("used response reports = %v, want none", reports)
+			}
+		})
+	}
+}
+
+func strictScriptReplacements() []struct {
+	name    string
+	replace func(*testing.T, *Server)
+} {
+	return []struct {
+		name    string
+		replace func(*testing.T, *Server)
+	}{
+		{"Reply", func(_ *testing.T, s *Server) { s.Reply("twice", http.StatusOK, `{}`) }},
+		{"ReplySequence", func(_ *testing.T, s *Server) { s.ReplySequence("twice", Response{Body: `{}`}) }},
+		{"Handle", func(_ *testing.T, s *Server) {
+			s.Handle("twice", func(Request) Response { return Response{Body: `{}`} })
+		}},
+		{"StrictReplySequence", func(t *testing.T, s *Server) {
+			s.StrictReplySequence("twice", Response{Body: `{}`})
+			if got := strictGet(t, s, "twice"); got != http.StatusOK {
+				t.Fatalf("replacement response status = %d, want 200", got)
+			}
+		}},
+	}
+}
+
 func TestStrictReplySequenceAcceptsExactRequests(t *testing.T) {
 	fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
 	s := New(fake)

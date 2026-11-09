@@ -44,6 +44,12 @@ type script struct {
 	strict    bool
 }
 
+type unusedResponse struct {
+	call string
+	got  int
+	want int
+}
+
 // Server records B2 requests and answers with built-in or scripted responses.
 type Server struct {
 	t        testing.TB
@@ -71,24 +77,14 @@ func (s *Server) close() {
 	s.http.Close()
 
 	s.mu.Lock()
-	var unused []struct {
-		call string
-		got  int
-		want int
-	}
+	var unused []unusedResponse
 	for call, script := range s.scripts {
-		if script.strict && script.used < len(script.responses) {
-			unused = append(unused, struct {
-				call string
-				got  int
-				want int
-			}{call: call, got: script.used, want: len(script.responses)})
+		if unusedResponse, ok := unusedStrictResponse(call, script); ok {
+			unused = append(unused, unusedResponse)
 		}
 	}
 	s.mu.Unlock()
-	for _, script := range unused {
-		s.t.Errorf("b2wiretest: unused scripted responses for %s: got %d, want %d", script.call, script.got, script.want)
-	}
+	s.reportUnusedResponses(unused)
 }
 
 // URL returns the server's base URL.
@@ -107,22 +103,42 @@ func (s *Server) ReplySequence(call string, rs ...Response) {
 
 // StrictReplySequence registers responses that must be used exactly once each.
 // It reports an error for an extra request or an unused response at test cleanup.
+// Replacing it reports any unused responses from the earlier sequence.
 func (s *Server) StrictReplySequence(call string, rs ...Response) {
 	s.replySequence(call, true, rs...)
 }
 
 func (s *Server) replySequence(call string, strict bool, rs ...Response) {
+	s.replaceScript(call, &script{responses: append([]Response(nil), rs...), strict: strict})
+}
+
+func (s *Server) replaceScript(call string, replacement *script) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.scripts[call] = &script{responses: append([]Response(nil), rs...), strict: strict}
+	unused, report := unusedStrictResponse(call, s.scripts[call])
+	s.scripts[call] = replacement
+	s.mu.Unlock()
+	if report {
+		s.reportUnusedResponses([]unusedResponse{unused})
+	}
 }
 
 // Handle registers a response computed from each request. It replaces any earlier script.
 // See Response for status and header defaults.
 func (s *Server) Handle(call string, h func(Request) Response) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.scripts[call] = &script{handler: h}
+	s.replaceScript(call, &script{handler: h})
+}
+
+func unusedStrictResponse(call string, script *script) (unusedResponse, bool) {
+	if script != nil && script.strict && script.used < len(script.responses) {
+		return unusedResponse{call: call, got: script.used, want: len(script.responses)}, true
+	}
+	return unusedResponse{}, false
+}
+
+func (s *Server) reportUnusedResponses(unused []unusedResponse) {
+	for _, response := range unused {
+		s.t.Errorf("b2wiretest: unused scripted responses for %s: got %d, want %d", response.call, response.got, response.want)
+	}
 }
 
 // Requests returns all requests in arrival order.
