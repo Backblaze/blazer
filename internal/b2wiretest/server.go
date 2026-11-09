@@ -41,6 +41,7 @@ type script struct {
 	responses []Response
 	handler   func(Request) Response
 	used      int
+	strict    bool
 }
 
 // Server records B2 requests and answers with built-in or scripted responses.
@@ -68,6 +69,26 @@ func (s *Server) close() {
 	s.closed = true
 	s.mu.Unlock()
 	s.http.Close()
+
+	s.mu.Lock()
+	var unused []struct {
+		call string
+		got  int
+		want int
+	}
+	for call, script := range s.scripts {
+		if script.strict && script.used < len(script.responses) {
+			unused = append(unused, struct {
+				call string
+				got  int
+				want int
+			}{call: call, got: script.used, want: len(script.responses)})
+		}
+	}
+	s.mu.Unlock()
+	for _, script := range unused {
+		s.t.Errorf("b2wiretest: unused scripted responses for %s: got %d, want %d", script.call, script.got, script.want)
+	}
 }
 
 // URL returns the server's base URL.
@@ -81,9 +102,19 @@ func (s *Server) Reply(call string, status int, body string) {
 // ReplySequence registers successive responses; the last response repeats.
 // See Response for status and header defaults.
 func (s *Server) ReplySequence(call string, rs ...Response) {
+	s.replySequence(call, false, rs...)
+}
+
+// StrictReplySequence registers responses that must be used exactly once each.
+// It reports an error for an extra request or an unused response at test cleanup.
+func (s *Server) StrictReplySequence(call string, rs ...Response) {
+	s.replySequence(call, true, rs...)
+}
+
+func (s *Server) replySequence(call string, strict bool, rs ...Response) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.scripts[call] = &script{responses: append([]Response(nil), rs...)}
+	s.scripts[call] = &script{responses: append([]Response(nil), rs...), strict: strict}
 }
 
 // Handle registers a response computed from each request. It replaces any earlier script.
@@ -171,9 +202,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	registered, ok := s.scripts[call]
 	var response Response
 	var handler func(Request) Response
+	var extra bool
+	var got, want int
 	if ok {
 		handler = registered.handler
-		if handler == nil && len(registered.responses) > 0 {
+		if handler == nil && registered.strict {
+			index := registered.used
+			registered.used++
+			if index >= len(registered.responses) {
+				extra = true
+				got, want = registered.used, len(registered.responses)
+			} else {
+				response = registered.responses[index]
+			}
+		} else if handler == nil && len(registered.responses) > 0 {
 			index := registered.used
 			if index >= len(registered.responses) {
 				index = len(registered.responses) - 1
@@ -184,7 +226,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	if handler != nil {
+	if extra {
+		s.t.Errorf("b2wiretest: unexpected extra request for %s: got %d, want %d", call, got, want)
+		response = Response{Status: http.StatusBadRequest, Body: unscriptedResponseBody}
+	} else if handler != nil {
 		response = handler(copyRequests([]Request{req})[0])
 	} else if !ok {
 		response, ok = s.builtin(call)
