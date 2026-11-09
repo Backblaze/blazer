@@ -38,8 +38,8 @@ against the simulator.
 
 ## Prerequisites
 
-`bash` and a Go toolchain (the module declares Go 1.18; the harness CI
-uses Go 1.25.x). Nothing else is installed or downloaded (`curl` and `python3` only for the optional health-bucket snippet below).
+`bash` and a Go toolchain (the module declares Go 1.26.10; the harness CI
+uses Go 1.27.x / stable). Nothing else is installed or downloaded (`curl` and `python3` only for the optional health-bucket snippet below).
 
 ## Run one check by hand
 

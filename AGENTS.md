@@ -38,7 +38,8 @@ not exercised the wire.
 
 ## Conventions
 
-- Minimum Go version is in `go.mod`; CI tests a patched 1.27 and latest stable on Linux, macOS and Windows.
+- The minimum Go version is in `go.mod` and rises only in a release that says so; CI tests the 1.26.10 floor on
+  Ubuntu and Go 1.27.3 plus latest stable on Ubuntu, macOS and Windows.
 - Public API is semver. Pre-1.0, a breaking change bumps the minor version and needs a `Changed` or
   `Removed` changelog entry that says what callers must do.
 - New B2 calls follow the B2 docs and the
