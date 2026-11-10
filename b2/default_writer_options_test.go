@@ -27,13 +27,13 @@ func TestDefaultWriterOptionsRunOnlyForRealWriters(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
 	client, err := NewClient(ctx, "offline-id", "offline-key", Transport(b2sim.New()),
-		DefaultWriterOptions(func(w *Writer) {
+		DefaultWriterOptions(WriterOptionFunc(func(w *Writer) {
 			calls++
 			if w.o == nil || w.ctx == nil || w.cancel == nil {
 				t.Error("default option received an uninitialized writer")
 			}
 			w.ChunkSize = 5_000_000
-		}, WithAttrsOption(&Attrs{ContentType: "text/default"})))
+		}), WithAttrsOption(&Attrs{ContentType: "text/default"})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestDefaultWriterOptionsDoNotRunWhenAuthorizationFails(t *testing.T) {
 	})
 	calls := 0
 	client, err := NewClient(context.Background(), "offline-id", "offline-key", APIBase(server.URL()),
-		DefaultWriterOptions(func(w *Writer) { calls++ }))
+		DefaultWriterOptions(WriterOptionFunc(func(w *Writer) { calls++ })))
 	if client != nil {
 		t.Error("failed authorization returned a client")
 	}
@@ -96,5 +96,59 @@ func TestDefaultWriterOptionsDoNotRunWhenAuthorizationFails(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Errorf("option calls after failed authorization = %d, want 0", calls)
+	}
+}
+
+func TestDefaultWriterOptionsRejectWrappedSSECBeforeAuthorization(t *testing.T) {
+	for _, nilKey := range []bool{false, true} {
+		name := "key"
+		if nilKey {
+			name = "nil key"
+		}
+		t.Run(name, func(t *testing.T) {
+			wire := newSSECPublicWire(t)
+			key := wire.key
+			if nilKey {
+				key = nil
+			}
+			calls := 0
+			wrapped := struct{ WriterOption }{WithSSECKey(key)}
+			client, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL),
+				DefaultWriterOptions(WriterOptionFunc(func(*Writer) { calls++ }), wrapped))
+			if client != nil || err == nil || err.Error() != "b2: SSE-C key cannot be a default writer option; pass it to NewWriter" {
+				t.Fatalf("wrapped SSE-C default = (%v, %v), want SSE-C default rejection", client, err)
+			}
+			if calls != 0 {
+				t.Errorf("option calls after rejected default = %d, want 0", calls)
+			}
+			wire.mu.Lock()
+			authorizeCalls := wire.authorizeCalls
+			wire.mu.Unlock()
+			if authorizeCalls != 0 {
+				t.Errorf("authorization calls = %d, want 0", authorizeCalls)
+			}
+		})
+	}
+}
+
+func TestDefaultWriterOptionsRejectNilBeforeAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		option WriterOption
+	}{
+		{"nil interface", nil},
+		{"nil callback", WriterOptionFunc(nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := b2wiretest.New(t)
+			client, err := NewClient(context.Background(), "account", "key", APIBase(server.URL()),
+				DefaultWriterOptions(tc.option))
+			if client != nil || err == nil || err.Error() != "b2: writer option is nil" {
+				t.Fatalf("nil default = (%v, %v), want nil writer-option error", client, err)
+			}
+			if got := len(server.Calls("b2_authorize_account")); got != 0 {
+				t.Errorf("authorization requests = %d, want 0", got)
+			}
+		})
 	}
 }

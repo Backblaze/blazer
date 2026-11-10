@@ -78,14 +78,14 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 		c.opts.accountInfo = &InMemoryAccountInfo{}
 	}
 	c.backend.(*beRoot).accountInfo = c.opts.accountInfo
-	// Probe default writer options before authorization: SSE-C keys are strictly
-	// request-scoped and must not be retained by a Client.
-	probe := &Writer{}
+	// Validate defaults without invoking callbacks: SSE-C keys are request-scoped.
 	for _, option := range c.opts.writerOpts {
-		option(probe)
-	}
-	if probe.ssecRequested || (probe.encryption != nil && probe.encryption.ssec != nil) {
-		return nil, errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
+		if option == nil {
+			return nil, errors.New("b2: writer option is nil")
+		}
+		if err := option.validateDefault(); err != nil {
+			return nil, err
+		}
 	}
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
 		return nil, err
@@ -737,6 +737,8 @@ func (o *Object) URL() string {
 // overwritten are not deleted, but are "hidden".
 //
 // Callers must close the writer when finished and check the error status.
+// Default options and then opts are applied synchronously to the initialized
+// writer before NewWriter returns.
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	ctx, cancel := context.WithCancelCause(ctx)
 	w := &Writer{
@@ -747,14 +749,14 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 		progressTotal: -1,
 	}
 	for _, f := range o.b.c.opts.writerOpts {
-		f(w)
+		f.apply(w)
 	}
 	// Conflict flags describe explicit options on this writer, not inherited
 	// defaults. Keep the default encryption unless an option below replaces it.
 	w.ssecRequested = false
 	w.sseb2Requested = false
 	for _, f := range opts {
-		f(w)
+		f.apply(w)
 	}
 	return w
 }
