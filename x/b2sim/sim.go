@@ -311,8 +311,11 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 			"apiInfo": map[string]any{"storageApi": map[string]any{
 				"absoluteMinimumPartSize": absoluteMinimumPartSize, "recommendedPartSize": 100_000_000,
 				"apiUrl": origin, "downloadUrl": origin, "s3ApiUrl": origin, "storageApi": "storage",
-				"capabilities": []string{"listBuckets", "writeBuckets", "readBuckets", "writeFiles", "readFiles", "deleteFiles"},
-				"allowed":      map[string]any{"buckets": nil, "capabilities": []string{}, "namePrefix": nil},
+				"allowed": map[string]any{
+					"buckets":      nil,
+					"capabilities": []string{"listBuckets", "writeBuckets", "readBuckets", "writeFiles", "readFiles", "deleteFiles"},
+					"namePrefix":   nil,
+				},
 			}},
 		})
 	}
