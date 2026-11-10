@@ -144,9 +144,12 @@ func TestDeleteBypassGovernanceLive(t *testing.T) {
 			return resp, err
 		}
 		data, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		closeErr := resp.Body.Close()
 		if err != nil {
 			return nil, err
+		}
+		if closeErr != nil {
+			return nil, closeErr
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(data))
 		if resp.StatusCode != http.StatusOK {
