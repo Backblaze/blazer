@@ -291,9 +291,10 @@ type BucketAttrs struct {
 
 	// ReplicationConfig configures bucket replication. NewBucket uses the service
 	// default when nil; Update leaves replication unchanged when nil.
-	// Update rejects an empty configuration and changes to an unreadable existing
-	// configuration. Changing replication requires readBucketReplications and
-	// writeBucketReplications, in addition to the normal bucket-update permissions.
+	// Creation and updates reject empty configurations. Replication changes require
+	// writeBucketReplications and normal bucket-update permissions. An Update that
+	// preserves an unspecified role also requires readBucketReplications; provide
+	// both roles explicitly to replace a configuration that cannot be read.
 	// B2 requires a verified email and payment history before first configuration.
 	ReplicationConfig           *ReplicationConfiguration
 	replicationConfigUnreadable bool
@@ -346,9 +347,13 @@ type RetentionPeriod struct {
 }
 
 // ReplicationConfiguration describes a bucket's source and destination roles.
-// Both roles may be present. Bucket.Update requires at least one non-empty role
-// and a readable existing configuration; it does not support clearing replication.
+// Both roles may be present. Creation and replication updates require a non-empty
+// configuration. In an Update, an unspecified role is preserved and requires a
+// readable existing configuration. Providing both roles replaces them without a
+// merge. A nil BucketAttrs.ReplicationConfig leaves even unreadable settings alone.
+// Clearing replication is not supported by this high-level representation.
 type ReplicationConfiguration struct {
+	// AsReplicationSource is unspecified when its key ID is empty and it has no rules.
 	AsReplicationSource AsReplicationSource
 	// AsReplicationDestination specifies the destination key mapping. When nil
 	// in a source-only Update, the known destination mapping is preserved.
@@ -359,7 +364,7 @@ type ReplicationConfiguration struct {
 // An explicit destination in Bucket.Update replaces the existing mapping.
 type AsReplicationDestination struct {
 	// SourceToDestinationKeyMapping uses source application-key IDs as keys and
-	// destination application-key IDs as values. Bucket.Update rejects both nil
+	// destination application-key IDs as values. Creation and updates reject nil
 	// and empty maps because the current wire encoding omits the required mapping
 	// field. Neither form is a supported way to clear the destination role.
 	SourceToDestinationKeyMapping map[string]string

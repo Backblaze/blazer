@@ -120,22 +120,22 @@ func TestBucketUpdateRejectsUnsafeReplicationWire(t *testing.T) {
 		{
 			name: "nil destination map", response: destinationReplicationUpdateJSON,
 			config: &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{}},
-			want:   "b2: replication destination requires a non-empty key mapping",
+			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
 		},
 		{
 			name: "empty destination map", response: destinationReplicationUpdateJSON,
 			config: &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}},
-			want:   "b2: replication destination requires a non-empty key mapping",
+			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
 		},
 		{
 			name: "source with nil destination map", response: bothReplBucketJSON,
 			config: &ReplicationConfiguration{AsReplicationSource: source, AsReplicationDestination: &AsReplicationDestination{}},
-			want:   "b2: replication destination requires a non-empty key mapping",
+			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
 		},
 		{
 			name: "source with empty destination map", response: bothReplBucketJSON,
 			config: &ReplicationConfiguration{AsReplicationSource: source, AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}},
-			want:   "b2: replication destination requires a non-empty key mapping",
+			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,8 +250,8 @@ func TestNewBucketRejectsUnsafeReplicationWire(t *testing.T) {
 		want   string
 	}{
 		{"empty configuration", &ReplicationConfiguration{}, "b2: replication configuration requires a source or destination"},
-		{"nil destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{}}, "b2: replication destination requires a non-empty key mapping"},
-		{"empty destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}}, "b2: replication destination requires a non-empty key mapping"},
+		{"nil destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{}}, "b2: nil or empty destination key maps cannot encode the required mapping field"},
+		{"empty destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}}, "b2: nil or empty destination key maps cannot encode the required mapping field"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := b2wiretest.New(t)
