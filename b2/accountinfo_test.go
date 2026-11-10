@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -536,9 +537,9 @@ func newAccountInfoWire(t *testing.T) *accountInfoWire {
 				onAuth(call)
 			}
 			if allowed == "" {
-				allowed = `{"buckets":null,"namePrefix":null}`
+				allowed = `{"buckets":null,"capabilities":["listBuckets"],"namePrefix":null}`
 			}
-			_, _ = fmt.Fprintf(out, `{"accountId":"account","authorizationToken":"token-%d","apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"recommendedPartSize":100000000,"apiUrl":%q,"downloadUrl":%q,"s3ApiUrl":%q,"allowed":%s,"capabilities":["listBuckets"]}}}`, call, w.server.URL, w.server.URL, w.server.URL, allowed)
+			_, _ = fmt.Fprintf(out, `{"accountId":"account","authorizationToken":"token-%d","apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"recommendedPartSize":100000000,"apiUrl":%q,"downloadUrl":%q,"s3ApiUrl":%q,"allowed":%s}}}`, call, w.server.URL, w.server.URL, w.server.URL, allowed)
 		case strings.HasSuffix(req.URL.Path, "/b2_list_buckets"):
 			w.mu.Lock()
 			w.listCalls++
@@ -787,9 +788,11 @@ func TestAccountInfoDoesNotReuseAnotherKeyID(t *testing.T) {
 	}
 }
 
+// The v4 storage scope is nested under allowed:
+// https://www.backblaze.com/apidocs/b2-authorize-account
 func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	wire := newAccountInfoWire(t)
-	wire.allowedJSON = `{"buckets":[{"id":"restricted-id","name":"restricted"}],"namePrefix":"prefix/"}`
+	wire.allowedJSON = `{"buckets":[{"id":"restricted-id","name":"restricted"}],"capabilities":["readFiles","bypassGovernance"],"namePrefix":"prefix/"}`
 	path := filepath.Join(t.TempDir(), "private", "account.json")
 	ctx := context.Background()
 	store := NewAccountInfoFile(path)
@@ -800,6 +803,9 @@ func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	if !ok || !reflect.DeepEqual(data.AllowedBuckets, []string{"restricted-id"}) || data.AllowedPrefix != "prefix/" {
 		t.Fatalf("stored restricted scope = %+v, ok=%t", data, ok)
 	}
+	if want := []string{"readFiles", "bypassGovernance"}; !slices.Equal(data.AllowedCapabilities, want) {
+		t.Errorf("stored AllowedCapabilities = %q, want %q", data.AllowedCapabilities, want)
+	}
 	fresh, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
 	if err != nil {
 		t.Fatal(err)
@@ -807,6 +813,9 @@ func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	restored := fresh.backend.(*beRoot).b2i.(*b2Root).authData()
 	if !reflect.DeepEqual(restored.AllowedBuckets, data.AllowedBuckets) || restored.AllowedPrefix != data.AllowedPrefix {
 		t.Fatalf("restored scope = %+v, want %+v", restored, data)
+	}
+	if want := []string{"readFiles", "bypassGovernance"}; !slices.Equal(restored.AllowedCapabilities, want) {
+		t.Errorf("restored AllowedCapabilities = %q, want %q", restored.AllowedCapabilities, want)
 	}
 	wire.mu.Lock()
 	defer wire.mu.Unlock()
