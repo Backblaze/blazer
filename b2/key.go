@@ -71,6 +71,10 @@ type keyOptions struct {
 // KeyOption specifies desired properties for application keys.
 type KeyOption func(*keyOptions)
 
+// ErrInvalidBucketIDs indicates an explicitly empty BucketIDs scope or an empty
+// bucket ID passed to Client.CreateKey.
+var ErrInvalidBucketIDs = errors.New("b2: BucketIDs requires a non-empty list of non-empty bucket IDs")
+
 // Lifetime requests a key with the given lifetime. A zero lifetime creates a
 // non-expiring key. Otherwise the lifetime must be at least one second and
 // below 1000 days; longer fractional durations truncate to whole seconds.

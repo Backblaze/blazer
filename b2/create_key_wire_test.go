@@ -16,6 +16,7 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -113,6 +114,26 @@ func TestCreateKeyRequestBody(t *testing.T) {
 				"namePrefix":   "logs/",
 			},
 			absent: []string{"validDurationInSeconds", "bucketIds"},
+		},
+		{
+			name: "empty option then one bucket",
+			opts: []KeyOption{Capabilities("readFiles"), BucketIDs(), BucketIDs("b-1")},
+			path: "/b2api/v3/b2_create_key",
+			want: map[string]any{
+				"accountId": "acct-1", "keyName": "k1",
+				"capabilities": []string{"readFiles"}, "bucketId": "b-1",
+			},
+			absent: []string{"validDurationInSeconds", "bucketIds", "namePrefix"},
+		},
+		{
+			name: "one bucket then empty option",
+			opts: []KeyOption{Capabilities("readFiles"), BucketIDs("b-1"), BucketIDs()},
+			path: "/b2api/v3/b2_create_key",
+			want: map[string]any{
+				"accountId": "acct-1", "keyName": "k1",
+				"capabilities": []string{"readFiles"}, "bucketId": "b-1",
+			},
+			absent: []string{"validDurationInSeconds", "bucketIds", "namePrefix"},
 		},
 		{
 			name: "several buckets",
@@ -319,21 +340,74 @@ func TestCreateKeyReturnsTheResponseFields(t *testing.T) {
 	}
 }
 
+// Explicit BucketIDs scopes must not fall back to account-wide key creation.
+// Wire fields: https://www.backblaze.com/apidocs/b2-create-key
+func TestCreateKeyRejectsEmptyBucketIDsWithoutARequest(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []KeyOption
+	}{
+		{"no IDs", []KeyOption{BucketIDs()}},
+		{"nil IDs", []KeyOption{BucketIDs([]string(nil)...)}},
+		{"empty IDs", []KeyOption{BucketIDs([]string{}...)}},
+		{"empty ID", []KeyOption{BucketIDs("")}},
+		{"empty first ID", []KeyOption{BucketIDs("", "b-1")}},
+		{"empty last ID", []KeyOption{BucketIDs("b-1", "")}},
+		{"empty ID in later option", []KeyOption{BucketIDs("b-1"), BucketIDs("")}},
+		{"empty ID in earlier option", []KeyOption{BucketIDs(""), BucketIDs("b-1")}},
+		{"empty scope with prefix", []KeyOption{BucketIDs(), Prefix("logs/")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv, client := newCreateKeyWire(t)
+			opts := append([]KeyOption{Capabilities("readFiles")}, test.opts...)
+			key, err := client.CreateKey(context.Background(), "k1", opts...)
+			if !errors.Is(err, ErrInvalidBucketIDs) {
+				t.Errorf("CreateKey error = %v, want ErrInvalidBucketIDs", err)
+			}
+			if key != nil {
+				t.Error("CreateKey returned a key, want nil")
+			}
+			if calls := srv.Calls("b2_create_key"); len(calls) != 0 {
+				t.Errorf("b2_create_key calls = %d, want 0", len(calls))
+			}
+		})
+	}
+}
+
 // B2 b2_create_key bucket restriction rules: https://www.backblaze.com/apidocs/b2-create-key
 func TestCreateKeyRejectsBadOptionsWithoutARequest(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name    string
 		bucket  bool
+		opts    []KeyOption
 		wantErr string
 	}{
 		{
 			name:    "client prefix without bucket",
+			opts:    []KeyOption{Prefix("p/")},
 			wantErr: "Prefix requires at least one bucket; use BucketIDs or create the key via (*Bucket).CreateKey",
 		},
 		{
 			name:    "bucket key with BucketIDs",
 			bucket:  true,
+			opts:    []KeyOption{BucketIDs("b-1")},
+			wantErr: "BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key",
+		},
+		{
+			name: "bucket key with empty BucketIDs", bucket: true,
+			opts:    []KeyOption{BucketIDs()},
+			wantErr: "BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key",
+		},
+		{
+			name: "bucket key with nil BucketIDs", bucket: true,
+			opts:    []KeyOption{BucketIDs([]string(nil)...)},
+			wantErr: "BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key",
+		},
+		{
+			name: "bucket key with empty slice BucketIDs", bucket: true,
+			opts:    []KeyOption{BucketIDs([]string{}...)},
 			wantErr: "BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key",
 		},
 	}
@@ -346,9 +420,9 @@ func TestCreateKeyRejectsBadOptionsWithoutARequest(t *testing.T) {
 				err error
 			)
 			if test.bucket {
-				key, err = createKeyWireBucket(t, srv, client).CreateKey(ctx, "k1", BucketIDs("b-1"))
+				key, err = createKeyWireBucket(t, srv, client).CreateKey(ctx, "k1", test.opts...)
 			} else {
-				key, err = client.CreateKey(ctx, "k1", Prefix("p/"))
+				key, err = client.CreateKey(ctx, "k1", test.opts...)
 			}
 			if err == nil {
 				t.Errorf("CreateKey error = nil, want %q", test.wantErr)
