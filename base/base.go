@@ -1812,6 +1812,8 @@ func (b *Bucket) GetDownloadAuthorization(ctx context.Context, prefix string, va
 // FileReader is an io.ReadCloser that downloads a file from B2.
 type FileReader struct {
 	io.ReadCloser
+	// ContentLength is the response length, saturated at the platform's maximum
+	// int. It does not limit the bytes returned by Read.
 	ContentLength int
 	ContentType   string
 	SHA1          string
@@ -1972,15 +1974,16 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		defer resp.Body.Close()
 		return nil, mkErr(resp)
 	}
-	contentLength, err := strconv.Atoi(resp.Header.Get("Content-Length"))
+	contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
 	if err != nil {
 		_ = resp.Body.Close()
 		return nil, err
 	}
-	if contentLength < 0 || int64(contentLength) > maxInt {
+	if contentLength < 0 {
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("invalid download content length %d", contentLength)
 	}
+	contentLength = min(contentLength, maxInt, int64(^uint(0)>>1))
 	info := make(map[string]string)
 	for key := range resp.Header {
 		if !strings.HasPrefix(key, "X-Bz-Info-") {
@@ -2007,7 +2010,7 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		SHA1:          sha1,
 		ID:            resp.Header.Get("X-Bz-File-Id"),
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: contentLength,
+		ContentLength: int(contentLength),
 		Info:          info,
 	}, nil
 }
