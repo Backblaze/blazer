@@ -52,7 +52,7 @@ func WithRuleName(name string) ReplicationOption {
 	}
 }
 
-// WithRulePriority sets the new rule's priority.
+// WithRulePriority sets the new rule's priority, from 1 through 2147483647 inclusive.
 func WithRulePriority(priority int) ReplicationOption {
 	return func(o *replicationOptions) {
 		if o.prioritySet && o.priority != priority {
@@ -86,7 +86,10 @@ func WithIncludeExistingFiles(include bool) ReplicationOption {
 // It does not report per-file replication progress.
 type ReplicationRuleStatus struct{ ReplicationRules }
 
-// ReplicationStatus returns the source bucket's configured replication rules.
+// ReplicationStatus returns all of the source bucket's configured replication
+// rules, including disabled rules. It reports an error if the configuration
+// cannot be read. It does not scan files or report per-file replication progress.
+// The bucket client's key needs listBuckets and readBucketReplications.
 func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatus, error) {
 	if src == nil {
 		return nil, fmt.Errorf("replication status: source bucket is nil")
@@ -109,8 +112,34 @@ func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatu
 }
 
 // SetupReplication configures one-way replication using caller-owned application
-// keys. It updates the destination mapping before the source rule. If the source
-// update fails, repeating the call can finish setup using the same key IDs.
+// key IDs. Callers must provision and own bucket-scoped keys: the source key needs
+// readFiles, readFileLegalHolds and readFileRetentions; the destination key needs
+// writeFiles, writeFileLegalHolds, writeFileRetentions and deleteFiles. The helper
+// neither creates keys nor validates their permissions.
+//
+// The keys authenticating the bucket clients need listBuckets and
+// readBucketReplications to read configurations. Clients that perform updates
+// need writeBuckets and writeBucketReplications for the update-bucket requests.
+// These are management capabilities, distinct from the file capabilities of the
+// supplied replication keys. Adding a source rule requires update permission for
+// both buckets, including retries: the destination update is repeated even if its
+// mapping already matches. Repairing just a missing destination mapping needs
+// update permission only for the destination. An exact existing rule and mapping
+// need no update permission.
+//
+// The helper preserves existing rules and key mappings. It rejects unreadable
+// configurations, conflicting source keys or destination mappings, and an existing
+// rule with the same name but different options or a disabled state. Repeating
+// setup for an identical enabled rule and mapping makes no updates.
+//
+// Source and destination must be different buckets. The helper allows at most two
+// rules per source, with priorities from 1 through 2147483647 inclusive. The first
+// rule defaults to priority 128; later rules default to five above the highest
+// existing priority, capped at 2147483647.
+//
+// Setup is not atomic: the destination mapping is stored before the source rule.
+// If the source update fails, the mapping remains; retry with the same key IDs and
+// options to finish setup.
 func SetupReplication(ctx context.Context, src, dst *Bucket, sourceKeyID, destinationKeyID string, opts ...ReplicationOption) error {
 	if src == nil || dst == nil {
 		return fmt.Errorf("setup replication: source and destination buckets are required")
