@@ -25,20 +25,20 @@ func TestDownloadContentLengthFitsNativeInt(t *testing.T) {
 		name    string
 		length  int64
 		maxInt  int64
+		want    int64
 		wantErr bool
 	}{
-		{"32-bit boundary", math.MaxInt32, math.MaxInt32, false},
-		{"32-bit overflow", int64(math.MaxInt32) + 1, math.MaxInt32, true},
-		{"64-bit accepts large file", int64(math.MaxInt32) + 1, math.MaxInt64, false},
-		{"negative", -1, math.MaxInt64, true},
+		{"32-bit boundary", math.MaxInt32, math.MaxInt32, math.MaxInt32, false},
+		{"32-bit first larger length", 2147483648, math.MaxInt32, math.MaxInt32, false},
+		{"32-bit three GiB", 3221225472, math.MaxInt32, math.MaxInt32, false},
+		{"64-bit accepts large file", 3221225472, math.MaxInt64, 3221225472, false},
+		{"64-bit boundary", math.MaxInt64, math.MaxInt64, math.MaxInt64, false},
+		{"negative", -1, math.MaxInt64, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}
 			resp.Header.Set("Content-Length", fmt.Sprint(tc.length))
 			got, err := newFileReaderWithMaxLength(resp, tc.maxInt)
-			if strconv.IntSize == 32 && tc.length > math.MaxInt32 {
-				tc.wantErr = true
-			}
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("newFileReaderWithMaxLength(%d, %d) error = %v, want error %v", tc.length, tc.maxInt, err, tc.wantErr)
 			}
@@ -48,8 +48,12 @@ func TestDownloadContentLengthFitsNativeInt(t *testing.T) {
 						t.Error(err)
 					}
 				}()
-				if int64(got.ContentLength) != tc.length {
-					t.Fatalf("content length = %d, want %d", got.ContentLength, tc.length)
+				want := tc.want
+				if strconv.IntSize == 32 && want > math.MaxInt32 {
+					want = math.MaxInt32
+				}
+				if int64(got.ContentLength) != want {
+					t.Fatalf("content length = %d, want %d", got.ContentLength, want)
 				}
 			}
 		})
@@ -63,6 +67,8 @@ func TestFileReaderClosesBodyOnHeaderAndStatusErrors(t *testing.T) {
 	}{
 		{"bad length", "not-a-number", http.StatusOK},
 		{"negative length", "-1", http.StatusOK},
+		{"missing length", "", http.StatusOK},
+		{"int64 overflow", "9223372036854775808", http.StatusOK},
 		{"bad metadata escape", "0", http.StatusOK},
 		{"not found", "0", http.StatusNotFound},
 	} {
@@ -86,14 +92,55 @@ func TestFileReaderClosesBodyOnHeaderAndStatusErrors(t *testing.T) {
 	}
 }
 
-func TestFileReaderRejects32BitContentLengthOverflow(t *testing.T) {
-	const overflow = int64(math.MaxInt32) + 1
-	body := &closeTrackingBody{Reader: strings.NewReader("")}
-	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}
-	resp.Header.Set("Content-Length", "2147483648")
-	reader, err := newFileReaderWithMaxLength(resp, math.MaxInt32)
-	if err == nil || reader != nil || !body.closed {
-		t.Fatalf("32-bit overflow %d: reader=%v error=%v body closed=%v", overflow, reader, err, body.closed)
+func TestFileReaderLargeContentLength(t *testing.T) {
+	// HEAD has no body; a GET can be opened and read incrementally without
+	// allocating the declared length. Model a 32-bit int on every host.
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		t.Run(method, func(t *testing.T) {
+			payload := ""
+			if method == http.MethodGet {
+				payload = "prefix"
+			}
+			body := &closeTrackingBody{Reader: strings.NewReader(payload)}
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{
+				"Content-Length": {"3221225472"},
+				"X-Bz-File-Id":   {"large-file-id"},
+			}, Body: body}
+			reader, err := newFileReaderWithMaxLength(resp, math.MaxInt32)
+			if err != nil {
+				t.Fatalf("%s with 3 GiB Content-Length: %v", method, err)
+			}
+			defer reader.Close()
+			if body.closed || reader.ContentLength != math.MaxInt32 || reader.ID != "large-file-id" {
+				t.Fatalf("%s: length=%d id=%q closed=%t, want 2147483647, large-file-id, false", method, reader.ContentLength, reader.ID, body.closed)
+			}
+			got := make([]byte, len(payload))
+			if _, err := io.ReadFull(reader, got); err != nil || string(got) != payload {
+				t.Fatalf("%s prefix = %q, %v; want %q, nil", method, got, err, payload)
+			}
+			if err := reader.Close(); err != nil || !body.closed {
+				t.Fatalf("%s Close = %v, closed=%t; want nil, true", method, err, body.closed)
+			}
+		})
+	}
+}
+
+func TestFileReaderCompatibilityLengthDoesNotLimitBody(t *testing.T) {
+	// A small int limit makes it practical to read beyond the compatibility
+	// field. Saturation must never become an io.LimitReader around the body.
+	body := &closeTrackingBody{Reader: strings.NewReader("abc")}
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Length": {"3"}}, Body: body}
+	reader, err := newFileReaderWithMaxLength(resp, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	got, err := io.ReadAll(reader)
+	if err != nil || string(got) != "abc" || reader.ContentLength != 2 {
+		t.Fatalf("read=%q error=%v length=%d, want abc, nil, 2", got, err, reader.ContentLength)
+	}
+	if err := reader.Close(); err != nil || !body.closed {
+		t.Fatalf("Close=%v closed=%t, want nil, true", err, body.closed)
 	}
 }
 
