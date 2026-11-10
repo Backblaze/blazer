@@ -53,8 +53,7 @@ type Reader struct {
 	// and end with a final call at the bytes downloaded before Close returns.
 	// For a finite range, total is the actual available byte count (not the
 	// requested upper bound) when a HEAD request can determine it; otherwise
-	// total is -1.
-	// Set Progress before the first Read. Calling Close from this
+	// total is -1. Set Progress before the first Read. Calling Close from this
 	// callback is unsupported because Close waits for the callback to finish.
 	Progress func(bytesComplete, bytesTotal int64)
 
