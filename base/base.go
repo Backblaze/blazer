@@ -1644,6 +1644,7 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 				Name:                 f.Name,
 				ContentType:          f.ContentType,
 				Info:                 f.Info,
+				Status:               f.Action,
 				Timestamp:            millitime(f.Timestamp),
 				Retention:            retention,
 				LegalHold:            legalHold,
