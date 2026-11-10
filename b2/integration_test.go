@@ -1761,4 +1761,31 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 			t.Fatal("B2 changed the destination mapping after rejecting an omitted required field")
 		}
 	}
+	listed, err = raw.ListBuckets(ctx, source.Name())
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list source for mapping contract: buckets=%d error=%v", len(listed), err)
+	}
+	for _, mapping := range []map[string]string{nil, {}} {
+		listed[0].ReplicationConfiguration = &b2types.ReplicationConfiguration{
+			AsReplicationSource: &b2types.AsReplicationSource{
+				KeyID: keys[0].ID(), ReplicationRules: []b2types.ReplicationRules{{
+					DestinationBucketID: destination.ID(), FileNamePrefix: "demo/" + uniq + "/",
+					IsEnabled: true, Priority: 128, ReplicationRuleName: "mapping-contract",
+				}},
+			},
+			AsReplicationDestination: &b2types.AsReplicationDestination{SourceToDestinationKeyMapping: mapping},
+		}
+		_, err := listed[0].Update(ctx)
+		status, code, message := base.MsgCode(err)
+		if status != http.StatusBadRequest || code != "bad_request" || !strings.Contains(message, "sourceToDestinationKeyMapping") {
+			t.Errorf("source plus omitted mapping field error = %v, want 400 bad_request naming sourceToDestinationKeyMapping", err)
+		}
+		attrs, err := source.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.ReplicationConfig != nil {
+			t.Fatal("B2 changed source replication after rejecting an omitted required mapping field")
+		}
+	}
 }

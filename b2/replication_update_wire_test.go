@@ -242,3 +242,86 @@ func TestBucketUpdateReplacesDestinationMappingWire(t *testing.T) {
 		}},
 	})
 }
+
+func TestNewBucketRejectsUnsafeReplicationWire(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config *ReplicationConfiguration
+		want   string
+	}{
+		{"empty configuration", &ReplicationConfiguration{}, "b2: replication configuration requires a source or destination"},
+		{"nil destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{}}, "b2: replication destination requires a non-empty key mapping"},
+		{"empty destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}}, "b2: replication destination requires a non-empty key mapping"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := b2wiretest.New(t)
+			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+			srv.Reply("b2_create_bucket", http.StatusOK, noReplicationBucketJSON)
+			client := liveOnlyClient(t, srv)
+			before := len(srv.Requests())
+			bucket, err := client.NewBucket(context.Background(), "n", &BucketAttrs{ReplicationConfig: tc.config})
+			if bucket != nil || err == nil || err.Error() != tc.want {
+				t.Errorf("NewBucket = %v, %v; want nil, %q", bucket, err, tc.want)
+			}
+			requests := srv.Requests()[before:]
+			if len(requests) != 1 || requests[0].Call != "b2_list_buckets" {
+				t.Errorf("invalid creation requests = %d, want only the existing-name lookup", len(requests))
+			}
+			if count := len(srv.Calls("b2_create_bucket")); count != 0 {
+				t.Errorf("create requests = %d, want 0", count)
+			}
+		})
+	}
+}
+
+func TestNewBucketExistingNameIgnoresReplicationAttrsWire(t *testing.T) {
+	srv, bucket := replicationUpdateWireBucket(t, noReplicationBucketJSON)
+	existing, err := bucket.c.NewBucket(context.Background(), "n", &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{}})
+	if err != nil || existing == nil || existing.ID() != "bid" {
+		t.Fatalf("NewBucket existing name = %v, %v; want existing bucket", existing, err)
+	}
+	if count := len(srv.Calls("b2_create_bucket")); count != 0 {
+		t.Errorf("create requests for existing bucket = %d, want 0", count)
+	}
+}
+
+func TestBucketUpdateAcceptsCompleteUnreadableReplacementWire(t *testing.T) {
+	srv, bucket := replicationUpdateWireBucket(t, unreadableReplicationUpdateJSON)
+	if err := bucket.Update(context.Background(), &BucketAttrs{ReplicationConfig: replicationCreateConfig()}); err != nil {
+		t.Fatal(err)
+	}
+	updates := srv.Calls("b2_update_bucket")
+	if len(updates) != 1 {
+		t.Fatalf("complete replacement requests = %d, want 1", len(updates))
+	}
+	b2wiretest.AssertJSON(t, updates[0], "replicationConfiguration.asReplicationSource.sourceApplicationKeyId", "source-key")
+	b2wiretest.AssertJSON(t, updates[0], "replicationConfiguration.asReplicationDestination.sourceToDestinationKeyMapping", map[string]string{"source-key": "destination-key"})
+}
+
+func TestBucketUpdateDestinationPreservesSourceWire(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rules []ReplicationRules
+	}{{"nil source rules", nil}, {"empty source rules", []ReplicationRules{}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, bucket := replicationUpdateWireBucket(t, bothReplBucketJSON)
+			if err := bucket.Update(context.Background(), &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{
+				AsReplicationSource: AsReplicationSource{ReplicationRules: tc.rules},
+				AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{
+					"source-key": "new-destination-key",
+				}},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			request := srv.Last(t, "b2_update_bucket")
+			b2wiretest.AssertJSON(t, request, "replicationConfiguration.asReplicationSource", map[string]any{
+				"sourceApplicationKeyId": "cached-key",
+				"replicationRules": []map[string]any{{
+					"destinationBucketId": "dest", "fileNamePrefix": "", "includeExistingFiles": false,
+					"isEnabled": true, "priority": 1, "replicationRuleName": "cached-rule",
+				}},
+			})
+			b2wiretest.AssertJSON(t, request, "replicationConfiguration.asReplicationDestination.sourceToDestinationKeyMapping", map[string]string{"source-key": "new-destination-key"})
+		})
+	}
+}
