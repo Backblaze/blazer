@@ -53,7 +53,7 @@ type Reader struct {
 	// and end with a final call at the bytes downloaded before Close returns.
 	// For a finite range, total is the actual available byte count (not the
 	// requested upper bound) when a HEAD request can determine it; otherwise
-	// total is -1, including when HEAD reaches the platform's int size limit.
+	// total is -1.
 	// Set Progress before the first Read. Calling Close from this
 	// callback is unsupported because Close waits for the callback to finish.
 	Progress func(bytesComplete, bytesTotal int64)
@@ -187,7 +187,7 @@ func (r *Reader) thread() {
 				r.sha1 = sha1
 			}
 			r.rmux.Unlock()
-			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize), progressSize: int64(rsize), progress: r.reporter}
+			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize), progressSize: rsize, progress: r.reporter}
 			mr.reported.Store(reported)
 			r.smux.Lock()
 			r.smap[chunkID] = mr
@@ -198,7 +198,7 @@ func (r *Reader) thread() {
 			r.smux.Lock()
 			r.smap[chunkID] = nil
 			r.smux.Unlock()
-			if i < int64(rsize) || err == io.ErrUnexpectedEOF {
+			if i < rsize || err == io.ErrUnexpectedEOF {
 				// Probably the network connection was closed early.  Retry.
 				attempts++
 				if attempts >= maxShortReadAttempts {
@@ -262,10 +262,8 @@ func (r *Reader) initFunc() {
 		r.progressTotal = -1
 		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true, r.ssec); err == nil {
 			size, _, _, _ := fr.stats()
-			// MaxInt may be a saturated compatibility length, not EOF. Keep
-			// the total unknown so a large offset cannot suppress the GET.
-			if err := fr.Close(); err == nil && size < int(^uint(0)>>1) {
-				available := int64(size) - r.offset
+			if err := fr.Close(); err == nil {
+				available := size - r.offset
 				if available < 0 {
 					available = 0
 				}

@@ -1965,6 +1965,15 @@ func (b *Bucket) downloadFile(ctx context.Context, state authState, uri, b2Metho
 	return newFileReader(resp)
 }
 
+// sizedReadCloser retains the wire length for internal consumers while the
+// exported FileReader.ContentLength remains a native-int compatibility field.
+type sizedReadCloser struct {
+	io.ReadCloser
+	size int64
+}
+
+func (r sizedReadCloser) Size() int64 { return r.size }
+
 func newFileReader(resp *http.Response) (*FileReader, error) {
 	return newFileReaderWithMaxLength(resp, int64(^uint(0)>>1))
 }
@@ -1983,7 +1992,6 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("invalid download content length %d", contentLength)
 	}
-	contentLength = min(contentLength, maxInt, int64(^uint(0)>>1))
 	info := make(map[string]string)
 	for key := range resp.Header {
 		if !strings.HasPrefix(key, "X-Bz-Info-") {
@@ -2006,11 +2014,11 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		sha1 = info["Large_file_sha1"]
 	}
 	return &FileReader{
-		ReadCloser:    resp.Body,
+		ReadCloser:    sizedReadCloser{resp.Body, contentLength},
 		SHA1:          sha1,
 		ID:            resp.Header.Get("X-Bz-File-Id"),
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: int(contentLength),
+		ContentLength: int(min(contentLength, maxInt, int64(^uint(0)>>1))),
 		Info:          info,
 	}, nil
 }

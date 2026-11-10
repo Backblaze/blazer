@@ -233,9 +233,9 @@ func (b *pipeProgressBody) Read(p []byte) (int, error) {
 	b.exitOnce.Do(func() { close(b.exited) })
 	return n, err
 }
-func (b *pipeProgressBody) Close() error                                    { return b.r.Close() }
-func (b *pipeProgressBody) stats() (int, string, string, map[string]string) { return 1, "", "", nil }
-func (b *pipeProgressBody) id() string                                      { return "pipe" }
+func (b *pipeProgressBody) Close() error                                      { return b.r.Close() }
+func (b *pipeProgressBody) stats() (int64, string, string, map[string]string) { return 1, "", "", nil }
+func (b *pipeProgressBody) id() string                                        { return "pipe" }
 
 type pipeProgressBucket struct {
 	beBucketInterface
