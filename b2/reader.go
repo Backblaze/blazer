@@ -52,7 +52,8 @@ type Reader struct {
 	// goroutine, never under a transfer lock; values are monotonic non-decreasing
 	// and end with a final call at the bytes downloaded before Close returns.
 	// Updates may be coalesced, so an intermediate value is not guaranteed.
-	// A terminal callback does not indicate success; always check read errors.
+	// Neither reaching total nor receiving a terminal callback indicates success;
+	// always check read errors.
 	// For a finite range, total is the actual available byte count (not the
 	// requested upper bound) when a HEAD request can determine it; otherwise
 	// total is -1. Set Progress before the first Read. Calling Close from this

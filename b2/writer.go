@@ -871,10 +871,11 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 	}
 }
 
-// WithProgress sets a callback that receives cumulative payload bytes read for
-// upload. Bytes read again for retries are not counted twice. This measures
-// transfer activity, not B2 acceptance: complete may equal total even when the
-// upload fails. Always check Close's error to determine whether it succeeded.
+// WithProgress sets a callback that receives cumulative upload payload progress.
+// New bytes are counted as they are read for upload; resuming also credits bytes
+// in completed parts already present in B2. Bytes read again for retries are not
+// counted twice. Progress does not indicate B2 acceptance: complete may equal
+// total even when the upload fails. Always check Close's error for success.
 //
 // The callback runs on one owner goroutine, never under a transfer lock. Values
 // are monotonic non-decreasing and end with a final call before Close returns.
