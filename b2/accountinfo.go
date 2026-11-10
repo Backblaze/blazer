@@ -50,7 +50,11 @@ var ErrInvalidAccountInfo = errUnavailableAccountInfoSession
 // ErrInvalidAccountInfo does not override ok=true: an otherwise complete session
 // for the requested key may still be reused. Incomplete or mismatched sessions
 // cause reauthorization. Custom stores must return ok=false for invalid data.
-// Every error after Set or Clear is returned, including ErrInvalidAccountInfo.
+// Errors observed after Set or Clear are returned, including ErrInvalidAccountInfo.
+// A method call and its subsequent Err check are separate operations. When a
+// store is shared across clients, another caller can overwrite an error or see
+// it before the original caller checks it. Concurrent safety does not provide
+// per-call error isolation; use separate store instances when that is needed.
 type AccountInfo interface {
 	Set(AuthData)
 	AuthData() (AuthData, bool)
@@ -117,6 +121,8 @@ func NewAccountInfoFile(path string) *AccountInfoFile {
 // JSON or an oversized file. A missing file reports nil. Filesystem errors retain
 // their underlying errors.Is and errors.As identity. Errors after Set or Clear
 // are storage failures; they do not request reauthorization.
+// Err reflects the most recent operation from any caller, so concurrent calls
+// on a shared instance can replace an error before its originating client sees it.
 func (a *AccountInfoFile) Err() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

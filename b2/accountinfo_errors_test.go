@@ -27,14 +27,26 @@ func TestAccountInfoFileIOErrorsAndRecovery(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	native, err := os.Open(readPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, nativeErr := native.Read(make([]byte, 1))
+	if err := native.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var wantReadErr *os.PathError
+	if !errors.As(nativeErr, &wantReadErr) || wantReadErr.Op != "read" {
+		t.Fatalf("native directory read = %v, want a read PathError", nativeErr)
+	}
 	store := NewAccountInfoFile(readPath)
 	_, ok := store.AuthData()
-	err := store.Err()
+	err = store.Err()
 	var readErr *os.PathError
 	if ok || !errors.As(err, &readErr) || readErr.Op != "read" || readErr.Path != readPath {
 		t.Fatalf("directory read: present=%t error=%v, want a read PathError for %q", ok, err, readPath)
 	}
-	if !errors.Is(err, readErr.Err) || errors.Is(err, ErrInvalidAccountInfo) {
+	if !errors.Is(err, wantReadErr.Err) || errors.Is(err, ErrInvalidAccountInfo) {
 		t.Fatalf("read error = %v, want preserved filesystem error, not invalid cached data", err)
 	}
 	parent := filepath.Join(root, "parent-file")
