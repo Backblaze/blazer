@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -103,6 +104,79 @@ func TestSyncRejectsNonRegularSwap(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSyncCancellationAfterNonRegularSwap(t *testing.T) {
+	for _, mode := range []CompareMode{CompareModTime, CompareSHA1} {
+		t.Run(fmt.Sprintf("mode-%d", mode), func(t *testing.T) {
+			if !syncOpenChild(t) {
+				return
+			}
+			bucket, wire := newSyncWire(t)
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			badPath := filepath.Join(root, "a-bad.txt")
+			for _, name := range []string{"a-bad.txt", "z-good.txt"} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte("data"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fifo := filepath.Join(t.TempDir(), "pipe")
+			if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			walk := func(root string, visit fs.WalkDirFunc) error {
+				return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+					if err := visit(path, entry, walkErr); err != nil {
+						return err
+					}
+					if mode == CompareModTime && path == badPath {
+						return os.Rename(fifo, path)
+					}
+					return nil
+				})
+			}
+			hash := func(ctx context.Context, path string, info os.FileInfo) (string, error) {
+				if path != badPath {
+					return fileSHA1(ctx, path, info)
+				}
+				if err := os.Rename(fifo, path); err != nil {
+					return "", err
+				}
+				digest, err := fileSHA1(ctx, path, info)
+				if err == nil {
+					t.Error("replaced FIFO was not rejected before cancellation")
+				}
+				cancel()
+				return digest, err
+			}
+			wire.onUpload = func(name string) {
+				if name == "p/z-good.txt" {
+					// With one worker, the rejected a-bad.txt precedes this request.
+					cancel()
+				}
+			}
+			result, err := syncWithLocalIO(ctx, bucket, "p", root, walk, hash, WithCompare(mode), WithConcurrency(1))
+			if !errors.Is(err, context.Canceled) || result == nil || len(result.Skipped) != 0 {
+				t.Fatalf("Sync = (%+v, %v), want context cancellation after rejecting the replaced file", result, err)
+			}
+			if mode == CompareModTime && (len(result.Failed) != 1 || result.Failed[0].Rel != "a-bad.txt" || result.Failed[0].Err == nil) {
+				t.Fatalf("failures = %+v, want the replaced file failure before cancellation", result.Failed)
+			}
+			wire.mu.Lock()
+			uploads := slices.Clone(wire.uploads)
+			wire.mu.Unlock()
+			for _, upload := range uploads {
+				if upload.name != "p/z-good.txt" {
+					t.Fatalf("unexpected upload after replacement: %q", upload.name)
+				}
+			}
+		})
 	}
 }
 
