@@ -129,25 +129,37 @@ func TestSetupReplicationPublicWire(t *testing.T) {
 	}
 }
 
-func TestSetupReplicationDefaultPriorityOnWire(t *testing.T) {
-	ctx := context.Background()
-	wire, src, dst := newSetupReplicationWire(t, ctx)
-	// 128 is the SDK's default for a bucket's first rule.
-	if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", WithRuleName("default-rule"), WithFileNamePrefix("logs/")); err != nil {
-		t.Fatal(err)
-	}
-	if len(wire.updates) != 2 || wire.updates[1]["bucketId"] != "src-id" {
-		t.Fatalf("wire updates = %#v, want destination then source", wire.updates)
-	}
-	sourceConfig := wire.updates[1]["replicationConfiguration"].(map[string]interface{})
-	sourceRole := sourceConfig["asReplicationSource"].(map[string]interface{})
-	rules := sourceRole["replicationRules"].([]interface{})
-	if len(rules) != 1 {
-		t.Fatalf("source wire rules = %#v, want exactly one", rules)
-	}
-	rule := rules[0].(map[string]interface{})
-	if rule["priority"] != float64(128) || rule["replicationRuleName"] != "default-rule" || rule["destinationBucketId"] != "dst-id" || rule["fileNamePrefix"] != "logs/" {
-		t.Fatalf("source wire rule = %#v, want default priority and requested fields", rule)
+func TestSetupReplicationDefaultAndMaximumPriorityOnWire(t *testing.T) {
+	// 128 is the SDK's default; 2147483647 is its inclusive priority limit.
+	for _, tc := range []struct {
+		name     string
+		options  []ReplicationOption
+		priority float64
+	}{
+		{name: "default", priority: 128},
+		{name: "maximum", options: []ReplicationOption{WithRulePriority(2147483647)}, priority: 2147483647},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			wire, src, dst := newSetupReplicationWire(t, ctx)
+			options := append([]ReplicationOption{WithRuleName("default-rule"), WithFileNamePrefix("logs/")}, tc.options...)
+			if err := SetupReplication(ctx, src, dst, "source-key", "destination-key", options...); err != nil {
+				t.Fatal(err)
+			}
+			if len(wire.updates) != 2 || wire.updates[0]["bucketId"] != "dst-id" || wire.updates[1]["bucketId"] != "src-id" {
+				t.Fatalf("wire updates = %#v, want destination then source", wire.updates)
+			}
+			sourceConfig := wire.updates[1]["replicationConfiguration"].(map[string]interface{})
+			sourceRole := sourceConfig["asReplicationSource"].(map[string]interface{})
+			rules := sourceRole["replicationRules"].([]interface{})
+			if len(rules) != 1 {
+				t.Fatalf("source wire rules = %#v, want exactly one", rules)
+			}
+			rule := rules[0].(map[string]interface{})
+			if rule["priority"] != tc.priority || rule["replicationRuleName"] != "default-rule" || rule["destinationBucketId"] != "dst-id" || rule["fileNamePrefix"] != "logs/" {
+				t.Fatalf("source wire rule = %#v, want priority %v and requested fields", rule, tc.priority)
+			}
+		})
 	}
 }
 
