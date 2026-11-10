@@ -1018,6 +1018,10 @@ func (b *Bucket) NotificationRules(ctx context.Context) ([]b2types.EventNotifica
 }
 
 // SetNotificationRules replaces a bucket's complete notification rule set.
+// A nil or empty slice clears every rule. To add or modify one rule, read the
+// existing set and preserve the other rules in the replacement. B2 ignores
+// the server-managed IsSuspended and SuspensionReason fields on set.
+// Suspended rules can only be deleted, not edited.
 func (b *Bucket) SetNotificationRules(ctx context.Context, rules []b2types.EventNotificationRule) error {
 	state := b.b2.snapshot()
 	// A non-nil empty array clears rules. B2 does not treat null as an empty
