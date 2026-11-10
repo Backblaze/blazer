@@ -364,9 +364,9 @@ type ReplicationConfiguration struct {
 // An explicit destination in Bucket.Update replaces the existing mapping.
 type AsReplicationDestination struct {
 	// SourceToDestinationKeyMapping uses source application-key IDs as keys and
-	// destination application-key IDs as values. Creation and updates reject nil
-	// and empty maps because the current wire encoding omits the required mapping
-	// field. Neither form is a supported way to clear the destination role.
+	// destination application-key IDs as values. Nil and empty maps omit the
+	// mapping field in the current wire encoding and are left to B2 to validate.
+	// Neither form is a supported way to clear the destination role.
 	SourceToDestinationKeyMapping map[string]string
 }
 

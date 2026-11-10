@@ -316,11 +316,6 @@ func validateReplicationConfiguration(cfg *ReplicationConfiguration) error {
 	if !replicationSourceSet(cfg.AsReplicationSource) && cfg.AsReplicationDestination == nil {
 		return errors.New("b2: replication configuration requires a source or destination")
 	}
-	if dest := cfg.AsReplicationDestination; dest != nil && len(dest.SourceToDestinationKeyMapping) == 0 {
-		// The wire type omits nil/empty maps. B2 rejects the resulting
-		// destination object because the required mapping field is missing.
-		return errors.New("b2: nil or empty destination key maps cannot encode the required mapping field")
-	}
 	return nil
 }
 
