@@ -109,6 +109,14 @@ type clientOptions struct {
 
 // WithAccountInfo uses the given session store. By default NewClient uses an
 // InMemoryAccountInfo; NewAccountInfoFile opts in to persistence.
+// The store must satisfy AccountInfo's concurrent-call and optional Err contract.
+// A cache miss (ok=false with nil Err or an error matching ErrInvalidAccountInfo)
+// triggers reauthorization. The sentinel does not invalidate ok=true data;
+// otherwise complete sessions for the requested key may still be reused.
+// Other read errors and errors observed after Set or Clear are returned.
+// Err reflects the most recent operation from any caller; when a store is shared
+// across clients, another call can overwrite an error or expose it to a different
+// client before it is checked. Use separate stores for per-client error isolation.
 func WithAccountInfo(ai AccountInfo) ClientOption {
 	return func(o *clientOptions) {
 		if o.accountInfoSet {

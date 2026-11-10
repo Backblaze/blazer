@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -156,6 +157,9 @@ func TestAccountInfoFileRejectsUnsafeReadPermissions(t *testing.T) {
 			}
 			if _, ok := store.AuthData(); ok || store.Err() == nil {
 				t.Fatalf("unsafe cached session was trusted: ok=%t err=%v", ok, store.Err())
+			}
+			if errors.Is(store.Err(), ErrInvalidAccountInfo) {
+				t.Fatalf("unsafe permissions were classified as a recoverable cache miss: %v", store.Err())
 			}
 			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err == nil {
 				t.Fatal("NewClient accepted unsafe cached session")
