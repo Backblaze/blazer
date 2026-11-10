@@ -847,13 +847,19 @@ func BypassGovernance() DeleteOption {
 }
 
 // Delete removes the given object, if it is a regular file or hide marker.
+// A nil DeleteOption returns an error before any request is sent.
+// For the v0.9.0 method-type migration, see
+// https://github.com/Backblaze/blazer/blob/main/docs/delete-options.md.
 func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
-	if err := o.ensure(ctx); err != nil {
-		return err
-	}
 	options := &deleteOptions{}
 	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("b2: nil delete option")
+		}
 		opt(options)
+	}
+	if err := o.ensure(ctx); err != nil {
+		return err
 	}
 	status := o.f.status()
 	if status == "upload" || status == "hide" || status == "copy" {
