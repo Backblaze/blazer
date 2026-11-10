@@ -138,9 +138,10 @@ func (w *sseB2Wire) replyJSON(rw http.ResponseWriter, value any) {
 func (w *sseB2Wire) fileJSON(name string) map[string]any {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var encryption any
+	// https://www.backblaze.com/apidocs/b2-upload-file
+	encryption := map[string]any{"mode": nil, "algorithm": nil}
 	if algorithm := w.encryption[name]; algorithm != "" {
-		encryption = map[string]string{"mode": "SSE-B2", "algorithm": algorithm}
+		encryption = map[string]any{"mode": "SSE-B2", "algorithm": algorithm}
 	}
 	return map[string]any{
 		"fileId": "id-" + url.QueryEscape(name), "fileName": name, "action": "upload",
@@ -395,6 +396,9 @@ func TestSSEB2AndSSECWriterOptionsAreMutuallyExclusive(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bucket := wire.newBucket(t)
 			writer := bucket.Object("conflict").NewWriter(context.Background(), tc.options...)
+			if n, err := writer.Write(nil); n != 0 || err != nil {
+				t.Fatalf("empty Write = (%d, %v), want (0, nil)", n, err)
+			}
 			if _, err := writer.Write([]byte("x")); err == nil || !strings.Contains(err.Error(), "SSE-B2 and SSE-C") {
 				t.Fatalf("Write error = %v, want mutual-exclusion rejection", err)
 			}

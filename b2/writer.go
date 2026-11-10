@@ -905,9 +905,10 @@ func WithSSECKey(key *SSECKey) WriterOption {
 // overrides the bucket's default for this upload only; the setting is used for
 // a simple upload request or the large-file start request. It carries no
 // customer-managed key material.
+// Only "AES256" is supported; Close returns an error for other values.
 // An explicit writer encryption option overrides inherited client defaults.
-// Combining WithSSEB2 and WithSSECKey in one NewWriter call causes Write and
-// Close to return an error.
+// Combining WithSSEB2 and WithSSECKey in one NewWriter call causes a non-empty
+// Write and Close to return an error.
 func WithSSEB2(algorithm string) WriterOption {
 	return func(w *Writer) {
 		w.encryption = &uploadEncryption{sse: newServerSideEncryption("SSE-B2", algorithm)}
