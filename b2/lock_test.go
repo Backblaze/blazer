@@ -30,7 +30,7 @@ import (
 )
 
 func TestObjectLockLive(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	id, key := os.Getenv(apiID), os.Getenv(apiKey)
@@ -46,31 +46,68 @@ func TestObjectLockLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
 		for {
-			iter := bucket.List(ctx, ListHidden())
+			iter := bucket.List(cleanupCtx, ListHidden())
 			for iter.Next() {
 				object := iter.Object()
-				if err := object.UpdateFileLegalHold(ctx, LegalHoldOff); err != nil && !IsNotExist(err) {
+				if err := object.UpdateFileLegalHold(cleanupCtx, LegalHoldOff); err != nil && !IsNotExist(err) {
 					t.Error(err)
 				}
-				if err := object.Delete(ctx, BypassGovernance()); err != nil && !IsNotExist(err) {
+				if err := object.Delete(cleanupCtx, BypassGovernance()); err != nil && !IsNotExist(err) {
 					t.Error(err)
 				}
 			}
 			if err := iter.Err(); err != nil && !IsNotExist(err) {
 				t.Error(err)
 			}
-			if err := bucket.Delete(ctx); err == nil || IsNotExist(err) {
+			if err := bucket.Delete(cleanupCtx); err == nil || IsNotExist(err) {
+				t.Log("Object Lock scratch bucket removed with a fresh cleanup context")
 				return
 			}
 			select {
-			case <-ctx.Done():
-				t.Error(ctx.Err())
+			case <-cleanupCtx.Done():
+				t.Error(cleanupCtx.Err())
 				return
 			case <-time.After(100 * time.Millisecond):
 			}
 		}
 	}()
+	write := func(name string, options ...WriterOption) *Object {
+		t.Helper()
+		object := bucket.Object(name)
+		writer := object.NewWriter(ctx, options...)
+		if _, err := io.WriteString(writer, "object lock"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return object
+	}
+	checkRetention := func(object *Object, want *FileRetention) {
+		t.Helper()
+		// A fresh handle fetches B2 state even after a rejected update, whose
+		// original handle correctly retains its previously cached metadata.
+		attrs, err := bucket.Object(object.Name()).Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want == nil {
+			if attrs.Retention != nil {
+				t.Fatalf("removed retention = %+v, want nil", attrs.Retention)
+			}
+		} else if attrs.Retention == nil || attrs.Retention.Mode != want.Mode || !attrs.Retention.RetainUntil.Equal(want.RetainUntil) {
+			t.Fatalf("retention = %+v, want %+v", attrs.Retention, want)
+		}
+	}
+	requireDenied := func(err error, wantStatus int) {
+		t.Helper()
+		if status, code, _ := base.MsgCode(err); status != wantStatus || code != "access_denied" {
+			t.Fatalf("Object Lock error = %v, want %d/access_denied", err, wantStatus)
+		}
+	}
 
 	retainUntil := time.UnixMilli(time.Now().Add(time.Hour).UnixMilli())
 	object := bucket.Object("retention")
@@ -100,6 +137,29 @@ func TestObjectLockLive(t *testing.T) {
 	if attrs.Retention == nil || attrs.Retention.Mode != RetentionGovernance || !attrs.Retention.RetainUntil.Equal(updatedUntil) {
 		t.Fatalf("updated retention = %#v, want governance through %v", attrs.Retention, updatedUntil)
 	}
+	t.Log("retention upload and extension verified")
+	shorter := &FileRetention{Mode: RetentionGovernance, RetainUntil: retainUntil}
+	requireDenied(object.UpdateFileRetention(ctx, shorter, false), 403)
+	checkRetention(object, &FileRetention{Mode: RetentionGovernance, RetainUntil: updatedUntil})
+	if err := object.UpdateFileRetention(ctx, shorter, true); err != nil {
+		t.Fatal(err)
+	}
+	checkRetention(object, shorter)
+	requireDenied(object.UpdateFileRetention(ctx, nil, false), 403)
+	checkRetention(object, shorter)
+	if err := object.UpdateFileRetention(ctx, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	checkRetention(object, nil)
+	t.Log("governance shortening and nil removal rejected without bypass, unchanged, then accepted with bypass")
+
+	updated := write("retention-set")
+	checkRetention(updated, nil)
+	if err := updated.UpdateFileRetention(ctx, shorter, false); err != nil {
+		t.Fatal(err)
+	}
+	checkRetention(updated, shorter)
+	t.Log("retention set by update on an initially unlocked file verified")
 
 	held := bucket.Object("legal-hold")
 	heldWriter := held.NewWriter(ctx, WithLegalHold(LegalHoldOn))
@@ -116,6 +176,9 @@ func TestObjectLockLive(t *testing.T) {
 	if attrs.LegalHold != LegalHoldOn {
 		t.Fatalf("upload legal hold = %q, want %q", attrs.LegalHold, LegalHoldOn)
 	}
+	// Locked deletion uses 401/access_denied, unlike retention updates:
+	// https://www.backblaze.com/apidocs/b2-delete-file-version
+	requireDenied(held.Delete(ctx, BypassGovernance()), 401)
 	if err := held.UpdateFileLegalHold(ctx, LegalHoldOff); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +189,25 @@ func TestObjectLockLive(t *testing.T) {
 	if attrs.LegalHold != LegalHoldOff {
 		t.Fatalf("updated legal hold = %q, want %q", attrs.LegalHold, LegalHoldOff)
 	}
+	if err := held.Delete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bucket.Object("legal-hold").Attrs(ctx); !IsNotExist(err) {
+		t.Fatalf("Attrs after deletion = %v, want not-exist", err)
+	}
+	t.Log("legal hold upload/on/off readback, blocked deletion and deletion after clearing verified")
+
+	combined := write("combined-lock", WithFileRetention(shorter), WithLegalHold(LegalHoldOn))
+	attrs, err = combined.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Retention == nil || attrs.Retention.Mode != RetentionGovernance || !attrs.Retention.RetainUntil.Equal(retainUntil) || attrs.LegalHold != LegalHoldOn {
+		t.Fatalf("combined lock = (%+v, %q), want governance through %v and on", attrs.Retention, attrs.LegalHold, retainUntil)
+	}
+	t.Log("combined retention and legal hold verified")
+	// Cleanup must still release the locks and delete the bucket after cancellation.
+	cancel()
 }
 
 // Service enforcement follows https://www.backblaze.com/apidocs/b2-delete-file-version.

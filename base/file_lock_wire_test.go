@@ -131,6 +131,13 @@ func TestUpdateFileRetentionOnTheWire(t *testing.T) {
 		t.Errorf("request = %v, want fileId, fileName and bypassGovernance true", rec.body)
 	}
 
+	if err := file.UpdateFileRetention(ctx, &FileRetention{Mode: "governance", RetainUntilTimestamp: 1735689600000}, false); err != nil {
+		t.Fatal(err)
+	}
+	if rec.body["bypassGovernance"] != false {
+		t.Errorf("bypassGovernance = %v, want explicit false", rec.body["bypassGovernance"])
+	}
+
 	// Removing retention sends both fields as explicit nulls.
 	if err := file.UpdateFileRetention(ctx, nil, true); err != nil {
 		t.Fatal(err)

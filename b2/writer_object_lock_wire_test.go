@@ -10,12 +10,15 @@ import (
 )
 
 const (
-	writerObjectLockRetainUntilMillis int64 = 1767225600000
-	writerObjectLockFileJSON                = `{"fileId":"small-1","fileName":"object","action":"upload"}`
-	writerObjectLockLargeFileJSON           = `{"fileId":"large-1","fileName":"object","action":"upload"}`
-	writerObjectLockMismatchJSON            = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":null,"retainUntilTimestamp":null}},"legalHold":{"isClientAuthorizedToRead":true,"value":"off"}}],"nextFileId":null}`
-	writerObjectLockMatchJSON               = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1767225600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
-	writerObjectLockMismatchError           = `b2: cannot resume "resumed": the unfinished upload does not have the requested retention`
+	writerObjectLockRetainUntilMillis      int64 = 1767225600000
+	writerObjectLockFileJSON                     = `{"fileId":"small-1","fileName":"object","action":"upload"}`
+	writerObjectLockLargeFileJSON                = `{"fileId":"large-1","fileName":"object","action":"upload"}`
+	writerObjectLockMismatchJSON                 = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":null,"retainUntilTimestamp":null}},"legalHold":{"isClientAuthorizedToRead":true,"value":"off"}}],"nextFileId":null}`
+	writerObjectLockMatchJSON                    = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1767225600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
+	writerObjectLockMismatchError                = `b2: cannot resume "resumed": the unfinished upload does not have the requested retention`
+	writerObjectLockDifferentRetentionJSON       = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1735689600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
+	writerObjectLockHoldMismatchJSON             = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1767225600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"off"}}],"nextFileId":null}`
+	writerObjectLockHoldMismatchError            = `b2: cannot resume "resumed": the unfinished upload does not have the requested legal hold`
 )
 
 func newObjectLockWire(t *testing.T) (*b2wiretest.Server, *Bucket) {
@@ -63,14 +66,14 @@ func assertNoObjectLockHeaders(t *testing.T, request b2wiretest.Request) {
 	}
 }
 
-func assertWriterObjectLockMismatch(t *testing.T, operation string, err error) {
+func assertWriterObjectLockMismatch(t *testing.T, operation string, err error, want string) {
 	t.Helper()
 	if err == nil {
-		t.Errorf("%s succeeded, want %q", operation, writerObjectLockMismatchError)
+		t.Errorf("%s succeeded, want %q", operation, want)
 		return
 	}
-	if got := err.Error(); got != writerObjectLockMismatchError {
-		t.Errorf("%s error = %q, want %q", operation, got, writerObjectLockMismatchError)
+	if got := err.Error(); got != want {
+		t.Errorf("%s error = %q, want %q", operation, got, want)
 	}
 }
 
@@ -81,17 +84,29 @@ func TestWriterSendsObjectLock(t *testing.T) {
 		name  string
 		large bool
 		lock  bool
+		attrs bool
 	}{
 		{name: "small_lock", lock: true},
 		{name: "small_without_lock"},
 		{name: "large_lock", large: true, lock: true},
 		{name: "large_without_lock", large: true},
+		{name: "small_attrs_without_lock", attrs: true},
+		{name: "large_attrs_without_lock", large: true, attrs: true},
+		{name: "small_attrs_with_explicit_lock", attrs: true, lock: true},
+		{name: "large_attrs_with_explicit_lock", large: true, attrs: true, lock: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := newObjectLockWire(t)
 			var options []WriterOption
 			if tc.lock {
 				options = writerObjectLockOptions()
+			}
+			if tc.attrs {
+				options = append(options, WithAttrsOption(&Attrs{
+					ContentType: "text/plain", Info: map[string]string{"metadata": "copied"},
+					Retention: &FileRetention{Mode: RetentionGovernance, RetainUntil: time.UnixMilli(1735689600000)},
+					LegalHold: LegalHoldOn,
+				}))
 			}
 
 			writer := bucket.Object("object").NewWriter(context.Background(), options...)
@@ -115,6 +130,10 @@ func TestWriterSendsObjectLock(t *testing.T) {
 				if starts := srv.Calls("b2_start_large_file"); len(starts) != 0 {
 					t.Fatalf("b2_start_large_file calls = %d, want 0", len(starts))
 				}
+				if tc.attrs {
+					b2wiretest.AssertHeader(t, uploads[0], "Content-Type", "text/plain")
+					b2wiretest.AssertHeader(t, uploads[0], "X-Bz-Info-metadata", "copied")
+				}
 				if tc.lock {
 					b2wiretest.AssertHeader(t, uploads[0], "X-Bz-File-Retention-Mode", "compliance")
 					b2wiretest.AssertHeader(t, uploads[0], "X-Bz-File-Retention-Retain-Until-Timestamp", "1767225600000")
@@ -131,6 +150,10 @@ func TestWriterSendsObjectLock(t *testing.T) {
 			}
 			if finishes := srv.Calls("b2_finish_large_file"); len(finishes) != 1 {
 				t.Fatalf("b2_finish_large_file calls = %d, want 1", len(finishes))
+			}
+			if tc.attrs {
+				b2wiretest.AssertJSON(t, starts[0], "contentType", "text/plain")
+				b2wiretest.AssertJSON(t, starts[0], "fileInfo.metadata", "copied")
 			}
 			if tc.lock {
 				b2wiretest.AssertJSON(t, starts[0], "fileRetention.mode", "compliance")
@@ -149,24 +172,32 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		response string
-		wantErr  bool
+		wantErr  string
+		noLock   bool
 	}{
-		{name: "mismatch", response: writerObjectLockMismatchJSON, wantErr: true},
+		{name: "mismatch", response: writerObjectLockMismatchJSON, wantErr: writerObjectLockMismatchError},
+		{name: "different retention", response: writerObjectLockDifferentRetentionJSON, wantErr: writerObjectLockMismatchError},
+		{name: "legal hold mismatch", response: writerObjectLockHoldMismatchJSON, wantErr: writerObjectLockHoldMismatchError},
 		{name: "match", response: writerObjectLockMatchJSON},
+		{name: "no lock requested", response: writerObjectLockMatchJSON, noLock: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := newObjectLockWire(t)
 			srv.Reply("b2_list_unfinished_large_files", http.StatusOK, tc.response)
 			srv.Reply("b2_list_parts", http.StatusOK, `{"parts":[],"nextPartNumber":null}`)
 
-			writer := bucket.Object("resumed").NewWriter(context.Background(), writerObjectLockOptions()...)
+			options := writerObjectLockOptions()
+			if tc.noLock {
+				options = nil
+			}
+			writer := bucket.Object("resumed").NewWriter(context.Background(), options...)
 			writer.Resume = true
 			writer.ChunkSize = 10
 			_, writeErr := writer.Write([]byte("0123456789012345678901234"))
 			closeErr := writer.Close()
-			if tc.wantErr {
-				assertWriterObjectLockMismatch(t, "Write", writeErr)
-				assertWriterObjectLockMismatch(t, "Close", closeErr)
+			if tc.wantErr != "" {
+				assertWriterObjectLockMismatch(t, "Write", writeErr, tc.wantErr)
+				assertWriterObjectLockMismatch(t, "Close", closeErr, tc.wantErr)
 				if parts := srv.Calls("b2_list_parts"); len(parts) != 0 {
 					t.Errorf("b2_list_parts calls = %d, want 0", len(parts))
 				}
