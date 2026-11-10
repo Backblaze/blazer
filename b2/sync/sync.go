@@ -13,8 +13,9 @@
 // limitations under the License.
 
 // Package sync pushes a local directory tree into a B2 bucket prefix. The local
-// tree is the source of truth: a differing file overwrites the cloud version,
-// even when the cloud version is newer. This package has no skip-newer or
+// tree is the source of truth: a file differing under the selected comparison
+// policy overwrites the cloud version, even when the cloud version is newer.
+// This package has no skip-newer or
 // replace-newer mode, does not delete cloud-only files, and does not resume
 // interrupted large-file uploads. Symlinks below the root are not followed;
 // a symlinked root is resolved before the walk.
@@ -41,9 +42,15 @@ import (
 type CompareMode int
 
 const (
+	// CompareModTime compares modification times at millisecond resolution.
+	// It is the default; matching times are unchanged even if sizes differ.
 	CompareModTime CompareMode = iota
+	// CompareSize compares file sizes, ignoring modification times.
 	CompareSize
+	// CompareNone compares names only: an existing name is always skipped.
 	CompareNone
+	// CompareSHA1 compares checksums, ignoring size and modification time.
+	// A missing destination checksum requires uploading the local file.
 	CompareSHA1
 )
 
@@ -124,19 +131,28 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 		}
 		return local.sha1 != dest.SHA1
 	default:
-		return local.size != dest.Size || local.modTime.UnixMilli() != dest.LastModified.UnixMilli()
+		return local.modTime.UnixMilli() != dest.LastModified.UnixMilli()
 	}
 }
 
 // Sync pushes files below localRoot into bucket under prefix. The local tree is
-// the source of truth: a differing local file overwrites the cloud copy even
-// when its modification time is older; skip-newer and replace-newer policies
+// the source of truth: a local file differing under the comparison policy
+// overwrites the cloud copy even when its modification time is older;
+// skip-newer and replace-newer policies
 // are not available. Matching files are skipped, and cloud objects are never
 // deleted. Symlinks below the root are not followed; a
 // symlinked root is followed. Changed large files are re-uploaded in full,
 // without resuming a previous upload. Per-file failures are returned in
 // Result.Failed along with an aggregate error; other files continue.
+// Linux and macOS reject replaced FIFOs without blocking; Windows does not
+// follow a final reparse-point replacement. On other platforms, Sync returns
+// a nil result and an error wrapping errors.ErrUnsupported with GOOS/GOARCH
+// context before walking local files or making B2 requests. The package still
+// builds on those platforms.
 func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts ...Option) (*Result, error) {
+	if err := checkSyncPlatform(); err != nil {
+		return nil, err
+	}
 	return syncWithLocalIO(ctx, bucket, prefix, localRoot, filepath.WalkDir, fileSHA1, opts...)
 }
 
@@ -310,7 +326,7 @@ func resultError(result *Result) error {
 }
 
 func fileSHA1(ctx context.Context, path string, walkInfo os.FileInfo) (string, error) {
-	file, err := openWalkedFile(path, walkInfo)
+	file, err := openWalkedFile(path, walkInfo, openSyncFile)
 	if err != nil {
 		return "", err
 	}
@@ -325,14 +341,14 @@ func fileSHA1(ctx context.Context, path string, walkInfo os.FileInfo) (string, e
 	return digest, nil
 }
 
-func openWalkedFile(path string, walkInfo os.FileInfo) (*os.File, error) {
-	file, err := os.Open(path)
+func openWalkedFile(path string, walkInfo os.FileInfo, openFile func(string) (*os.File, error)) (*os.File, error) {
+	file, err := openFile(path)
 	if err != nil {
 		return nil, err
 	}
 	openedInfo, statErr := file.Stat()
 	currentInfo, lstatErr := os.Lstat(path)
-	if statErr != nil || lstatErr != nil || !currentInfo.Mode().IsRegular() ||
+	if statErr != nil || lstatErr != nil || !openedInfo.Mode().IsRegular() || !currentInfo.Mode().IsRegular() ||
 		(walkInfo != nil && !os.SameFile(walkInfo, openedInfo)) || !os.SameFile(currentInfo, openedInfo) {
 		_ = file.Close()
 		return nil, fmt.Errorf("sync: file %q changed or became a symlink after walk", path)
@@ -361,7 +377,7 @@ func hashReader(ctx context.Context, reader io.Reader) (string, error) {
 }
 
 func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local localFile) (int64, error) {
-	file, err := openWalkedFile(local.path, local.info)
+	file, err := openWalkedFile(local.path, local.info, openSyncFile)
 	if err != nil {
 		return 0, err
 	}
