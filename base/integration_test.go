@@ -601,7 +601,11 @@ func TestUnknownCA(t *testing.T) {
 		TLSClientConfig: &tls.Config{RootCAs: x509.NewCertPool()},
 	}
 
-	_, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, endpointOpts()...)...)
+	eopts, ok := tlsEndpointOpts()
+	if !ok {
+		t.Skipf("%s is not https and %s is unset; an untrusted CA cannot be tested over plain http", endpointVar, tlsEndpointVar)
+	}
+	_, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, eopts...)...)
 	if err == nil {
 		t.Error("expected an error, got none")
 	}
