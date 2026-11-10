@@ -202,14 +202,14 @@ func (c *Client) ListKeys(ctx context.Context, count int, cursor string) ([]*Key
 }
 
 // CreateKey creates a scoped application key that is valid only for this bucket.
-// BucketIDs is not supported, even when supplied without IDs.
+// Passing BucketIDs returns ErrBucketIDsOnBucket, even when supplied without IDs.
 func (b *Bucket) CreateKey(ctx context.Context, name string, opts ...KeyOption) (*Key, error) {
 	var ko keyOptions
 	for _, o := range opts {
 		o(&ko)
 	}
 	if ko.bucketIDsSet {
-		return nil, errors.New("BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key")
+		return nil, ErrBucketIDsOnBucket
 	}
 	ki, err := b.r.createKey(ctx, name, ko.caps, ko.lifetime, b.b.id(), ko.prefix)
 	if err != nil {
