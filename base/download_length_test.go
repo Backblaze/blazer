@@ -110,7 +110,7 @@ func TestFileReaderLargeContentLength(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s with 3 GiB Content-Length: %v", method, err)
 			}
-			defer reader.Close()
+			t.Cleanup(func() { _ = reader.Close() })
 			if body.closed || reader.ContentLength != math.MaxInt32 || reader.ID != "large-file-id" {
 				t.Fatalf("%s: length=%d id=%q closed=%t, want 2147483647, large-file-id, false", method, reader.ContentLength, reader.ID, body.closed)
 			}
@@ -134,7 +134,7 @@ func TestFileReaderCompatibilityLengthDoesNotLimitBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	t.Cleanup(func() { _ = reader.Close() })
 	got, err := io.ReadAll(reader)
 	if err != nil || string(got) != "abc" || reader.ContentLength != 2 {
 		t.Fatalf("read=%q error=%v length=%d, want abc, nil, 2", got, err, reader.ContentLength)
