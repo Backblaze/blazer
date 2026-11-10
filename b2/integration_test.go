@@ -1045,7 +1045,17 @@ func TestListUnfinishedLargeFiles(t *testing.T) {
 	iter := bucket.List(ctx, ListUnfinished())
 	var names []string
 	for iter.Next() {
-		names = append(names, iter.Object().Name())
+		obj := iter.Object()
+		names = append(names, obj.Name())
+		// Regression for #333: the unfinished large file, built from B2's real
+		// b2_list_unfinished_large_files response, must report Started and not Unknown.
+		attrs, err := obj.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.Status != Started {
+			t.Errorf("unfinished %q Attrs().Status = %v, want %v", obj.Name(), attrs.Status, Started)
+		}
 	}
 	if err := iter.Err(); err != nil {
 		t.Fatal(err)

@@ -19,6 +19,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -77,6 +78,48 @@ func TestProgressZeroLengthVerifyDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestProgressCompletedReaderStatus(t *testing.T) {
+	bucket := newProgressReviewBucket(t)
+	ctx := context.Background()
+	object := bucket.Object("completed-status")
+	writer := object.NewWriter(ctx)
+	if n, err := io.WriteString(writer, "abcd"); n != 4 || err != nil {
+		t.Fatalf("Write = %d, %v; want 4, nil", n, err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		length   int64
+		body     string
+		progress []float64
+	}{
+		{"two chunks", 4, "abcd", []float64{1, 1}},
+		{"zero length", 0, "", []float64{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := object.NewRangeReader(ctx, 0, tc.length)
+			reader.ChunkSize = 2
+			reader.ConcurrentDownloads = 1
+			defer func() { _ = reader.Close() }()
+			if got, err := io.ReadAll(reader); string(got) != tc.body || err != nil {
+				t.Fatalf("ReadAll = %q, %v; want %q, nil", got, err, tc.body)
+			}
+			// EOF leaves the reader registered until Close.
+			status := bucket.c.Status()
+			if len(status.Readers) != 1 {
+				t.Fatalf("Client.Status readers = %d, want 1 before Close", len(status.Readers))
+			}
+			for _, current := range status.Readers {
+				if !reflect.DeepEqual(current.Progress, tc.progress) {
+					t.Fatalf("completed reader progress = %v, want %v", current.Progress, tc.progress)
+				}
+			}
+		})
+	}
+}
+
 func TestProgressResumePipeWithoutCallback(t *testing.T) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -93,7 +136,8 @@ func TestProgressResumePipeWithoutCallback(t *testing.T) {
 	if err := pw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w := newProgressReviewBucket(t).Object("pipe").NewWriter(context.Background())
+	object := newProgressReviewBucket(t).Object("pipe")
+	w := object.NewWriter(context.Background())
 	w.Resume = true
 	n, err := w.ReadFrom(pr)
 	if err != nil || n != int64(len("pipe payload")) {
@@ -102,6 +146,12 @@ func TestProgressResumePipeWithoutCallback(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+	r := object.NewReader(context.Background())
+	defer func() { _ = r.Close() }()
+	got, err := io.ReadAll(r)
+	if err != nil || string(got) != "pipe payload" {
+		t.Fatalf("uploaded content = %q, %v; want pipe payload, nil", got, err)
+	}
 }
 
 func TestProgressResumePastEOFReportsZero(t *testing.T) {
@@ -109,9 +159,8 @@ func TestProgressResumePastEOFReportsZero(t *testing.T) {
 	if _, err := input.Seek(3, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	var mu sync.Mutex
 	var samples []progressSample
-	w := newProgressReviewBucket(t).Object("past-eof").NewWriter(context.Background(), WithProgress(func(n, total int64) { mu.Lock(); samples = append(samples, progressSample{n, total}); mu.Unlock() }))
+	w := newProgressReviewBucket(t).Object("past-eof").NewWriter(context.Background(), WithProgress(func(n, total int64) { samples = append(samples, progressSample{n, total}) }))
 	w.Resume = true
 	if n, err := w.ReadFrom(input); n != 0 || err != nil {
 		t.Fatalf("ReadFrom = %d, %v", n, err)
@@ -119,9 +168,8 @@ func TestProgressResumePastEOFReportsZero(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got := progressSnapshot(&mu, &samples)
-	if len(got) == 0 || got[len(got)-1] != (progressSample{0, 0}) {
-		t.Fatalf("progress = %+v, want terminal 0/0", got)
+	if len(samples) == 0 || samples[len(samples)-1] != (progressSample{0, 0}) {
+		t.Fatalf("progress = %+v, want terminal 0/0", samples)
 	}
 }
 
@@ -144,8 +192,10 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 	gate := blockingHeadBucket{bucket.b, make(chan struct{}), make(chan struct{})}
 	bucket.b = gate
 	r := bucket.Object("file").NewRangeReader(context.Background(), 0, 7)
-	terminal := make(chan struct{}, 1)
-	r.Progress = func(_, _ int64) { terminal <- struct{}{} }
+	var samples []progressSample
+	r.Progress = func(complete, total int64) {
+		samples = append(samples, progressSample{complete, total})
+	}
 	readDone := make(chan struct{})
 	go func() { _, _ = io.ReadAll(r); close(readDone) }()
 	<-gate.entered
@@ -166,23 +216,21 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 		t.Fatal("Close did not finish after initialization")
 	}
 	<-readDone
-	select {
-	case <-terminal:
-	default:
-		t.Fatal("no terminal callback after Close")
+	if len(samples) == 0 || samples[len(samples)-1] != (progressSample{0, -1}) {
+		t.Fatalf("progress after Close = %+v, want final 0/-1 after cancelled initialization", samples)
 	}
 }
 
 type pipeProgressBody struct {
-	r               *io.PipeReader
-	entered, exited chan struct{}
-	once            sync.Once
+	r                   *io.PipeReader
+	entered, exited     chan struct{}
+	enterOnce, exitOnce sync.Once
 }
 
 func (b *pipeProgressBody) Read(p []byte) (int, error) {
-	b.once.Do(func() { close(b.entered) })
+	b.enterOnce.Do(func() { close(b.entered) })
 	n, err := b.r.Read(p)
-	close(b.exited)
+	b.exitOnce.Do(func() { close(b.exited) })
 	return n, err
 }
 func (b *pipeProgressBody) Close() error                                    { return b.r.Close() }

@@ -72,6 +72,11 @@ func TestVerifySignatureKnownSHA256Vector(t *testing.T) {
 	if err := VerifySignature([]byte("Hi There"), header, key); err != nil {
 		t.Fatalf("VerifySignature() for RFC 4231 vector = %v, want nil", err)
 	}
+	body := []byte("Hi There")
+	body[0] ^= 1
+	if err := VerifySignature(body, header, key); err == nil {
+		t.Fatal("VerifySignature() for one-byte-altered RFC 4231 body = nil, want signature mismatch")
+	}
 }
 
 func TestVerifySignatureUsesRawBodyAndSecret(t *testing.T) {

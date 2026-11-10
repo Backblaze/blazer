@@ -16,6 +16,7 @@ package base
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -95,6 +96,27 @@ func TestActionStatusMatrixForUploadsAndCopyParts(t *testing.T) {
 				err := b2err{method: method.method, code: tc.code, retry: tc.retry}
 				if got := Action(err); got != method.want {
 					t.Errorf("Action(%#v) = %v, want %v", err, got, method.want)
+				}
+			})
+		}
+	}
+}
+
+func TestActionUploadRetryStatusBoundaries(t *testing.T) {
+	// https://www.backblaze.com/docs/cloud-storage-integration-checklist
+	for _, tc := range []struct {
+		status int
+		want   ErrAction
+	}{
+		{499, Punt},
+		{500, AttemptNewUpload},
+		{599, AttemptNewUpload},
+		{600, Punt},
+	} {
+		for _, method := range []string{"b2_upload_file", "b2_upload_part"} {
+			t.Run(fmt.Sprintf("%s/%d", method, tc.status), func(t *testing.T) {
+				if got := Action(b2err{method: method, code: tc.status, retry: 0}); got != tc.want {
+					t.Errorf("Action(%s status %d without Retry-After) = %v, want %v", method, tc.status, got, tc.want)
 				}
 			})
 		}

@@ -195,9 +195,7 @@ func TestMappingLifecycleUpdateKeepsCORS(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := srv.Last(t, "b2_update_bucket")
-	if _, ok := r.JSON["corsRules"]; ok {
-		b2wiretest.AssertJSON(t, r, "corsRules", []map[string]any{{"corsRuleName": "browser", "allowedOrigins": []string{"https://example.com"}, "allowedOperations": []string{"b2_download_file_by_name"}}})
-	}
+	b2wiretest.AssertJSON(t, r, "corsRules", []map[string]any{{"corsRuleName": "browser", "allowedOrigins": []string{"https://example.com"}, "allowedOperations": []string{"b2_download_file_by_name"}}})
 	attrs, err := bucket.Attrs(ctx)
 	if err != nil {
 		t.Fatal(err)

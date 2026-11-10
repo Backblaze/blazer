@@ -5,7 +5,7 @@ CHANGIE_VERSION := v1.24.0
 CHANGIE := go run github.com/miniscruff/changie@$(CHANGIE_VERSION)
 BASE_REF ?= origin/main
 
-.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test
+.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test api-compat
 
 ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check scripts-test
 
@@ -59,6 +59,9 @@ changelog-new:
 # Runs the shell tests for scripts/ (scripts/*_test.sh).
 scripts-test:
 	for t in scripts/*_test.sh; do "$$t" || exit 1; done
+
+api-compat:
+	BASE_REF="$(BASE_REF)" scripts/api-compat.sh
 
 # Holds a release while solvable security or quality findings are open (see RELEASE.md).
 release-check:

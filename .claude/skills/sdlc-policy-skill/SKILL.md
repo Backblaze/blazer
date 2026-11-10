@@ -5,13 +5,13 @@ description: Write a Claude skill that encodes an organization policy or standar
 
 # Skills as institutional knowledge
 
-A skill makes institutional knowledge operational: explicit, version controlled, applied broadly, updated centrally. It is an advisory control. Write one for knowledge that must be applied consistently; keep general project context in `CLAUDE.md` and one-off instructions in a prompt.
+A skill makes institutional knowledge operational: explicit, version controlled, applied broadly, updated centrally. It is an advisory control. Write one for knowledge that must be applied consistently; keep general project context in `AGENTS.md` and one-off instructions in a prompt.
 
 ## Decide where it belongs
 
 | Knowledge | Home |
 |---|---|
-| Conventions every session needs (commands, layout) | `CLAUDE.md` |
+| Conventions every session needs (commands, layout) | `AGENTS.md` |
 | A policy with an owner, applied when a certain task happens | **a skill** |
 | A rule that must hold with no exceptions | skill + hook (+ required CI check) |
 | A recurring job needing its own context and tools | subagent (`sdlc-subagents`) |

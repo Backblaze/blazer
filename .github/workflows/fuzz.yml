@@ -1,0 +1,70 @@
+name: Scheduled fuzzing
+
+on:
+  schedule:
+    # Sunday 02:00 Costa Rica (UTC-6, no DST) = 08:00 UTC
+    - cron: '0 8 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    if: ${{ github.repository == 'Backblaze/blazer' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache-dependency-path: '**/go.sum'
+      - name: Fuzz each discovered target
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="$(go list ./...)"
+          status=0
+          target_count=0
+          while IFS= read -r package; do
+            [ -z "$package" ] && continue
+            listed="$(go test -list '^Fuzz' "$package")"
+            targets="$(printf '%s\n' "$listed" | awk '/^Fuzz/ { print $1 }')"
+            while IFS= read -r target; do
+              [ -z "$target" ] && continue
+              target_count=$((target_count + 1))
+              echo "Fuzzing ${package}:${target}"
+              if ! go test -run '^$' -fuzz "^${target}$" -fuzztime=120s "$package"; then
+                status=1
+              fi
+            done <<< "$targets"
+          done <<< "$packages"
+          if [ "$target_count" -eq 0 ]; then
+            echo 'No fuzz targets discovered.' >&2
+            exit 1
+          fi
+          exit "$status"
+      - name: Collect new fuzz crashers
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz-findings
+          # A new reproducer is an untracked file under testdata/fuzz; committed seeds are tracked and skipped.
+          git ls-files --others --exclude-standard | { grep '/testdata/fuzz/' || true; } | while IFS= read -r f; do
+            mkdir -p "fuzz-findings/$(dirname "$f")"
+            cp "$f" "fuzz-findings/$f"
+          done
+          echo "Collected $(find fuzz-findings -type f | wc -l) new crasher(s)."
+      - name: Upload fuzz crashers
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers
+          path: fuzz-findings/**
+          if-no-files-found: ignore
+          retention-days: 30

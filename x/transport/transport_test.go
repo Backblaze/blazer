@@ -75,19 +75,33 @@ func TestStallWaitsForDurationOrContext(t *testing.T) {
 	t.Run("context", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), delay)
 		defer cancel()
-		const stall = time.Second
-		client := &http.Client{Transport: WithFailures(nil, FailureRate(1), Stall(stall))}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/ok", nil)
-		if err != nil {
-			t.Fatal(err)
+		var calls atomic.Int64
+		body := newRecordingBody("request payload")
+		rt := WithFailures(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return successResponse(req), nil
+		}), FailureRate(1), Stall(time.Hour))
+		result := make(chan error, 1)
+		go func() {
+			resp, err := rt.RoundTrip(request(t, ctx, body))
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			result <- err
+		}()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("error = %v, want context.DeadlineExceeded", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("stalled RoundTrip did not stop after the request deadline")
 		}
-		start := time.Now()
-		_, err = client.Do(request)
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("error = %v, want context deadline exceeded", err)
+		if got := calls.Load(); got != 0 {
+			t.Errorf("wrapped RoundTrip calls = %d, want 0 after the request deadline", got)
 		}
-		if elapsed := time.Since(start); elapsed >= stall/2 {
-			t.Errorf("returned after %v, want before %v when the request context ends", elapsed, stall/2)
+		if !body.closed {
+			t.Error("cancelled stalled request body was not closed")
 		}
 	})
 }

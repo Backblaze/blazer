@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"reflect"
 	"testing"
 )
@@ -47,6 +48,7 @@ func FuzzParseEvent(f *testing.F) {
 	for _, seed := range []string{`{"events":[]}`, `null`, `{"events":[{"objectSize":null}]}`, `{"events":[{"eventVersion":2147483648,"objectSize":9223372036854775807}]}`, "\r\n{}\r\n", `{"events":[`} {
 		f.Add([]byte(seed))
 	}
+	count := 0
 	f.Fuzz(func(t *testing.T, body []byte) {
 		event, err := ParseEvent(body)
 		if err != nil {
@@ -61,9 +63,13 @@ func FuzzParseEvent(f *testing.F) {
 		if len(encoded) > MaxWebhookBodySize {
 			return
 		}
+		count++
 		again, err := ParseEvent(encoded)
 		if err != nil || !reflect.DeepEqual(event, again) {
 			t.Fatalf("unstable parse round trip: %v", err)
 		}
 	})
+	if count == 0 && flag.Lookup("test.fuzz").Value.String() == "" {
+		f.Fatal("no parsed event reached the round-trip invariant")
+	}
 }

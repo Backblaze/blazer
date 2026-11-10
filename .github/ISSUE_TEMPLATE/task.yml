@@ -15,7 +15,7 @@ body:
       label: Done when
       description: Checkable conditions, one per line.
       value: |
-        - [ ] 
+        - [ ]
     validations:
       required: true
   - type: textarea

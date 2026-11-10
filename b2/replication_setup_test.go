@@ -30,9 +30,9 @@ func TestNextReplicationPriority(t *testing.T) {
 		cfg  *ReplicationConfiguration
 		want int
 	}{
-		{name: "empty", want: defaultReplicationPriority},
+		{name: "empty", want: 128},
 		{name: "with existing", cfg: &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{ReplicationRules: []ReplicationRules{{Priority: 100}, {Priority: 140}}}}, want: 145},
-		{name: "cap", cfg: &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{ReplicationRules: []ReplicationRules{{Priority: maxReplicationPriority - 2}}}}, want: maxReplicationPriority},
+		{name: "cap", cfg: &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{ReplicationRules: []ReplicationRules{{Priority: 2147483645}}}}, want: 2147483647},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := nextReplicationPriority(test.cfg); got != test.want {
@@ -69,9 +69,11 @@ type replicationTestBucket struct {
 	updateErr   error
 	updateOrder *[]string
 	updates     []*BucketAttrs
+	attrsCalls  int
 }
 
 func (b *replicationTestBucket) attrs() *BucketAttrs {
+	b.attrsCalls++
 	return &BucketAttrs{Type: Private, ReplicationConfig: copyReplicationConfiguration(b.config), replicationConfigUnreadable: b.unreadable}
 }
 
@@ -91,11 +93,13 @@ func (b *replicationTestBucket) updateBucket(_ context.Context, attrs *BucketAtt
 
 type replicationTestRoot struct {
 	*testRoot
-	buckets  map[string]*replicationTestBucket
-	keyCalls int
+	buckets   map[string]*replicationTestBucket
+	keyCalls  int
+	listCalls int
 }
 
 func (r *replicationTestRoot) listBuckets(_ context.Context, name string, _ ...string) ([]b2BucketInterface, error) {
+	r.listCalls++
 	if name != "" {
 		if bucket := r.buckets[name]; bucket != nil {
 			return []b2BucketInterface{bucket}, nil
@@ -115,6 +119,9 @@ func (r *replicationTestRoot) createKey(_ context.Context, name string, caps []s
 }
 
 func TestSetupReplicationUpdatesBothBuckets(t *testing.T) {
+	// TestSetupReplicationPublicWire records the literal update-bucket request:
+	// fileNamePrefix "logs/" and source-key -> destination-key mapping. This
+	// fake test separately exercises merging and repeat behavior.
 	ctx := context.Background()
 	root := &replicationTestRoot{testRoot: &testRoot{errs: &errCont{}}}
 	var updateOrder []string
@@ -396,14 +403,28 @@ func TestSetupReplicationExplicitPriority(t *testing.T) {
 
 func TestSetupReplicationDefaultRuleNameIsStable(t *testing.T) {
 	_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key"); err != nil {
+	for _, tc := range []struct {
+		prefix, want string
+	}{
+		{"logs/", "replicate-dst-id-3b434a36"},
+		{"images/", "replicate-dst-id-5ae80c59"},
+	} {
+		if got := defaultReplicationRuleName("dst-id", tc.prefix); got != tc.want {
+			t.Fatalf("defaultReplicationRuleName(%q) = %q, want %q", tc.prefix, got, tc.want)
+		}
+		if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithFileNamePrefix(tc.prefix)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	rules := srcBackend.config.AsReplicationSource.ReplicationRules
-	if len(rules) != 1 || rules[0].ReplicationRuleName == "" || len(srcBackend.updates) != 1 || len(dstBackend.updates) != 1 {
-		t.Fatalf("generated rule name or repeat changed setup: rules=%+v source updates=%d destination updates=%d", rules, len(srcBackend.updates), len(dstBackend.updates))
+	if len(rules) != 2 || rules[0].ReplicationRuleName != "replicate-dst-id-3b434a36" || rules[1].ReplicationRuleName != "replicate-dst-id-5ae80c59" || len(srcBackend.updates) != 2 || len(dstBackend.updates) != 2 {
+		t.Fatalf("generated rules = %+v; source updates=%d destination updates=%d", rules, len(srcBackend.updates), len(dstBackend.updates))
+	}
+	if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithFileNamePrefix("logs/")); err != nil {
+		t.Fatal(err)
+	}
+	if len(srcBackend.updates) != 2 || len(dstBackend.updates) != 2 {
+		t.Fatalf("stable logs/ name made extra updates: source=%d destination=%d", len(srcBackend.updates), len(dstBackend.updates))
 	}
 }
 
@@ -411,36 +432,48 @@ func TestSetupReplicationRejectsInvalidInputs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		run  func(*Bucket, *Bucket) error
+		want string
 	}{
 		{"nil source", func(_, dst *Bucket) error {
 			return SetupReplication(context.Background(), nil, dst, "source-key", "destination-key")
-		}},
+		}, "setup replication: source and destination buckets are required"},
 		{"nil destination", func(src, _ *Bucket) error {
 			return SetupReplication(context.Background(), src, nil, "source-key", "destination-key")
-		}},
+		}, "setup replication: source and destination buckets are required"},
 		{"same bucket", func(src, _ *Bucket) error {
 			return SetupReplication(context.Background(), src, src, "source-key", "destination-key")
-		}},
+		}, "setup replication: source and destination must differ"},
 		{"nil option", func(src, dst *Bucket) error {
 			return SetupReplication(context.Background(), src, dst, "source-key", "destination-key", nil)
-		}},
+		}, "setup replication: nil option"},
 		{"zero priority", func(src, dst *Bucket) error {
 			return SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRulePriority(0))
-		}},
+		}, "setup replication: priority must be between 1 and 2147483647"},
 		{"negative priority", func(src, dst *Bucket) error {
 			return SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRulePriority(-1))
-		}},
+		}, "setup replication: priority must be between 1 and 2147483647"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
-			if err := tc.run(src, dst); err == nil {
-				t.Fatal("SetupReplication() succeeded, want an input error")
+			root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+			root.listCalls = 0
+			if err := tc.run(src, dst); err == nil || err.Error() != tc.want {
+				t.Fatalf("SetupReplication() = %v, want %q", err, tc.want)
 			}
-			if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
-				t.Fatal("invalid input caused a bucket update")
+			if root.listCalls != 0 || srcBackend.attrsCalls != 0 || dstBackend.attrsCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+				t.Fatalf("invalid input made backend calls: lists=%d source attrs=%d updates=%d destination attrs=%d updates=%d", root.listCalls, srcBackend.attrsCalls, len(srcBackend.updates), dstBackend.attrsCalls, len(dstBackend.updates))
 			}
 		})
 	}
+	t.Run("valid single option", func(t *testing.T) {
+		root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+		root.listCalls = 0
+		if err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRuleName("valid")); err != nil {
+			t.Fatalf("SetupReplication(valid single option) = %v, want nil", err)
+		}
+		if root.listCalls != 2 || srcBackend.attrsCalls != 1 || dstBackend.attrsCalls != 1 || len(srcBackend.updates) != 1 || len(dstBackend.updates) != 1 {
+			t.Fatalf("valid option backend calls: lists=%d source attrs=%d updates=%d destination attrs=%d updates=%d", root.listCalls, srcBackend.attrsCalls, len(srcBackend.updates), dstBackend.attrsCalls, len(dstBackend.updates))
+		}
+	})
 }
 
 func TestSetupReplicationDestinationUpdateFailureDoesNotWriteSource(t *testing.T) {
@@ -459,20 +492,22 @@ func TestSetupReplicationRejectsConflictingOptions(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		opts []ReplicationOption
+		want string
 	}{
-		{"rule name", []ReplicationOption{WithRuleName("first"), WithRuleName("second")}},
-		{"priority", []ReplicationOption{WithRulePriority(10), WithRulePriority(11)}},
-		{"prefix", []ReplicationOption{WithFileNamePrefix("one/"), WithFileNamePrefix("two/")}},
-		{"include existing", []ReplicationOption{WithIncludeExistingFiles(true), WithIncludeExistingFiles(false)}},
+		{"rule name", []ReplicationOption{WithRuleName("first"), WithRuleName("second")}, "setup replication: conflicting rule names"},
+		{"priority", []ReplicationOption{WithRulePriority(10), WithRulePriority(11)}, "setup replication: conflicting priorities"},
+		{"prefix", []ReplicationOption{WithFileNamePrefix("one/"), WithFileNamePrefix("two/")}, "setup replication: conflicting file name prefixes"},
+		{"include existing", []ReplicationOption{WithIncludeExistingFiles(true), WithIncludeExistingFiles(false)}, "setup replication: conflicting include-existing settings"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+			root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+			root.listCalls = 0
 			err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", tc.opts...)
-			if err == nil || !strings.Contains(err.Error(), "conflicting") {
-				t.Fatalf("SetupReplication() = %v, want conflicting-option error", err)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("SetupReplication() = %v, want %q", err, tc.want)
 			}
-			if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
-				t.Fatal("conflicting options wrote replication settings")
+			if root.listCalls != 0 || srcBackend.attrsCalls != 0 || dstBackend.attrsCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+				t.Fatalf("conflicting options made backend calls: lists=%d source attrs=%d updates=%d destination attrs=%d updates=%d", root.listCalls, srcBackend.attrsCalls, len(srcBackend.updates), dstBackend.attrsCalls, len(dstBackend.updates))
 			}
 		})
 	}

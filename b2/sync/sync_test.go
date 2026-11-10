@@ -43,31 +43,35 @@ func TestShouldTransfer(t *testing.T) {
 	local := localFile{size: 12, modTime: mtime, sha1: "matching-sha1"}
 	baseDest := b2.Attrs{Size: 12, LastModified: mtime.Truncate(time.Millisecond), SHA1: local.sha1}
 	tests := []struct {
-		name string
-		mode CompareMode
-		dest *b2.Attrs
-		want bool
+		name  string
+		mode  CompareMode
+		local localFile
+		dest  *b2.Attrs
+		want  bool
 	}{
-		{"missing modtime", CompareModTime, nil, true},
-		{"missing size", CompareSize, nil, true},
-		{"missing none", CompareNone, nil, true},
-		{"missing sha1", CompareSHA1, nil, true},
-		{"modtime equal to millisecond", CompareModTime, &baseDest, false},
-		{"modtime size differs", CompareModTime, &b2.Attrs{Size: 13, LastModified: baseDest.LastModified}, true},
-		{"modtime differs by millisecond", CompareModTime, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Millisecond)}, true},
-		{"newer cloud file still yields to local source", CompareModTime, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Hour)}, true},
-		{"size equal", CompareSize, &baseDest, false},
-		{"size differs", CompareSize, &b2.Attrs{Size: 13}, true},
-		{"none existing", CompareNone, &b2.Attrs{Size: 13}, false},
-		{"sha1 equal", CompareSHA1, &baseDest, false},
-		{"sha1 differs", CompareSHA1, &b2.Attrs{Size: 12, SHA1: "different"}, true},
-		{"sha1 none same size", CompareSHA1, &b2.Attrs{Size: 12, SHA1: "none"}, true},
-		{"sha1 empty same size", CompareSHA1, &b2.Attrs{Size: 12}, true},
-		{"sha1 none different size", CompareSHA1, &b2.Attrs{Size: 13, SHA1: "none"}, true},
+		{"missing modtime", CompareModTime, local, nil, true},
+		{"missing size", CompareSize, local, nil, true},
+		{"missing none", CompareNone, local, nil, true},
+		{"missing sha1", CompareSHA1, local, nil, true},
+		{"modtime equal to millisecond", CompareModTime, local, &baseDest, false},
+		{"modtime size differs", CompareModTime, local, &b2.Attrs{Size: 13, LastModified: baseDest.LastModified}, true},
+		{"modtime differs by millisecond", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Millisecond)}, true},
+		{"newer cloud file still yields to local source", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Hour)}, true},
+		{"size equal", CompareSize, local, &baseDest, false},
+		{"size differs", CompareSize, local, &b2.Attrs{Size: 13}, true},
+		{"none existing", CompareNone, local, &b2.Attrs{Size: 13}, false},
+		{"sha1 equal", CompareSHA1, local, &baseDest, false},
+		{"sha1 differs", CompareSHA1, local, &b2.Attrs{Size: 12, SHA1: "different"}, true},
+		{"sha1 differs at equal size and mtime", CompareSHA1,
+			localFile{size: 12, modTime: time.UnixMilli(1_700_000_000_000), sha1: "1111111111111111111111111111111111111111"},
+			&b2.Attrs{Size: 12, LastModified: time.UnixMilli(1_700_000_000_000), SHA1: "2222222222222222222222222222222222222222"}, true},
+		{"sha1 none same size", CompareSHA1, local, &b2.Attrs{Size: 12, SHA1: "none"}, true},
+		{"sha1 empty same size", CompareSHA1, local, &b2.Attrs{Size: 12}, true},
+		{"sha1 none different size", CompareSHA1, local, &b2.Attrs{Size: 13, SHA1: "none"}, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := shouldTransfer(local, test.dest, test.mode); got != test.want {
+			if got := shouldTransfer(test.local, test.dest, test.mode); got != test.want {
 				t.Fatalf("shouldTransfer() = %t, want %t", got, test.want)
 			}
 		})
@@ -115,6 +119,20 @@ type syncRequest struct{ method, path string }
 type syncUpload struct {
 	method, path, name, auth, sha, mtime string
 	body                                 []byte
+}
+
+type cancelContextTransport struct {
+	mu       stdsync.Mutex
+	contexts []context.Context
+}
+
+func (t *cancelContextTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, "/b2_cancel_large_file") {
+		t.mu.Lock()
+		t.contexts = append(t.contexts, req.Context())
+		t.mu.Unlock()
+	}
+	return http.DefaultTransport.RoundTrip(req)
 }
 
 func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) {
@@ -234,13 +252,38 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 				write(map[string]interface{}{"status": 400, "code": "bad_request", "message": "part rejected"})
 				return
 			}
-			n, err := io.Copy(io.Discard, req.Body)
+			// https://www.backblaze.com/apidocs/b2-upload-part: the 40-byte
+			// SHA1 trailer is part of Content-Length, not the stored file data.
+			h := sha1.New()
+			sha := req.Header.Get("X-Bz-Content-Sha1")
+			var n int64
+			var err error
+			if sha == "hex_digits_at_end" {
+				if req.ContentLength < 40 {
+					err = errors.New("missing SHA1 trailer")
+				} else {
+					n, err = io.CopyN(h, req.Body, req.ContentLength-40)
+					if err == nil {
+						var trailer [40]byte
+						_, err = io.ReadFull(req.Body, trailer[:])
+						sha = string(trailer[:])
+					}
+				}
+			} else {
+				n, err = io.Copy(h, req.Body)
+			}
 			if err != nil {
 				// The client may abort an in-flight part, for example when it detects a
 				// change to the source file; it no longer reads this response. Any other
 				// truncated body must still fail the upload, so answer with an error.
 				out.WriteHeader(http.StatusBadRequest)
 				write(map[string]interface{}{"status": 400, "code": "bad_request", "message": "truncated part body"})
+				return
+			}
+			if sha != fmt.Sprintf("%x", h.Sum(nil)) {
+				t.Errorf("part SHA1 = %q, want checksum of the payload", sha)
+				out.WriteHeader(http.StatusBadRequest)
+				write(map[string]interface{}{"status": 400, "code": "bad_request", "message": "part checksum mismatch"})
 				return
 			}
 			w.mu.Lock()
@@ -251,7 +294,7 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 			if firstPart && callback != nil {
 				callback()
 			}
-			write(map[string]interface{}{"fileId": "large-id", "partNumber": req.Header.Get("X-Bz-Part-Number"), "contentLength": n, "contentSha1": req.Header.Get("X-Bz-Content-Sha1")})
+			write(map[string]interface{}{"fileId": "large-id", "partNumber": req.Header.Get("X-Bz-Part-Number"), "contentLength": n, "contentSha1": sha})
 		case strings.HasSuffix(req.URL.Path, "/b2_finish_large_file"):
 			w.mu.Lock()
 			name, _ := w.pending["fileName"].(string)
@@ -815,6 +858,10 @@ func TestSyncSHA1LargeFileRoundTrip(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
+	modified := time.UnixMilli(1_700_000_000_000)
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatal(err)
+	}
 	result, err := Sync(context.Background(), bucket, "p", root, WithCompare(CompareSHA1))
 	if err != nil {
 		t.Fatal(err)
@@ -837,7 +884,11 @@ func TestSyncSHA1LargeFileRoundTrip(t *testing.T) {
 	wire.mu.Lock()
 	info, _ := wire.pending["fileInfo"].(map[string]interface{})
 	storedSHA1 := info["large_file_sha1"]
+	storedSize := wire.files["p/large.bin"]["contentLength"]
 	wire.mu.Unlock()
+	if storedSize != int64(100_000_001) {
+		t.Fatalf("remote contentLength = %v, want 100000001", storedSize)
+	}
 	if storedSHA1 != want {
 		t.Fatalf("large_file_sha1 = %q, want %q", storedSHA1, want)
 	}
@@ -859,7 +910,6 @@ func TestSyncSHA1LargeFileRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Preserve size and mtime: only the hash can detect this in-place edit.
-	modified := time.UnixMilli(1_700_000_000_000)
 	if err := os.Chtimes(path, modified, modified); err != nil {
 		t.Fatal(err)
 	}
@@ -891,8 +941,12 @@ func TestSyncSHA1TransfersLargeFileWithoutStoredChecksum(t *testing.T) {
 	}
 	wire.mu.Lock()
 	stored := wire.files["p/large.bin"]
+	storedSize := stored["contentLength"]
 	info, _ := stored["fileInfo"].(map[string]interface{})
 	wire.mu.Unlock()
+	if storedSize != int64(100_000_001) {
+		t.Fatalf("remote contentLength = %v, want 100000001", storedSize)
+	}
 	if info["large_file_sha1"] != nil {
 		t.Fatalf("default upload unexpectedly stored large_file_sha1: %v", info)
 	}
@@ -955,6 +1009,38 @@ func TestUploadFileRejectsStaleWalkSHA1(t *testing.T) {
 	wire.mu.Unlock()
 	if published {
 		t.Fatal("file published with stale SHA1")
+	}
+}
+
+func TestSyncCancelsMultipartCleanupContext(t *testing.T) {
+	transport := &cancelContextTransport{}
+	bucket, wire := newSyncWire(t,
+		b2.DefaultWriterOptions(func(writer *b2.Writer) {
+			// The test wire deliberately accepts this small part size.
+			writer.ChunkSize = 3
+			writer.ConcurrentUploads = 1
+		}),
+		b2.Transport(transport),
+	)
+	wire.mu.Lock()
+	wire.failPart = true
+	wire.mu.Unlock()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "failed.bin"), []byte("failed multipart payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Sync(context.Background(), bucket, "p", root, WithConcurrency(1))
+	if err == nil || result == nil || len(result.Failed) != 1 {
+		t.Fatalf("Sync = (%+v, %v), want one failed multipart upload", result, err)
+	}
+	transport.mu.Lock()
+	contexts := append([]context.Context(nil), transport.contexts...)
+	transport.mu.Unlock()
+	if len(contexts) != 1 {
+		t.Fatalf("b2_cancel_large_file requests = %d, want exactly one", len(contexts))
+	}
+	if cleanupCtx := contexts[0]; !errors.Is(cleanupCtx.Err(), context.Canceled) {
+		t.Fatalf("cleanup context error after Sync = %v, want context.Canceled", cleanupCtx.Err())
 	}
 }
 

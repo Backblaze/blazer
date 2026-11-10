@@ -16,6 +16,7 @@ type recordingTB struct {
 	testing.TB
 	mu       sync.Mutex
 	messages []string
+	fatals   int
 }
 
 func (t *recordingTB) Errorf(format string, args ...any) {
@@ -24,12 +25,23 @@ func (t *recordingTB) Errorf(format string, args ...any) {
 	t.messages = append(t.messages, fmt.Sprintf(format, args...))
 }
 
-func (t *recordingTB) Fatalf(format string, args ...any) { t.Errorf(format, args...) }
+func (t *recordingTB) Fatalf(format string, args ...any) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.fatals++
+	t.messages = append(t.messages, fmt.Sprintf(format, args...))
+}
 
 func (t *recordingTB) errors() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]string(nil), t.messages...)
+}
+
+func (t *recordingTB) fatalCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.fatals
 }
 
 func get(t *testing.T, url string) *http.Response {
@@ -78,6 +90,33 @@ func (t *cleanupTB) Errorf(format string, args ...any) {
 		panic("Errorf called after test cleanup")
 	}
 	t.TB.Errorf(format, args...)
+}
+
+type cleanupRecordingTB struct {
+	*recordingTB
+	cleanup func()
+}
+
+func (t *cleanupRecordingTB) Cleanup(f func()) { t.cleanup = f }
+
+func (t *cleanupRecordingTB) runCleanup(tester *testing.T) {
+	tester.Helper()
+	if t.cleanup == nil {
+		tester.Fatal("b2wiretest did not register cleanup")
+	}
+	t.cleanup()
+}
+
+func strictGet(t *testing.T, server *Server, call string) int {
+	t.Helper()
+	response, err := http.Get(server.URL() + "/b2api/v4/" + call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return response.StatusCode
 }
 
 func TestLateRequestAfterCleanupDoesNotReport(t *testing.T) {
@@ -377,6 +416,111 @@ func TestReplySequenceRepeatsLast(t *testing.T) {
 	}
 }
 
+func TestStrictReplySequenceReportsUnexpectedExtraRequest(t *testing.T) {
+	fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+	s := New(fake)
+	s.StrictReplySequence("once", Response{Body: `{"response":1}`})
+	if got := strictGet(t, s, "once"); got != http.StatusOK {
+		t.Fatalf("first response status = %d, want 200", got)
+	}
+	if got := strictGet(t, s, "once"); got != http.StatusBadRequest {
+		t.Fatalf("extra response status = %d, want 400", got)
+	}
+	want := "b2wiretest: unexpected extra request for once: got 2, want 1"
+	if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+		t.Errorf("extra request reports = %v, want [%q]", reports, want)
+	}
+	fake.runCleanup(t)
+}
+
+func TestStrictReplySequenceReportsUnusedResponse(t *testing.T) {
+	fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+	s := New(fake)
+	s.StrictReplySequence("twice", Response{Body: `{"response":1}`}, Response{Body: `{"response":2}`})
+	if got := strictGet(t, s, "twice"); got != http.StatusOK {
+		t.Fatalf("response status = %d, want 200", got)
+	}
+	fake.runCleanup(t)
+	want := "b2wiretest: unused scripted responses for twice: got 1, want 2"
+	if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+		t.Errorf("unused response reports = %v, want [%q]", reports, want)
+	}
+}
+
+func TestStrictReplySequenceReportsUnusedResponseWhenReplaced(t *testing.T) {
+	for _, test := range strictScriptReplacements() {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+			s := New(fake)
+			s.StrictReplySequence("twice", Response{Body: `{"response":1}`}, Response{Body: `{"response":2}`})
+			if got := strictGet(t, s, "twice"); got != http.StatusOK {
+				t.Fatalf("first response status = %d, want 200", got)
+			}
+			test.replace(t, s)
+			fake.runCleanup(t)
+			want := "b2wiretest: unused scripted responses for twice: got 1, want 2"
+			if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+				t.Errorf("replacement reports = %v, want [%q]", reports, want)
+			}
+		})
+	}
+}
+
+func TestStrictReplySequenceReplacementAcceptsUsedResponses(t *testing.T) {
+	for _, test := range strictScriptReplacements() {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+			s := New(fake)
+			s.StrictReplySequence("twice", Response{Body: `{"response":1}`})
+			if got := strictGet(t, s, "twice"); got != http.StatusOK {
+				t.Fatalf("response status = %d, want 200", got)
+			}
+			test.replace(t, s)
+			fake.runCleanup(t)
+			if reports := fake.errors(); len(reports) != 0 {
+				t.Errorf("used response reports = %v, want none", reports)
+			}
+		})
+	}
+}
+
+func strictScriptReplacements() []struct {
+	name    string
+	replace func(*testing.T, *Server)
+} {
+	return []struct {
+		name    string
+		replace func(*testing.T, *Server)
+	}{
+		{"Reply", func(_ *testing.T, s *Server) { s.Reply("twice", http.StatusOK, `{}`) }},
+		{"ReplySequence", func(_ *testing.T, s *Server) { s.ReplySequence("twice", Response{Body: `{}`}) }},
+		{"Handle", func(_ *testing.T, s *Server) {
+			s.Handle("twice", func(Request) Response { return Response{Body: `{}`} })
+		}},
+		{"StrictReplySequence", func(t *testing.T, s *Server) {
+			s.StrictReplySequence("twice", Response{Body: `{}`})
+			if got := strictGet(t, s, "twice"); got != http.StatusOK {
+				t.Fatalf("replacement response status = %d, want 200", got)
+			}
+		}},
+	}
+}
+
+func TestStrictReplySequenceAcceptsExactRequests(t *testing.T) {
+	fake := &cleanupRecordingTB{recordingTB: &recordingTB{TB: t}}
+	s := New(fake)
+	s.StrictReplySequence("twice", Response{Body: `{"response":1}`}, Response{Body: `{"response":2}`})
+	for i := range 2 {
+		if got := strictGet(t, s, "twice"); got != http.StatusOK {
+			t.Fatalf("response %d status = %d, want 200", i+1, got)
+		}
+	}
+	fake.runCleanup(t)
+	if reports := fake.errors(); len(reports) != 0 {
+		t.Errorf("exact request reports = %v, want none", reports)
+	}
+}
+
 func TestScriptedZeroStatusDefaultsToOK(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -513,7 +657,7 @@ func TestJSONAssertionsRejectEmptyPath(t *testing.T) {
 }
 
 func TestAssertJSONReportsGotAndWant(t *testing.T) {
-	r := Request{Call: "b2_update_bucket", JSON: map[string]any{"count": float64(5), "bucketIds": []any{"a"}}}
+	r := Request{Call: "b2_update_bucket", Body: []byte(`{"count":5,"bucketIds":["a"]}`), JSON: map[string]any{"count": float64(5), "bucketIds": []any{"a"}}}
 	fake := &recordingTB{TB: t}
 	AssertJSON(fake, r, "count", int64(5))
 	AssertJSON(fake, r, "bucketIds", []string{"a"})
@@ -528,8 +672,130 @@ func TestAssertJSONReportsGotAndWant(t *testing.T) {
 	}
 }
 
+func TestAssertJSONInvalidBodyReportsMissingWithoutFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{name: "empty", body: nil},
+		{name: "not JSON", body: []byte("not-json")},
+		{name: "doubled object", body: []byte(`{"fileId":"a"}{"fileId":"a"}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingTB{TB: t}
+			AssertJSON(fake, Request{Call: "b2_copy_file", Body: tc.body}, "fileId", "a")
+			const want = "b2_copy_file body fileId: missing, want a"
+			if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+				t.Errorf("reports = %q, want [%q]", reports, want)
+			}
+			if got := fake.fatalCount(); got != 0 {
+				t.Errorf("Fatalf calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestAssertNoJSONRejectsUndecodableBody(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{name: "empty body", body: nil},
+		{name: "undecodable body", body: []byte("not-json"), want: "b2_copy_file body fileId: body is not a JSON object"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingTB{TB: t}
+			AssertNoJSON(fake, Request{Call: "b2_copy_file", Body: tc.body}, "fileId")
+			reports := fake.errors()
+			if tc.want == "" && len(reports) != 0 {
+				t.Errorf("reports = %q, want none", reports)
+			}
+			if tc.want != "" && (len(reports) != 1 || reports[0] != tc.want) {
+				t.Errorf("reports = %q, want [%q]", reports, tc.want)
+			}
+		})
+	}
+}
+
+func TestAssertJSONComparesNumbersByValue(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		body       string
+		path       string
+		want       any
+		wantReport string
+	}{
+		{name: "one equals decimal one", body: `{"count":1}`, path: "count", want: json.Number("1.0")},
+		{name: "one hundred equals exponent", body: `{"count":100}`, path: "count", want: json.Number("1e2")},
+		{name: "array number value", body: `{"counts":[1]}`, path: "counts", want: []any{json.Number("1.0")}},
+		{name: "object number value", body: `{"count":{"a":100}}`, path: "count", want: map[string]any{"a": json.Number("1e2")}},
+		{
+			name:       "distinct large integers",
+			body:       `{"count":9007199254740995}`,
+			path:       "count",
+			want:       json.Number("9007199254740996"),
+			wantReport: "b2_update_bucket body count: got 9007199254740995, want 9007199254740996",
+		},
+		{name: "hand-built request body", body: `{"fileId":"a"}`, path: "fileId", want: "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingTB{TB: t}
+			r := Request{Call: "b2_update_bucket", Body: []byte(tc.body)}
+			AssertJSON(fake, r, tc.path, tc.want)
+			reports := fake.errors()
+			if tc.wantReport == "" && len(reports) != 0 {
+				t.Errorf("reports = %q, want none", reports)
+			}
+			if tc.wantReport != "" && (len(reports) != 1 || reports[0] != tc.wantReport) {
+				t.Errorf("reports = %q, want [%q]", reports, tc.wantReport)
+			}
+		})
+	}
+}
+
+func recordedJSONBody(t *testing.T, body string) Request {
+	t.Helper()
+	s := New(t)
+	s.Reply("b2_update_bucket", http.StatusOK, `{}`)
+	s.serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/b2api/v4/b2_update_bucket", strings.NewReader(body)))
+	return s.Last(t, "b2_update_bucket")
+}
+
+func TestAssertJSONDistinguishesAdjacentLargeIntegers(t *testing.T) {
+	r := recordedJSONBody(t, `{"count":9007199254740995}`)
+	fake := &recordingTB{TB: t}
+	AssertJSON(fake, r, "count", json.Number("9007199254740996"))
+	const want = "b2_update_bucket body count: got 9007199254740995, want 9007199254740996"
+	if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+		t.Errorf("mismatch reports = %q, want [%q]", reports, want)
+	}
+}
+
+func TestAssertJSONMatchesEqualSmallIntegers(t *testing.T) {
+	r := recordedJSONBody(t, `{"count":5}`)
+	if _, ok := r.JSON["count"].(float64); !ok {
+		t.Fatalf("Request.JSON count type = %T, want float64", r.JSON["count"])
+	}
+	fake := &recordingTB{TB: t}
+	AssertJSON(fake, r, "count", int64(5))
+	if reports := fake.errors(); len(reports) != 0 {
+		t.Errorf("equal small integer reported mismatch: %q", reports)
+	}
+}
+
+func TestAssertJSONDistinguishesRepresentableLargeIntegers(t *testing.T) {
+	r := recordedJSONBody(t, `{"count":9007199254740994}`)
+	fake := &recordingTB{TB: t}
+	AssertJSON(fake, r, "count", json.Number("9007199254740996"))
+	const want = "b2_update_bucket body count: got 9007199254740994, want 9007199254740996"
+	if reports := fake.errors(); len(reports) != 1 || reports[0] != want {
+		t.Errorf("mismatch reports = %q, want [%q]", reports, want)
+	}
+}
+
 func TestAssertNoJSONAndAssertHeader(t *testing.T) {
-	r := Request{Call: "b2_create_bucket", JSON: map[string]any{"nested": map[string]any{"present": true}}, Header: http.Header{"X-Test": {"value"}}}
+	r := Request{Call: "b2_create_bucket", Body: []byte(`{"nested":{"present":true}}`), Header: http.Header{"X-Test": {"value"}}}
 	fake := &recordingTB{TB: t}
 	AssertNoJSON(fake, r, "nested.absent")
 	AssertHeader(fake, r, "X-Test", "value")

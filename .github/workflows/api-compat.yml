@@ -1,0 +1,24 @@
+name: API compatibility
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  api-compat:
+    name: api compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache-dependency-path: '**/go.sum'
+      - run: make api-compat

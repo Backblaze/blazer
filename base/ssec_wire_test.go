@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/Backblaze/blazer/internal/b2types"
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 type ssecWireRequest struct {
@@ -73,11 +74,15 @@ func newSSECWireFixture(t *testing.T) (*B2, *Bucket, *httptest.Server, *[]ssecWi
 		case strings.HasSuffix(r.URL.Path, "/b2_copy_file"):
 			_, _ = fmt.Fprint(w, `{"fileId":"copy","fileName":"dst","action":"copy","contentLength":1,"uploadTimestamp":1}`)
 		case strings.HasPrefix(r.URL.Path, "/file/bucket/"):
-			w.Header().Set("Content-Length", "1")
+			response := b2wiretest.RangeDownload("xxxxx", r.Header.Get("Range"))
+			for name, values := range response.Header {
+				w.Header()[name] = values
+			}
 			w.Header().Set("Content-Type", "text/plain")
 			w.Header().Set("X-Bz-File-Id", "small")
 			if r.Method != http.MethodHead {
-				_, _ = w.Write([]byte("x"))
+				w.WriteHeader(response.Status)
+				_, _ = fmt.Fprint(w, response.Body)
 			}
 		default:
 			http.NotFound(w, r)
@@ -185,15 +190,33 @@ func TestSSECWireShapes(t *testing.T) {
 }
 
 func TestSSEB2AndSSECConflictIsRejected(t *testing.T) {
-	conflict := &b2types.ServerSideEncryption{
-		Mode:           "SSE-B2",
-		Algorithm:      "AES256",
-		CustomerKey:    "secret",
-		CustomerKeyMD5: "digest",
-	}
-	err := addServerSideEncryptionHeaders(map[string]string{}, conflict)
-	if err == nil || !strings.Contains(err.Error(), "SSE-B2 and SSE-C") {
-		t.Fatalf("conflict error = %v, want a clear SSE-B2/SSE-C conflict", err)
+	for _, tc := range []struct {
+		name, key, digest string
+		wantConflict      bool
+	}{
+		{"both customer fields", "secret", "digest", true},
+		{"customer key only", "secret", "", true},
+		{"customer digest only", "", "digest", true},
+		{"no customer fields", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := map[string]string{}
+			err := addServerSideEncryptionHeaders(headers, &b2types.ServerSideEncryption{
+				Mode: "SSE-B2", Algorithm: "AES256", CustomerKey: tc.key, CustomerKeyMD5: tc.digest,
+			})
+			if tc.wantConflict {
+				if err == nil || !strings.Contains(err.Error(), "SSE-B2 and SSE-C") {
+					t.Fatalf("conflict error = %v, want a clear SSE-B2/SSE-C conflict", err)
+				}
+				if len(headers) != 0 {
+					t.Errorf("rejected encryption changed headers: %v", headers)
+				}
+				return
+			}
+			if err != nil || len(headers) != 1 || headers["X-Bz-Server-Side-Encryption"] != "AES256" {
+				t.Fatalf("SSE-B2 without customer fields: headers=%v error=%v, want AES256 and nil", headers, err)
+			}
+		})
 	}
 }
 

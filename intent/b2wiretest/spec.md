@@ -41,10 +41,12 @@ Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no p
   (filtered, in order) and `Last(t testing.TB, call string) Request` (fails the test with `t.Fatalf` if the
   call was never made).
 - **R9. Assertions.** Each reports the call, the field and "got X, want Y":
-  - `AssertJSON(t, r Request, path string, want any)`: `path` is dot-separated into the JSON body
-    (`fileRetention.mode`, `bucketIds.0`). Values are compared after a JSON round trip of `want`, so
-    `int64(5)` and `5.0` compare equal, as do a `[]string` and a `[]any` with the same elements.
-  - `AssertNoJSON(t, r Request, path string)`: the field is absent.
+  - `AssertJSON(t, r Request, path string, want any)`: `path` is dot-separated into the JSON object
+    decoded from `r.Body` (`fileRetention.mode`, `bucketIds.0`). A hand-built `Request` must set `Body`.
+    Values are compared after a JSON round trip of `want`; numbers compare by mathematical value, so
+    `int64(5)`, `5.0` and `5e0` compare equal while distinct integers remain exact above 2^53. A
+    `[]string` and a `[]any` with the same elements also compare equal.
+  - `AssertNoJSON(t, r Request, path string)`: the field is absent from the same decoding of `r.Body`.
   - `AssertHeader(t, r Request, name, want string)`.
   - `AssertQuery(t, r Request, name, want string)`: reports `<call> query <name>: got X, want Y` (or
     `missing` when absent).

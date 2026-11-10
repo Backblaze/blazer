@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '13 5 * * 2'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -27,6 +31,8 @@ jobs:
             go.sum
             bin/b2keys/go.sum
       - name: Install govulncheck
+        # Track latest: govulncheck bundles golang.org/x/tools, and an old pin
+        # (e.g. v1.1.4) ships an analyzer too old to parse newer Go and panics. Keep it current.
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Scan blazer module
         run: |

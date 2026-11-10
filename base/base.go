@@ -378,6 +378,16 @@ func keyExpiration(t int64) time.Time {
 	return millitime(t)
 }
 
+// b2_list_file_names and b2_list_file_versions return virtual folders with
+// action "folder" and uploadTimestamp 0, which must map to the zero time.
+// Keep millitime unchanged because regular file timestamps may be zero.
+func listingTimestamp(action string, t int64) time.Time {
+	if action == "folder" && t == 0 {
+		return time.Time{}
+	}
+	return millitime(t)
+}
+
 type b2Options struct {
 	transport       http.RoundTripper
 	failSomeUploads bool
@@ -1008,6 +1018,10 @@ func (b *Bucket) NotificationRules(ctx context.Context) ([]b2types.EventNotifica
 }
 
 // SetNotificationRules replaces a bucket's complete notification rule set.
+// A nil or empty slice clears every rule. To add or modify one rule, read the
+// existing set and preserve the other rules in the replacement. B2 ignores
+// the server-managed IsSuspended and SuspensionReason fields on set.
+// Suspended rules can only be deleted, not edited.
 func (b *Bucket) SetNotificationRules(ctx context.Context, rules []b2types.EventNotificationRule) error {
 	state := b.b2.snapshot()
 	// A non-nil empty array clears rules. B2 does not treat null as an empty
@@ -1634,6 +1648,7 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 				Name:                 f.Name,
 				ContentType:          f.ContentType,
 				Info:                 f.Info,
+				Status:               f.Action,
 				Timestamp:            millitime(f.Timestamp),
 				Retention:            retention,
 				LegalHold:            legalHold,
@@ -1671,11 +1686,12 @@ func (b *Bucket) ListFileNames(ctx context.Context, count int, continuation, pre
 	var files []*File
 	for _, f := range b2resp.Files {
 		retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+		timestamp := listingTimestamp(f.Action, f.Timestamp)
 		files = append(files, &File{
 			Name:      f.Name,
 			Size:      f.Size,
 			Status:    f.Action,
-			Timestamp: millitime(f.Timestamp),
+			Timestamp: timestamp,
 			Info: &FileInfo{
 				Name:                 f.Name,
 				SHA1:                 f.SHA1,
@@ -1684,7 +1700,7 @@ func (b *Bucket) ListFileNames(ctx context.Context, count int, continuation, pre
 				ContentType:          f.ContentType,
 				Info:                 f.Info,
 				Status:               f.Action,
-				Timestamp:            millitime(f.Timestamp),
+				Timestamp:            timestamp,
 				Retention:            retention,
 				LegalHold:            legalHold,
 				ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
@@ -1720,11 +1736,12 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 	var files []*File
 	for _, f := range b2resp.Files {
 		retention, legalHold := fileLockFromResponse(f.Retention, f.LegalHold)
+		timestamp := listingTimestamp(f.Action, f.Timestamp)
 		files = append(files, &File{
 			Name:      f.Name,
 			Size:      f.Size,
 			Status:    f.Action,
-			Timestamp: millitime(f.Timestamp),
+			Timestamp: timestamp,
 			Info: &FileInfo{
 				Name:                 f.Name,
 				SHA1:                 f.SHA1,
@@ -1733,7 +1750,7 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 				ContentType:          f.ContentType,
 				Info:                 f.Info,
 				Status:               f.Action,
-				Timestamp:            millitime(f.Timestamp),
+				Timestamp:            timestamp,
 				Retention:            retention,
 				LegalHold:            legalHold,
 				ServerSideEncryption: fileEncryptionMetadata(f.ServerSideEncryption),
@@ -1745,13 +1762,41 @@ func (b *Bucket) ListFileVersions(ctx context.Context, count int, startName, sta
 	return files, b2resp.NextName, b2resp.NextID, nil
 }
 
-// GetDownloadAuthorization wraps b2_get_download_authorization.
+// ErrInvalidDuration reports a negative, sub-second or excessive key or
+// download-authorization lifetime.
+var ErrInvalidDuration = errors.New("b2: invalid duration")
+
+// validDurationSeconds converts a lifetime to wire seconds without int overflow.
+func validDurationSeconds(valid time.Duration) (int, error) {
+	if valid < 0 {
+		return 0, fmt.Errorf("%w %v: must not be negative", ErrInvalidDuration, valid)
+	}
+	if valid > 0 && valid < time.Second {
+		return 0, fmt.Errorf("%w %v: must be at least one second", ErrInvalidDuration, valid)
+	}
+	// b2_create_key requires less than 1000 days; this also fits a 32-bit int.
+	// https://www.backblaze.com/apidocs/b2-create-key
+	if valid >= 1000*24*time.Hour {
+		return 0, fmt.Errorf("%w %v: must be less than 1000 days", ErrInvalidDuration, valid)
+	}
+	return int(valid / time.Second), nil
+}
+
+// GetDownloadAuthorization wraps b2_get_download_authorization. Negative
+// durations, positive durations below one second and lifetimes of 1000 days or
+// more return ErrInvalidDuration before sending a request. Longer fractional
+// durations truncate to whole seconds. The server requires a duration from one
+// second to one week; zero is still sent for the server to reject.
 func (b *Bucket) GetDownloadAuthorization(ctx context.Context, prefix string, valid time.Duration, contentDisposition string) (string, error) {
+	validSeconds, err := validDurationSeconds(valid)
+	if err != nil {
+		return "", err
+	}
 	state := b.b2.snapshot()
 	b2req := &b2types.GetDownloadAuthorizationRequest{
 		BucketID:           b.ID,
 		Prefix:             prefix,
-		Valid:              int(valid.Seconds()),
+		Valid:              validSeconds,
 		ContentDisposition: contentDisposition,
 	}
 	b2resp := &b2types.GetDownloadAuthorizationResponse{}
@@ -1782,6 +1827,69 @@ func mkRange(offset, size int64) string {
 		return fmt.Sprintf("bytes=%d-", offset)
 	}
 	return fmt.Sprintf("bytes=%d-%d", offset, offset+size-1)
+}
+
+// limitedReadCloser limits reads without preventing Close from reaching the
+// underlying response body.
+type limitedReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+// ErrInvalidRangeResponse reports a response that does not satisfy a range
+// request.
+var ErrInvalidRangeResponse = errors.New("invalid range response")
+
+func validateRangeResponse(resp *http.Response, b2Method string, offset, size int64) error {
+	// Reject overlong declared bodies for both 200 and 206 before the reader
+	// can expose bytes. Reject chunked replies because their missing length
+	// prevents that check before data reaches the caller.
+	if resp.StatusCode == http.StatusOK && offset == 0 {
+		contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+		if err != nil || contentLength < 0 {
+			return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Length %q", ErrInvalidRangeResponse, b2Method, offset, resp.Header.Get("Content-Length"))
+		}
+		if size <= 0 || contentLength <= size {
+			return nil
+		}
+		return fmt.Errorf("%w: %s: range request at offset %d requested %d bytes but HTTP 200 returned %d", ErrInvalidRangeResponse, b2Method, offset, size, contentLength)
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("%w: %s: range request at offset %d returned HTTP %d, want 206", ErrInvalidRangeResponse, b2Method, offset, resp.StatusCode)
+	}
+	contentRange := resp.Header.Get("Content-Range")
+	const prefix = "bytes "
+	if !strings.HasPrefix(contentRange, prefix) {
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
+	}
+	startText, endTotal, ok := strings.Cut(strings.TrimPrefix(contentRange, prefix), "-")
+	if !ok {
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
+	}
+	endText, totalText, ok := strings.Cut(endTotal, "/")
+	if !ok {
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
+	}
+	start, startErr := strconv.ParseInt(startText, 10, 64)
+	end, endErr := strconv.ParseInt(endText, 10, 64)
+	total, totalErr := strconv.ParseInt(totalText, 10, 64)
+	if startErr != nil || endErr != nil || totalErr != nil ||
+		strings.HasPrefix(startText, "+") || strings.HasPrefix(endText, "+") || strings.HasPrefix(totalText, "+") ||
+		start != offset || start < 0 || end < start || total <= end {
+		return fmt.Errorf("%w: %s: range request at offset %d returned Content-Range %q", ErrInvalidRangeResponse, b2Method, offset, contentRange)
+	}
+	expected := total - start
+	if size > 0 && size < expected {
+		expected = size
+	}
+	if end-start+1 != expected {
+		return fmt.Errorf("%w: %s: range request at offset %d returned Content-Range %q, want %d bytes", ErrInvalidRangeResponse, b2Method, offset, contentRange, expected)
+	}
+	contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
+	if err != nil || contentLength != expected {
+		return fmt.Errorf("%w: %s: range request at offset %d returned invalid Content-Length %q, want %d", ErrInvalidRangeResponse, b2Method, offset, resp.Header.Get("Content-Length"), expected)
+	}
+	return nil
 }
 
 // DownloadFileByName wraps b2_download_file_by_name.
@@ -1843,6 +1951,15 @@ func (b *Bucket) downloadFile(ctx context.Context, state authState, uri, b2Metho
 		return nil, err
 	}
 	logResponse(resp, nil)
+	if rng != "" && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
+		if err := validateRangeResponse(resp, b2Method, offset, size); err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+		if size > 0 {
+			resp.Body = limitedReadCloser{Reader: io.LimitReader(resp.Body, size), Closer: resp.Body}
+		}
+	}
 	return newFileReader(resp)
 }
 
@@ -2067,15 +2184,22 @@ func keyBucketIDs(key b2types.Key) []string {
 }
 
 // CreateKey wraps v3 b2_create_key, producing a single-bucket key (or, with an
-// empty bucketID, an unrestricted one) that v3-only clients can still use. For
-// a Multi-Bucket Application Key, use CreateKeyMultiBucket.
+// empty bucketID, an unrestricted one) that v3-only clients can still use. A
+// zero duration creates a non-expiring key; otherwise the lifetime must be at
+// least one second and below 1000 days. Longer fractional durations truncate
+// to whole seconds. Invalid lifetimes return ErrInvalidDuration before sending
+// a request. For a Multi-Bucket Application Key, use CreateKeyMultiBucket.
 func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid time.Duration, bucketID string, prefix string) (*Key, error) {
+	validSeconds, err := validDurationSeconds(valid)
+	if err != nil {
+		return nil, err
+	}
 	state := b.snapshot()
 	b2req := &b2types.CreateKeyRequestV3{
 		AccountID:    state.accountID,
 		Capabilities: caps,
 		Name:         name,
-		Valid:        int(valid.Seconds()),
+		Valid:        validSeconds,
 		BucketID:     bucketID,
 		Prefix:       prefix,
 	}
@@ -2083,15 +2207,23 @@ func (b *B2) CreateKey(ctx context.Context, name string, caps []string, valid ti
 }
 
 // CreateKeyMultiBucket wraps v4 b2_create_key, producing a Multi-Bucket
-// Application Key. Such keys are unusable by v3-only clients; for v3
-// compatibility, create one CreateKey per bucket instead.
+// Application Key. A zero duration creates a non-expiring key; otherwise the
+// lifetime must be at least one second and below 1000 days. Longer fractional
+// durations truncate to whole seconds. Invalid lifetimes return
+// ErrInvalidDuration before sending a request. Such keys are unusable by
+// v3-only clients; for v3 compatibility, create one CreateKey per bucket
+// instead.
 func (b *B2) CreateKeyMultiBucket(ctx context.Context, name string, caps []string, valid time.Duration, bucketIDs []string, prefix string) (*Key, error) {
+	validSeconds, err := validDurationSeconds(valid)
+	if err != nil {
+		return nil, err
+	}
 	state := b.snapshot()
 	b2req := &b2types.CreateKeyRequestV4{
 		AccountID:    state.accountID,
 		Capabilities: caps,
 		Name:         name,
-		Valid:        int(valid.Seconds()),
+		Valid:        validSeconds,
 		BucketIDs:    bucketIDs,
 		Prefix:       prefix,
 	}

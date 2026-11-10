@@ -29,6 +29,7 @@ import (
 
 type keyRestrictionsWire struct {
 	createV4 map[string]any
+	createV3 map[string]any
 	mu       sync.Mutex
 	server   *httptest.Server
 }
@@ -59,6 +60,18 @@ func newKeyRestrictionsWire(t *testing.T) (*Client, *keyRestrictionsWire) {
 			wire.mu.Unlock()
 			_, _ = fmt.Fprint(w, `{"accountId":"a","applicationKeyId":"key-v4","applicationKey":"secret-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":0,"bucketIds":["b1","b2"],"namePrefix":"p/"}`)
 		case strings.HasSuffix(r.URL.Path, "/b2_create_key"):
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read create-key request: %v", err)
+				return
+			}
+			var sent map[string]any
+			if err := json.Unmarshal(body, &sent); err != nil {
+				t.Errorf("decode create-key request: %v", err)
+			}
+			wire.mu.Lock()
+			wire.createV3 = sent
+			wire.mu.Unlock()
 			_, _ = fmt.Fprint(w, `{"accountId":"a","applicationKeyId":"key-v3","applicationKey":"secret-v3","capabilities":["listFiles"],"keyName":"v3","expirationTimestamp":0,"bucketId":"bid","namePrefix":"bucket/"}`)
 		case strings.HasSuffix(r.URL.Path, "/b2_list_keys"):
 			_, _ = fmt.Fprint(w, `{"keys":[{"accountId":"a","applicationKeyId":"key-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":0,"bucketIds":["b1","b2"],"namePrefix":"p/"},{"accountId":"a","applicationKeyId":"key-unrestricted","capabilities":["listBuckets"],"keyName":"unrestricted","expirationTimestamp":0,"bucketIds":null,"namePrefix":null},{"accountId":"a","applicationKeyId":"key-empty","capabilities":["listBuckets"],"keyName":"empty","expirationTimestamp":0,"bucketIds":[],"namePrefix":null}],"nextApplicationKeyId":null}`)
@@ -122,6 +135,15 @@ func TestKeyRestrictionsWire(t *testing.T) {
 			t.Fatalf("Bucket.CreateKey: %v", err)
 		}
 		assertKeyRestrictions(t, key, []string{"bid"}, "bucket/")
+		wire.mu.Lock()
+		sent := wire.createV3
+		wire.mu.Unlock()
+		if got := sent["bucketId"]; got != "bid" {
+			t.Errorf("bucket create request bucketId = %#v, want bid", got)
+		}
+		if got := sent["namePrefix"]; got != "bucket/" {
+			t.Errorf("bucket create request namePrefix = %#v, want bucket/", got)
+		}
 	})
 
 	t.Run("list keys", func(t *testing.T) {

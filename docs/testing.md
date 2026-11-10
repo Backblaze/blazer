@@ -12,6 +12,11 @@ how to run it, and how to show that a test pins the behavior a PR claims.
 | Repo-owned SDK harness contract | `.sdkharness/` ([README](../.sdkharness/README.md)) | See below | Behavior against the B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator)), one scenario per capability | Behavior the simulator does not model (encryption keys, retention, replication effects) |
 | Live integration | `b2/integration_test.go`, `base/integration_test.go`, `b2/lock_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/ ./base/` | Real B2 behavior for that account on that day | Other accounts, regions or later B2 releases |
 
+Object Lock behavior in `b2/lock.go` is live-only for service semantics. The existing
+`TestObjectLockLive` in `b2/lock_test.go` exercises retention and legal hold uploads and updates
+against B2; it skips without credentials. Local validation and wire tests cannot prove B2 enforces
+those settings.
+
 `make ci` runs build, vet, gofmt, tidy, verify, lint, the race tests, b2keys, cross-compiles and the
 changelog check. Cross-compiling proves the code builds for a platform, not that it runs there; native
 Windows and macOS runs happen in CI.
@@ -65,7 +70,9 @@ change, so this test-infrastructure change cannot affect simulator contract beha
 `b2/integration_test.go` skips unless `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` are set. Use a
 throwaway account or key, never one with production data. The tests create and delete their own buckets;
 clean up leftovers with `go run ./internal/bin/cleanup`. Some tests have a one-minute deadline and can
-time out when the network is busy; re-run before treating that as a failure.
+time out when the network is busy; a single passing re-run does not make a failure flaky; treat a failure
+as flaky or pre-existing only when the same test has failed intermittently across unrelated commits, and
+until then record it as unresolved and note the re-run.
 
 In CI, `.github/workflows/test-live.yml` runs them on every push to `main` (each merged PR), weekly, and
 on demand. Pull requests do not trigger them, so the live key is not automatically exposed to PR code.

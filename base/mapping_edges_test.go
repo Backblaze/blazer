@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -43,21 +42,24 @@ func TestUserAgentOptionReachesTheWire(t *testing.T) {
 
 	for _, options := range [][]AuthOption{
 		{SetAPIBase(srv.URL), UserAgent(customUserAgent)},
+		{SetAPIBase(srv.URL), UserAgent(customUserAgent), UserAgent("outer/2.0")},
 		{SetAPIBase(srv.URL)},
 	} {
 		if _, err := AuthorizeAccount(context.Background(), "account-id", "application-key", options...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(userAgents) != 2 {
-		t.Fatalf("authorization requests = %d, want 2", len(userAgents))
+	if len(userAgents) != 3 {
+		t.Fatalf("authorization requests = %d, want 3", len(userAgents))
 	}
-	prefix := customUserAgent + " "
-	if !strings.HasPrefix(userAgents[0], prefix) || len(userAgents[0]) <= len(prefix) {
-		t.Errorf("custom User-Agent = %q, want prefix %q followed by the default agent", userAgents[0], prefix)
-	}
-	if strings.Contains(userAgents[1], customUserAgent) {
-		t.Errorf("default User-Agent = %q, want no %q", userAgents[1], customUserAgent)
+	for i, want := range []string{
+		"acme-app/1.2 " + DefaultUserAgent,
+		"outer/2.0 acme-app/1.2 " + DefaultUserAgent,
+		DefaultUserAgent,
+	} {
+		if userAgents[i] != want {
+			t.Errorf("User-Agent[%d] = %q, want %q", i, userAgents[i], want)
+		}
 	}
 }
 

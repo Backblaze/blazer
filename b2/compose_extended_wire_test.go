@@ -17,7 +17,6 @@ package b2
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +64,7 @@ type composeWire struct {
 	copyTimes           []time.Time
 	uploads             []composeUpload
 	finishes            []map[string]any
+	cancels             []map[string]any
 }
 
 func newComposeWire(t *testing.T) *composeWire {
@@ -206,7 +206,14 @@ func (w *composeWire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = fmt.Fprint(rw, `{"fileId":"large","fileName":"composed","action":"upload"}`)
 	case "/b2api/v4/b2_cancel_large_file":
-		w.addCall("cancel")
+		body := map[string]any{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.t.Errorf("decode cancel large file: %v", err)
+		}
+		w.mu.Lock()
+		w.cancels = append(w.cancels, body)
+		w.calls = append(w.calls, "cancel")
+		w.mu.Unlock()
 		if w.failCancel {
 			rw.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprint(rw, `{"status":400,"code":"bad_request","message":"cancel failed"}`)
@@ -244,6 +251,23 @@ func (w *composeWire) snapshot() (calls []string, copies, finishes []map[string]
 	return append([]string(nil), w.calls...), append([]map[string]any(nil), w.copies...), append([]map[string]any(nil), w.finishes...), append([]composeUpload(nil), w.uploads...)
 }
 
+func (w *composeWire) cancelRequests() []map[string]any {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]map[string]any(nil), w.cancels...)
+}
+
+func assertComposeCancelsLargeFile(t *testing.T, wire *composeWire) {
+	t.Helper()
+	cancels := wire.cancelRequests()
+	if len(cancels) != 1 {
+		t.Fatalf("cancel requests = %#v, want one", cancels)
+	}
+	if got := cancels[0]["fileId"]; got != "large" {
+		t.Fatalf("cancel fileId = %#v, want large", got)
+	}
+}
+
 func TestComposeValidationRejectsInvalidPartsBeforeStarting(t *testing.T) {
 	wire := newComposeWire(t)
 	bucket := wire.bucket(t)
@@ -278,7 +302,32 @@ func TestComposeValidationRejectsInvalidPartsBeforeStarting(t *testing.T) {
 	}
 }
 
+func TestComposeValidationReportsOneBasedPartNumbers(t *testing.T) {
+	// Compose reports the position of the invalid input from the caller's one-based list.
+	wire := newComposeWire(t)
+	bucket := wire.bucket(t)
+	for _, tc := range []struct {
+		name  string
+		parts []ComposePart
+		want  string
+	}{
+		{"first", []ComposePart{PartFromReader(bytes.NewReader(nil), 0), PartFromReader(bytes.NewReader(nil), 1)}, "part 1:"},
+		{"third", []ComposePart{PartFromCopy("first", "bytes=0-4999999"), PartFromCopy("second", "bytes=0-4999999"), PartFromReader(bytes.NewReader(nil), 0)}, "part 3:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := bucket.Compose(context.Background(), "invalid", tc.parts)
+			if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+				t.Fatalf("Compose() error = %v, want prefix %q", err, tc.want)
+			}
+		})
+	}
+	if calls, _, _, _ := wire.snapshot(); len(calls) != 0 {
+		t.Fatalf("validation calls = %v, want none", calls)
+	}
+}
+
 func TestComposeRejectsMoreThan10000PartsBeforeStarting(t *testing.T) {
+	// TestComposeAccepts10000PartsValidation proves the documented accepted edge.
 	wire := newComposeWire(t)
 	wire.failCopyPart = 1 // Bound the unfixed path to one request.
 	parts := make([]ComposePart, 10001)
@@ -324,22 +373,22 @@ func TestComposeAccepts10000PartsValidation(t *testing.T) {
 
 func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 	first := bytes.Repeat([]byte("x"), composeMinPartSize)
-	firstHash := fmt.Sprintf("%x", sha1.Sum(first))
 	last := []byte("last")
-	lastHash := fmt.Sprintf("%x", sha1.Sum(last))
 	for _, tc := range []struct {
-		name       string
-		parts      []ComposePart
-		wantCalls  []string
-		wantHashes []any
-		wantCopies []map[string]any
+		name        string
+		parts       []ComposePart
+		wantCalls   []string
+		wantHashes  []any
+		wantCopies  []map[string]any
+		wantUploads []composeUpload
 	}{
 		{
-			name:       "mixed",
-			parts:      []ComposePart{PartFromReader(bytes.NewReader(first), composeMinPartSize), PartFromCopy("source-id", "bytes=0-2")},
-			wantCalls:  []string{"start", "upload:1", "copy:2", "finish"},
-			wantHashes: []any{firstHash, "copy-sha-2"},
-			wantCopies: []map[string]any{{"sourceFileId": "source-id", "largeFileId": "large", "partNumber": float64(2), "range": "bytes=0-2"}},
+			name:        "mixed",
+			parts:       []ComposePart{PartFromReader(bytes.NewReader(first), composeMinPartSize), PartFromCopy("source-id", "bytes=0-2")},
+			wantCalls:   []string{"start", "upload:1", "copy:2", "finish"},
+			wantHashes:  []any{"9f66ce407a88c7f01debe3ae19e8a3faf49689ba", "copy-sha-2"},
+			wantCopies:  []map[string]any{{"sourceFileId": "source-id", "largeFileId": "large", "partNumber": float64(2), "range": "bytes=0-2"}},
+			wantUploads: []composeUpload{{number: 1, sha1: "9f66ce407a88c7f01debe3ae19e8a3faf49689ba", size: 5_000_000}},
 		},
 		{
 			name:       "copy only",
@@ -375,7 +424,11 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 			name:       "upload only",
 			parts:      []ComposePart{PartFromReader(bytes.NewReader(first), composeMinPartSize), PartFromReader(bytes.NewReader(last), int64(len(last)))},
 			wantCalls:  []string{"start", "upload:1", "upload:2", "finish"},
-			wantHashes: []any{firstHash, lastHash},
+			wantHashes: []any{"9f66ce407a88c7f01debe3ae19e8a3faf49689ba", "213ed3ea453bf610688ff8041e0a3b7b6abb5e6e"},
+			wantUploads: []composeUpload{
+				{number: 1, sha1: "9f66ce407a88c7f01debe3ae19e8a3faf49689ba", size: 5_000_000},
+				{number: 2, sha1: "213ed3ea453bf610688ff8041e0a3b7b6abb5e6e", size: 4},
+			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -403,10 +456,8 @@ func TestComposeAllSourceMixesPreservePartHashOrder(t *testing.T) {
 			if len(finishes) != 1 || !reflect.DeepEqual(finishes[0]["partSha1Array"], tc.wantHashes) {
 				t.Errorf("finish bodies = %#v, want partSha1Array %#v", finishes, tc.wantHashes)
 			}
-			for _, upload := range uploads {
-				if upload.sha1 == "" || upload.size == 0 {
-					t.Errorf("upload %#v did not carry its sha1 and bytes", upload)
-				}
+			if !reflect.DeepEqual(uploads, tc.wantUploads) {
+				t.Errorf("upload requests = %#v, want %#v", uploads, tc.wantUploads)
 			}
 		})
 	}
@@ -595,6 +646,7 @@ func TestComposeIgnoresNilOption(t *testing.T) {
 }
 
 func TestComposeRejectsKnownTotalOverTenTBBeforeStarting(t *testing.T) {
+	// TestComposeCopiedKnownTotalBoundary proves the accepted nonzero-start edge.
 	parts := make([]ComposePart, 2001)
 	for i := range parts[:2000] {
 		parts[i] = PartFromCopy("source", "bytes=0-4999999999")
@@ -623,7 +675,7 @@ func TestComposeAcceptsOverlappingRanges(t *testing.T) {
 	if want := []string{"start", "copy:1", "copy:2", "finish"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("overlap calls = %v, want %v", calls, want)
 	}
-	if len(copies) != 2 || copies[0]["range"] != "bytes=0-4999999" || copies[1]["range"] != "bytes=4999999-5000001" {
+	if len(copies) != 2 || copies[0]["sourceFileId"] != "same-source" || copies[0]["range"] != "bytes=0-4999999" || copies[1]["sourceFileId"] != "same-source" || copies[1]["range"] != "bytes=4999999-5000001" {
 		t.Fatalf("overlap copy bodies = %#v", copies)
 	}
 }
@@ -732,6 +784,7 @@ func TestComposeStopsBufferingAfterCancellation(t *testing.T) {
 	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("cleanup calls = %v, want %v", calls, want)
 	}
+	assertComposeCancelsLargeFile(t, wire)
 }
 
 func TestComposeUploadedPartMinimumBoundary(t *testing.T) {
@@ -852,6 +905,7 @@ func TestComposeCancelsAfterCallerDeadlineExpires(t *testing.T) {
 	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls after deadline = %v, want %v", calls, want)
 	}
+	assertComposeCancelsLargeFile(t, wire)
 	if len(finishes) != 0 {
 		t.Fatalf("finished after deadline: %#v", finishes)
 	}
@@ -872,6 +926,7 @@ func TestComposeCancelsAfterCallerContextIsCanceled(t *testing.T) {
 	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls after cancellation = %v, want %v", calls, want)
 	}
+	assertComposeCancelsLargeFile(t, wire)
 	if len(finishes) != 0 {
 		t.Fatalf("finished after failure: %#v", finishes)
 	}
@@ -891,6 +946,7 @@ func TestComposeRejectsShortCopyResponseAndCancels(t *testing.T) {
 	if want := []string{"start", "copy:1", "cancel"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("short copy calls = %v, want %v", calls, want)
 	}
+	assertComposeCancelsLargeFile(t, wire)
 	if len(finishes) != 0 {
 		t.Fatalf("finished short copy: %#v", finishes)
 	}
@@ -907,6 +963,7 @@ func TestComposeReportsCancelFailureAlongsidePartFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "copy part failed") || !strings.Contains(err.Error(), "cancel failed") {
 		t.Fatalf("Compose error = %v, want both part and cleanup errors", err)
 	}
+	assertComposeCancelsLargeFile(t, wire)
 }
 
 func TestComposeCancelsLargeFileAfterPartFailure(t *testing.T) {
@@ -923,6 +980,7 @@ func TestComposeCancelsLargeFileAfterPartFailure(t *testing.T) {
 	if want := []string{"start", "copy:1", "copy:2", "cancel"}; !reflect.DeepEqual(calls, want) {
 		t.Errorf("calls = %v, want %v", calls, want)
 	}
+	assertComposeCancelsLargeFile(t, wire)
 	if len(finishes) != 0 {
 		t.Errorf("finish called after part failure: %#v", finishes)
 	}
@@ -948,6 +1006,7 @@ func TestComposeCancelsOnUploadAndFinishFailures(t *testing.T) {
 			if !reflect.DeepEqual(calls, tc.wantCalls) {
 				t.Errorf("calls = %v, want %v", calls, tc.wantCalls)
 			}
+			assertComposeCancelsLargeFile(t, wire)
 		})
 	}
 }

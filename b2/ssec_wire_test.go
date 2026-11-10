@@ -364,6 +364,9 @@ func TestSSECWriterDownloadAttrsAndCopyWire(t *testing.T) {
 	if len(copies) != 2 {
 		t.Fatalf("copy requests = %d, want 2", len(copies))
 	}
+	if got := copies[0].body["sourceFileId"]; got != "source-id" {
+		t.Errorf("SSE-C copy sourceFileId = %#v, want source-id", got)
+	}
 	assertNoSSECWireHeaders(t, copies[0].headers)
 	for field, key := range map[string][2]string{"sourceServerSideEncryption": {wire.keyValue, wire.keyMD5}, "destinationServerSideEncryption": {destinationEncoded, destinationMD5}} {
 		got, ok := copies[0].body[field].(map[string]any)
@@ -1065,7 +1068,7 @@ func TestSSECStartAcceptsTenFileInfoEntries(t *testing.T) {
 	wire := newSSECPublicWire(t)
 	info := make(map[string]string)
 	for i := 0; i < 7; i++ {
-		info[fmt.Sprintf("user_%d", i)] = "value"
+		info[fmt.Sprintf("user_%d", i)] = fmt.Sprintf("value_%d", i)
 	}
 	w := wire.newBucket(t).Object("encrypted").NewWriter(context.Background(),
 		WithAttrsOption(&Attrs{Info: info, SHA1: strings.Repeat("a", 40), LastModified: time.Unix(123, 0)}),
@@ -1080,6 +1083,14 @@ func TestSSECStartAcceptsTenFileInfoEntries(t *testing.T) {
 	fileInfo, ok := starts[0].body["fileInfo"].(map[string]any)
 	if !ok || len(fileInfo) != 10 || fileInfo[ssecKeyIDFileInfo] != "caller-id" {
 		t.Fatalf("start file info = %v, want ten entries including caller ID", starts[0].body["fileInfo"])
+	}
+	for _, tc := range []struct{ name, value string }{
+		{"user_0", "value_0"}, {"user_1", "value_1"}, {"user_2", "value_2"}, {"user_3", "value_3"},
+		{"user_4", "value_4"}, {"user_5", "value_5"}, {"user_6", "value_6"},
+	} {
+		if got := fileInfo[tc.name]; got != tc.value {
+			t.Errorf("start file info[%q] = %#v, want %q", tc.name, got, tc.value)
+		}
 	}
 }
 
