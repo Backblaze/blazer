@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -75,40 +76,45 @@ func (w *sseB2Wire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/b2_create_bucket"):
 		_, _ = fmt.Fprint(rw, noReplicationBucketJSON)
 	case strings.HasSuffix(r.URL.Path, "/b2_get_upload_url"):
-		_, _ = fmt.Fprintf(rw, `{"uploadUrl":%q,"authorizationToken":"upload-token"}`, w.srv.URL+"/upload")
+		w.replyJSON(rw, map[string]string{"uploadUrl": w.srv.URL + "/upload", "authorizationToken": "upload-token"})
 	case strings.HasSuffix(r.URL.Path, "/b2_list_file_names"):
-		w.mu.Lock()
-		algorithm := w.encryption["encrypted"]
-		w.mu.Unlock()
-		_, _ = fmt.Fprintf(rw, `{"files":[{"fileId":"id-encrypted","fileName":"encrypted","action":"upload","contentLength":22,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"serverSideEncryption":{"mode":"SSE-B2","algorithm":%q},"uploadTimestamp":1}],"nextFileName":null}`, algorithm)
+		w.replyJSON(rw, map[string]any{"files": []any{w.fileJSON("encrypted")}, "nextFileName": nil})
 	case r.URL.Path == "/upload":
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.t.Error(err)
 		}
-		name := r.Header.Get("X-Bz-File-Name")
+		name, err := url.QueryUnescape(r.Header.Get("X-Bz-File-Name"))
+		if err != nil {
+			w.t.Errorf("decode upload file name: %v", err)
+			rw.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.mu.Lock()
 		w.objects[name] = data
 		w.encryption[name] = r.Header.Get("X-Bz-Server-Side-Encryption")
 		w.mu.Unlock()
-		_, _ = fmt.Fprintf(rw, `{"fileId":%q,"fileName":%q,"action":"upload","contentLength":%d,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"uploadTimestamp":1}`, "id-"+name, name, len(data))
+		w.replyJSON(rw, w.fileJSON(name))
 	case strings.HasSuffix(r.URL.Path, "/b2_get_file_info"):
 		w.mu.Lock()
 		var name string
-		var data []byte
-		var algorithm string
-		for candidate, payload := range w.objects {
-			if recorded.body["fileId"] == "id-"+candidate {
-				name, data, algorithm = candidate, payload, w.encryption[candidate]
+		for candidate := range w.objects {
+			if recorded.body["fileId"] == "id-"+url.QueryEscape(candidate) {
+				name = candidate
 				break
 			}
 		}
 		w.mu.Unlock()
-		_, _ = fmt.Fprintf(rw, `{"fileId":%q,"fileName":%q,"action":"upload","contentLength":%d,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"serverSideEncryption":{"mode":"SSE-B2","algorithm":%q},"uploadTimestamp":1}`, "id-"+name, name, len(data), algorithm)
+		if name == "" {
+			w.t.Errorf("unrecognized fixture file ID: %v", recorded.body["fileId"])
+			rw.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.replyJSON(rw, w.fileJSON(name))
 	case strings.HasSuffix(r.URL.Path, "/b2_start_large_file"):
 		_, _ = fmt.Fprint(rw, `{"fileId":"large"}`)
 	case strings.HasSuffix(r.URL.Path, "/b2_get_upload_part_url"):
-		_, _ = fmt.Fprintf(rw, `{"uploadUrl":%q,"authorizationToken":"part-token"}`, w.srv.URL+"/part")
+		w.replyJSON(rw, map[string]string{"uploadUrl": w.srv.URL + "/part", "authorizationToken": "part-token"})
 	case r.URL.Path == "/part":
 		_, _ = fmt.Fprint(rw, `{}`)
 	case strings.HasSuffix(r.URL.Path, "/b2_finish_large_file"):
@@ -118,6 +124,29 @@ func (w *sseB2Wire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	default:
 		w.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		http.NotFound(rw, r)
+	}
+}
+
+func (w *sseB2Wire) replyJSON(rw http.ResponseWriter, value any) {
+	w.t.Helper()
+	rw.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(rw).Encode(value); err != nil {
+		w.t.Errorf("encode fixture response: %v", err)
+	}
+}
+
+func (w *sseB2Wire) fileJSON(name string) map[string]any {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var encryption any
+	if algorithm := w.encryption[name]; algorithm != "" {
+		encryption = map[string]string{"mode": "SSE-B2", "algorithm": algorithm}
+	}
+	return map[string]any{
+		"fileId": "id-" + url.QueryEscape(name), "fileName": name, "action": "upload",
+		"contentLength": len(w.objects[name]), "contentSha1": "0000000000000000000000000000000000000000",
+		"contentType": "application/octet-stream", "fileInfo": map[string]string{},
+		"serverSideEncryption": encryption, "uploadTimestamp": 1,
 	}
 }
 
@@ -133,7 +162,7 @@ func (w *sseB2Wire) serveDownload(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Content-Length", fmt.Sprint(len(data)))
 	rw.Header().Set("Content-Type", "application/octet-stream")
-	rw.Header().Set("X-Bz-File-Id", "id-"+name)
+	rw.Header().Set("X-Bz-File-Id", "id-"+url.QueryEscape(name))
 	rw.Header().Set("X-Bz-Content-Sha1", "0000000000000000000000000000000000000000")
 	if r.Method != http.MethodHead {
 		_, _ = rw.Write(data)
