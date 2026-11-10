@@ -871,10 +871,15 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 	}
 }
 
-// WithProgress sets a callback that receives cumulative uploaded bytes. It runs
-// on one owner goroutine, never under a transfer lock; values are monotonic
-// non-decreasing and end with a final call at the bytes uploaded before Close
-// returns. The total is known for ReadFrom readers that implement io.Seeker
+// WithProgress sets a callback that receives cumulative payload bytes read for
+// upload. Bytes read again for retries are not counted twice. This measures
+// transfer activity, not B2 acceptance: complete may equal total even when the
+// upload fails. Always check Close's error to determine whether it succeeded.
+//
+// The callback runs on one owner goroutine, never under a transfer lock. Values
+// are monotonic non-decreasing and end with a final call before Close returns.
+// Updates may be coalesced, so an intermediate value is not guaranteed.
+// The total is known for ReadFrom readers that implement io.Seeker
 // (including resume), and is -1 otherwise. Calling Close from this callback
 // is unsupported because Close waits for the callback to finish.
 func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
