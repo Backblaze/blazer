@@ -31,8 +31,26 @@ const maxAccountInfoFileBytes = 1 << 20
 // A corrupt or oversized session is a cache miss, not an authorization failure.
 var errUnavailableAccountInfoSession = errors.New("account info: unusable cached session")
 
+// ErrInvalidAccountInfo identifies unusable cached session data. After AuthData,
+// AccountInfoFile.Err reports an error matching it with errors.Is for malformed
+// JSON or an oversized session file. Missing files and filesystem failures do
+// not match it. Custom stores can wrap it when AuthData returns ok=false to
+// request reauthorization.
+var ErrInvalidAccountInfo = errUnavailableAccountInfoSession
+
 // AccountInfo stores an authorized session. It never stores the application
 // key secret; callers still supply that key to NewClient for reauthorization.
+// All methods, including an optional Err method, must support concurrent calls,
+// including when the store is shared by multiple clients.
+//
+// AuthData must return ok=false for absent or unusable data. A store may also
+// implement Err() error to report its most recent operation's error, or nil after
+// success. After AuthData, nil or an error matching ErrInvalidAccountInfo permits
+// reauthorization on a cache miss; any other error is returned to the caller.
+// ErrInvalidAccountInfo does not override ok=true: an otherwise complete session
+// for the requested key may still be reused. Incomplete or mismatched sessions
+// cause reauthorization. Custom stores must return ok=false for invalid data.
+// Every error after Set or Clear is returned, including ErrInvalidAccountInfo.
 type AccountInfo interface {
 	Set(AuthData)
 	AuthData() (AuthData, bool)
@@ -95,6 +113,10 @@ func NewAccountInfoFile(path string) *AccountInfoFile {
 }
 
 // Err reports the last file operation error, if any.
+// After AuthData, use errors.Is(err, ErrInvalidAccountInfo) to recognize malformed
+// JSON or an oversized file. A missing file reports nil. Filesystem errors retain
+// their underlying errors.Is and errors.As identity. Errors after Set or Clear
+// are storage failures; they do not request reauthorization.
 func (a *AccountInfoFile) Err() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

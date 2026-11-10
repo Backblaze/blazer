@@ -12,9 +12,30 @@ import (
 
 func TestAccountInfoFileIOErrorsAndRecovery(t *testing.T) {
 	root := t.TempDir()
-	store := NewAccountInfoFile(root)
-	if _, ok := store.AuthData(); ok || store.Err() == nil {
-		t.Fatal("directory read did not report an I/O error")
+	readParent := filepath.Join(root, "private-read")
+	if err := os.Mkdir(readParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	readPath := filepath.Join(readParent, "read-directory")
+	// Pass the POSIX file-mode check so this case reaches Read on the directory.
+	// Windows skips the mode check; reading the directory is still an I/O error.
+	if err := os.Mkdir(readPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(readPath, 0o700); err != nil {
+			t.Error(err)
+		}
+	})
+	store := NewAccountInfoFile(readPath)
+	_, ok := store.AuthData()
+	err := store.Err()
+	var readErr *os.PathError
+	if ok || !errors.As(err, &readErr) || readErr.Op != "read" || readErr.Path != readPath {
+		t.Fatalf("directory read: present=%t error=%v, want a read PathError for %q", ok, err, readPath)
+	}
+	if !errors.Is(err, readErr.Err) || errors.Is(err, ErrInvalidAccountInfo) {
+		t.Fatalf("read error = %v, want preserved filesystem error, not invalid cached data", err)
 	}
 	parent := filepath.Join(root, "parent-file")
 	if err := os.WriteFile(parent, nil, 0o600); err != nil {

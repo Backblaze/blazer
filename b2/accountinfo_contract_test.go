@@ -24,7 +24,11 @@ func TestAccountInfoFileErrorClassification(t *testing.T) {
 		{name: "oversized", content: bytes.Repeat([]byte("x"), (1<<20)+1), create: true, wantInvalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "account.json")
+			parent := filepath.Join(t.TempDir(), "private")
+			if err := os.Mkdir(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(parent, "account.json")
 			if tc.create {
 				if err := os.WriteFile(path, tc.content, 0o600); err != nil {
 					t.Fatal(err)
