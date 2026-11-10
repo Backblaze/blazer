@@ -1,0 +1,3 @@
+kind: Changed
+body: "**Breaking:** `(*b2.Client).CreateKey` now returns `b2.ErrInvalidBucketIDs` when `b2.BucketIDs` supplies an empty combined scope or any empty bucket ID, and `(*b2.Bucket).CreateKey` rejects that client-only option even when empty. Omit `BucketIDs` for an intentional account-wide key; otherwise supply one or more non-empty bucket IDs."
+time: 2026-11-10T10:00:00-06:00

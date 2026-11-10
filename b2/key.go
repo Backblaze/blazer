@@ -62,10 +62,11 @@ func (k *Key) Secret() string { return k.k.secret() }
 func (k *Key) ID() string { return k.k.id() }
 
 type keyOptions struct {
-	caps      []string
-	prefix    string
-	lifetime  time.Duration
-	bucketIDs []string
+	caps         []string
+	prefix       string
+	lifetime     time.Duration
+	bucketIDs    []string
+	bucketIDsSet bool
 }
 
 // KeyOption specifies desired properties for application keys.
@@ -113,8 +114,12 @@ func Prefix(prefix string) KeyOption {
 // legacy single-bucket key; two or more produce a Multi-Bucket Application
 // Key, which is usable only against B2 native API v4. Valid only on
 // (*Client).CreateKey.
+// The combined scope must contain at least one ID and no empty IDs, or
+// Client.CreateKey returns ErrInvalidBucketIDs. Omit this option to create an
+// account-wide key.
 func BucketIDs(ids ...string) KeyOption {
 	return func(k *keyOptions) {
+		k.bucketIDsSet = true
 		k.bucketIDs = append(k.bucketIDs, ids...)
 	}
 }
@@ -122,10 +127,20 @@ func BucketIDs(ids ...string) KeyOption {
 // CreateKey creates an application key for all buckets in the project, or for
 // the buckets named by the BucketIDs option. The secret is only accessible on
 // the returned Key.
+// An explicitly empty BucketIDs scope or any empty ID returns
+// ErrInvalidBucketIDs before sending a create-key request.
 func (c *Client) CreateKey(ctx context.Context, name string, opts ...KeyOption) (*Key, error) {
 	var ko keyOptions
 	for _, o := range opts {
 		o(&ko)
+	}
+	if ko.bucketIDsSet && len(ko.bucketIDs) == 0 {
+		return nil, ErrInvalidBucketIDs
+	}
+	for _, id := range ko.bucketIDs {
+		if id == "" {
+			return nil, ErrInvalidBucketIDs
+		}
 	}
 	if ko.prefix != "" && len(ko.bucketIDs) == 0 {
 		return nil, errors.New("Prefix requires at least one bucket; use BucketIDs or create the key via (*Bucket).CreateKey")
@@ -183,12 +198,13 @@ func (c *Client) ListKeys(ctx context.Context, count int, cursor string) ([]*Key
 }
 
 // CreateKey creates a scoped application key that is valid only for this bucket.
+// BucketIDs is not supported, even when supplied without IDs.
 func (b *Bucket) CreateKey(ctx context.Context, name string, opts ...KeyOption) (*Key, error) {
 	var ko keyOptions
 	for _, o := range opts {
 		o(&ko)
 	}
-	if len(ko.bucketIDs) > 0 {
+	if ko.bucketIDsSet {
 		return nil, errors.New("BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key")
 	}
 	ki, err := b.r.createKey(ctx, name, ko.caps, ko.lifetime, b.b.id(), ko.prefix)
