@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
@@ -116,26 +117,6 @@ func TestBucketUpdateRejectsUnsafeReplicationWire(t *testing.T) {
 			name: "empty source rules", response: noReplicationBucketJSON,
 			config: &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{ReplicationRules: []ReplicationRules{}}},
 			want:   "b2: replication configuration requires a source or destination",
-		},
-		{
-			name: "nil destination map", response: destinationReplicationUpdateJSON,
-			config: &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{}},
-			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
-		},
-		{
-			name: "empty destination map", response: destinationReplicationUpdateJSON,
-			config: &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}},
-			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
-		},
-		{
-			name: "source with nil destination map", response: bothReplBucketJSON,
-			config: &ReplicationConfiguration{AsReplicationSource: source, AsReplicationDestination: &AsReplicationDestination{}},
-			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
-		},
-		{
-			name: "source with empty destination map", response: bothReplBucketJSON,
-			config: &ReplicationConfiguration{AsReplicationSource: source, AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}},
-			want:   "b2: nil or empty destination key maps cannot encode the required mapping field",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,8 +231,6 @@ func TestNewBucketRejectsUnsafeReplicationWire(t *testing.T) {
 		want   string
 	}{
 		{"empty configuration", &ReplicationConfiguration{}, "b2: replication configuration requires a source or destination"},
-		{"nil destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{}}, "b2: nil or empty destination key maps cannot encode the required mapping field"},
-		{"empty destination map", &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{}}}, "b2: nil or empty destination key maps cannot encode the required mapping field"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := b2wiretest.New(t)
@@ -322,6 +301,77 @@ func TestBucketUpdateDestinationPreservesSourceWire(t *testing.T) {
 				}},
 			})
 			b2wiretest.AssertJSON(t, request, "replicationConfiguration.asReplicationDestination.sourceToDestinationKeyMapping", map[string]string{"source-key": "new-destination-key"})
+		})
+	}
+}
+
+// B2 requires sourceToDestinationKeyMapping in a destination object. The current
+// encoder omits nil/empty maps; the service validates that representation.
+// https://www.backblaze.com/apidocs/b2-update-bucket
+// TestReplicationDestinationPartialUpdateLive pins the actual missing-field error.
+func TestReplicationDestinationEmptyMapsUseServiceValidationWire(t *testing.T) {
+	for _, operation := range []string{"create", "update"} {
+		t.Run(operation, func(t *testing.T) {
+			for _, tc := range []struct {
+				name       string
+				mapping    map[string]string
+				withSource bool
+			}{
+				{name: "nil map"},
+				{name: "empty map", mapping: map[string]string{}},
+				{name: "source plus nil map", withSource: true},
+				{name: "source plus empty map", mapping: map[string]string{}, withSource: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					srv := b2wiretest.New(t)
+					call := "b2_create_bucket"
+					listed := `{"buckets":[]}`
+					if operation == "update" {
+						call = "b2_update_bucket"
+						listed = `{"buckets":[` + destinationReplicationUpdateJSON + `]}`
+					}
+					srv.Reply("b2_list_buckets", http.StatusOK, listed)
+					srv.StrictReplySequence(call, b2wiretest.Response{
+						Status: http.StatusBadRequest,
+						Body:   `{"status":400,"code":"bad_request","message":"missing required field: sourceToDestinationKeyMapping"}`,
+					})
+					client := liveOnlyClient(t, srv)
+					config := &ReplicationConfiguration{
+						AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: tc.mapping},
+					}
+					want := map[string]any{"asReplicationDestination": map[string]any{}}
+					if tc.withSource {
+						config.AsReplicationSource = replicationCreateConfig().AsReplicationSource
+						want["asReplicationSource"] = map[string]any{
+							"sourceApplicationKeyId": "source-key",
+							"replicationRules": []map[string]any{{
+								"destinationBucketId": "destination-bucket-id", "fileNamePrefix": "prefix/",
+								"includeExistingFiles": true, "isEnabled": false, "priority": 1,
+								"replicationRuleName": "disabled-rule",
+							}},
+						}
+					}
+					var err error
+					if operation == "create" {
+						_, err = client.NewBucket(context.Background(), "n", &BucketAttrs{ReplicationConfig: config})
+					} else {
+						bucket, lookupErr := client.Bucket(context.Background(), "n")
+						if lookupErr != nil {
+							t.Fatal(lookupErr)
+						}
+						err = bucket.Update(context.Background(), &BucketAttrs{ReplicationConfig: config})
+					}
+					status, code, message := base.MsgCode(err)
+					if status != 400 || code != "bad_request" || message != "missing required field: sourceToDestinationKeyMapping" {
+						t.Errorf("%s error = %v, want the service's 400 bad_request missing-field error", operation, err)
+					}
+					calls := srv.Calls(call)
+					if len(calls) != 1 {
+						t.Fatalf("%s requests = %d, want 1", call, len(calls))
+					}
+					b2wiretest.AssertJSON(t, calls[0], "replicationConfiguration", want)
+				})
+			}
 		})
 	}
 }
