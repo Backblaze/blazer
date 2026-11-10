@@ -21,6 +21,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -55,7 +56,8 @@ func TestProgressTerminalCallbackAfterAlreadyDelivered(t *testing.T) {
 }
 
 func TestProgressCallbacks(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	client := &Client{backend: &beRoot{b2i: &testRoot{
 		bucketMap: make(map[string]map[string]string),
 		errs:      &errCont{},
@@ -66,16 +68,22 @@ func TestProgressCallbacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("progress callback payload"), 6000)
+	downloadBackend := bucket.b
 
 	t.Run("upload", func(t *testing.T) {
+		seen := make(chan struct{})
+		observed := sync.OnceFunc(func() { close(seen) })
 		var mu sync.Mutex
 		var samples []progressSample
 		writer := bucket.Object("upload").NewWriter(ctx, WithProgress(func(complete, total int64) {
 			mu.Lock()
 			samples = append(samples, progressSample{complete, total})
 			mu.Unlock()
+			if complete > 0 && complete < int64(len(payload)) {
+				observed()
+			}
 		}))
-		if _, err := writer.ReadFrom(&slowReadSeeker{Reader: bytes.NewReader(payload)}); err != nil {
+		if _, err := writer.ReadFrom(&progressGatedReadSeeker{Reader: bytes.NewReader(payload), ctx: ctx, seen: seen}); err != nil {
 			t.Fatal(err)
 		}
 		if err := writer.Close(); err != nil {
@@ -127,7 +135,9 @@ func TestProgressCallbacks(t *testing.T) {
 
 	t.Run("ranged download", func(t *testing.T) {
 		root.bucketMap["progress-test"]["download"] = string(payload)
-		bucket.b = slowProgressBucket{bucket.b}
+		seen := make(chan struct{})
+		observed := sync.OnceFunc(func() { close(seen) })
+		bucket.b = progressGatedBucket{downloadBackend, seen}
 		var mu sync.Mutex
 		var samples []progressSample
 		reader := bucket.Object("download").NewRangeReader(ctx, 0, int64(len(payload)))
@@ -136,6 +146,9 @@ func TestProgressCallbacks(t *testing.T) {
 			mu.Lock()
 			samples = append(samples, progressSample{complete, total})
 			mu.Unlock()
+			if complete > 0 && complete < int64(len(payload)) {
+				observed()
+			}
 		}
 		got, err := io.ReadAll(reader)
 		if err != nil {
@@ -155,6 +168,9 @@ func TestProgressCallbacks(t *testing.T) {
 		var mu sync.Mutex
 		var samples []progressSample
 		length := int64(len(payload) / 2)
+		seen := make(chan struct{})
+		observed := sync.OnceFunc(func() { close(seen) })
+		bucket.b = progressGatedBucket{downloadBackend, seen}
 		reader := bucket.Object("download").NewRangeReader(ctx, 0, length)
 		reader.ChunkSize = len(payload) / 8
 		reader.ConcurrentDownloads = 3
@@ -162,6 +178,9 @@ func TestProgressCallbacks(t *testing.T) {
 			mu.Lock()
 			samples = append(samples, progressSample{complete, total})
 			mu.Unlock()
+			if complete > 0 && complete < length {
+				observed()
+			}
 		}
 		got, err := io.ReadAll(reader)
 		if err != nil {
@@ -177,6 +196,9 @@ func TestProgressCallbacks(t *testing.T) {
 	})
 
 	t.Run("full download has unknown total", func(t *testing.T) {
+		seen := make(chan struct{})
+		observed := sync.OnceFunc(func() { close(seen) })
+		bucket.b = progressGatedBucket{downloadBackend, seen}
 		var mu sync.Mutex
 		var samples []progressSample
 		reader := bucket.Object("download").NewReader(ctx)
@@ -185,6 +207,9 @@ func TestProgressCallbacks(t *testing.T) {
 			mu.Lock()
 			samples = append(samples, progressSample{complete, total})
 			mu.Unlock()
+			if complete > 0 && complete < int64(len(payload)) {
+				observed()
+			}
 		}
 		if _, err := io.Copy(io.Discard, reader); err != nil {
 			t.Fatal(err)
@@ -240,18 +265,30 @@ func TestProgressMeterResetDoesNotDoubleCount(t *testing.T) {
 	assertProgressSamples(t, progressSnapshot(&mu, &samples), int64(len(payload)), int64(len(payload)), false)
 }
 
-type slowReadSeeker struct{ *bytes.Reader }
+type progressGatedReadSeeker struct {
+	*bytes.Reader
+	ctx  context.Context
+	seen <-chan struct{}
+}
 
-func (r *slowReadSeeker) ReadAt(p []byte, off int64) (int, error) {
+func (r *progressGatedReadSeeker) ReadAt(p []byte, off int64) (int, error) {
+	if off > 0 {
+		select {
+		case <-r.seen:
+		case <-r.ctx.Done():
+			return 0, r.ctx.Err()
+		}
+	}
 	if len(p) > 4096 {
 		p = p[:4096]
 	}
-	n, err := r.Reader.ReadAt(p, off)
-	time.Sleep(time.Millisecond)
-	return n, err
+	return r.Reader.ReadAt(p, off)
 }
 
-type slowProgressBucket struct{ beBucketInterface }
+type progressGatedBucket struct {
+	beBucketInterface
+	seen <-chan struct{}
+}
 
 type progressHeadFailureBucket struct{ beBucketInterface }
 
@@ -262,23 +299,34 @@ func (b progressHeadFailureBucket) downloadFileByName(ctx context.Context, name 
 	return b.beBucketInterface.downloadFileByName(ctx, name, offset, size, false, key)
 }
 
-func (b slowProgressBucket) downloadFileByName(ctx context.Context, name string, offset, size int64, head bool, key *SSECKey) (beFileReaderInterface, error) {
+func (b progressGatedBucket) downloadFileByName(ctx context.Context, name string, offset, size int64, head bool, key *SSECKey) (beFileReaderInterface, error) {
 	reader, err := b.beBucketInterface.downloadFileByName(ctx, name, offset, size, head, key)
 	if err != nil {
 		return nil, err
 	}
-	return slowProgressFileReader{reader}, nil
+	return &progressGatedFileReader{beFileReaderInterface: reader, ctx: ctx, seen: b.seen}, nil
 }
 
-type slowProgressFileReader struct{ beFileReaderInterface }
+type progressGatedFileReader struct {
+	beFileReaderInterface
+	ctx         context.Context
+	seen        <-chan struct{}
+	readStarted bool
+}
 
-func (r slowProgressFileReader) Read(p []byte) (int, error) {
+func (r *progressGatedFileReader) Read(p []byte) (int, error) {
+	if r.readStarted {
+		select {
+		case <-r.seen:
+		case <-r.ctx.Done():
+			return 0, r.ctx.Err()
+		}
+	}
+	r.readStarted = true
 	if len(p) > 4096 {
 		p = p[:4096]
 	}
-	n, err := r.beFileReaderInterface.Read(p)
-	time.Sleep(time.Millisecond)
-	return n, err
+	return r.beFileReaderInterface.Read(p)
 }
 
 type progressSkipFile struct{}
@@ -432,7 +480,8 @@ func TestProgressSlowCallbackCanReenterTransfer(t *testing.T) {
 }
 
 func TestProgressCallbackCanReenterClientStatus(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	client := &Client{backend: &beRoot{b2i: &testRoot{bucketMap: make(map[string]map[string]string), errs: &errCont{}}}}
 	bucket, err := client.NewBucket(ctx, "progress-reenter-status", &BucketAttrs{Type: Private})
 	if err != nil {
@@ -467,27 +516,42 @@ func TestProgressCallbackCanReenterClientStatus(t *testing.T) {
 
 	root := client.backend.(*beRoot).b2i.(*testRoot)
 	root.bucketMap["progress-reenter-status"]["download"] = string(bytes.Repeat([]byte("x"), 128_000))
-	bucket.b = slowProgressBucket{bucket.b}
+	downloadProgress := make(chan struct{})
+	observedDownload := sync.OnceFunc(func() { close(downloadProgress) })
+	bucket.b = progressGatedBucket{bucket.b, downloadProgress}
 	reader := bucket.Object("download").NewReader(ctx)
 	reader.ChunkSize = 256_000
 	readerStatus := make(chan struct{}, 1)
-	reader.Progress = func(_, _ int64) {
+	reader.Progress = func(complete, _ int64) {
 		_ = client.Status()
+		if complete > 0 && complete < 128_000 {
+			observedDownload() // Release the transfer only after reentrant Status returns.
+		}
 		select {
 		case readerStatus <- struct{}{}:
 		default:
 		}
 	}
-	readDone := make(chan struct{})
+	readDone := make(chan error, 1)
 	go func() {
-		_, _ = io.Copy(io.Discard, reader)
-		_ = reader.Close()
-		close(readDone)
+		_, err := io.Copy(io.Discard, reader)
+		if closeErr := reader.Close(); err == nil {
+			err = closeErr
+		}
+		readDone <- err
 	}()
 	select {
-	case <-readDone:
+	case err := <-readDone:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("callback re-entering Client.Status during download deadlocked")
+	}
+	select {
+	case <-downloadProgress:
+	default:
+		t.Fatal("download callback did not re-enter Client.Status during transfer")
 	}
 	select {
 	case <-readerStatus:
@@ -497,64 +561,22 @@ func TestProgressCallbackCanReenterClientStatus(t *testing.T) {
 }
 
 func TestProgressConcurrentCloseWaitsForFinalCallback(t *testing.T) {
-	ctx := context.Background()
-	client := &Client{backend: &beRoot{b2i: &testRoot{bucketMap: make(map[string]map[string]string), errs: &errCont{}}}}
-	bucket, err := client.NewBucket(ctx, "progress-concurrent-close", &BucketAttrs{Type: Private})
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := bytes.Repeat([]byte("progress"), 1024)
+	t.Run("writer", func(t *testing.T) { testProgressCloseWaitsForFinalCallback(t, "writer") })
+	t.Run("reader", func(t *testing.T) { testProgressCloseWaitsForFinalCallback(t, "reader") })
+}
 
-	t.Run("writer", func(t *testing.T) {
-		started := make(chan struct{})
-		release := make(chan struct{})
+func testProgressCloseWaitsForFinalCallback(t *testing.T, mode string) {
+	t.Helper()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		bucket := newProgressReviewBucket(t)
+		payload := bytes.Repeat([]byte("progress"), 1024)
+		started, release := make(chan struct{}), make(chan struct{})
+		releaseCallback := sync.OnceFunc(func() { close(release) })
+		defer releaseCallback()
 		var mu sync.Mutex
 		var samples []progressSample
-		writer := bucket.Object("upload").NewWriter(ctx, WithProgress(func(complete, total int64) {
-			mu.Lock()
-			first := len(samples) == 0
-			mu.Unlock()
-			if first {
-				close(started)
-				<-release
-			}
-			mu.Lock()
-			samples = append(samples, progressSample{complete, total})
-			mu.Unlock()
-		}))
-		if _, err := writer.Write(payload); err != nil {
-			t.Fatal(err)
-		}
-		closed := make(chan error, 1)
-		go func() { closed <- writer.Close() }()
-		select {
-		case <-started:
-		case <-time.After(5 * time.Second):
-			t.Fatal("upload callback did not start")
-		}
-		select {
-		case err := <-closed:
-			close(release)
-			t.Fatalf("Writer.Close returned before callback finished: %v", err)
-		case <-time.After(50 * time.Millisecond):
-		}
-		close(release)
-		if err := <-closed; err != nil {
-			t.Fatal(err)
-		}
-		assertProgressSamples(t, progressSnapshot(&mu, &samples), int64(len(payload)), -1, false)
-	})
-
-	t.Run("reader", func(t *testing.T) {
-		root := client.backend.(*beRoot).b2i.(*testRoot)
-		root.bucketMap["progress-concurrent-close"]["download"] = string(payload)
-		bucket.b = slowProgressBucket{bucket.b}
-		started := make(chan struct{})
-		release := make(chan struct{})
-		var mu sync.Mutex
-		var samples []progressSample
-		reader := bucket.Object("download").NewRangeReader(ctx, 0, int64(len(payload)))
-		reader.Progress = func(complete, total int64) {
+		callback := func(complete, total int64) {
 			mu.Lock()
 			first := len(samples) == 0
 			mu.Unlock()
@@ -566,30 +588,49 @@ func TestProgressConcurrentCloseWaitsForFinalCallback(t *testing.T) {
 			samples = append(samples, progressSample{complete, total})
 			mu.Unlock()
 		}
-		readDone := make(chan struct{})
-		go func() { _, _ = io.Copy(io.Discard, reader); close(readDone) }()
+		closed := make(chan error, 1)
+		var reader *Reader
+		var readDone chan struct{}
+		wantTotal := int64(-1)
+		if mode == "writer" {
+			writer := bucket.Object("upload").NewWriter(ctx, WithProgress(callback))
+			if _, err := writer.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			go func() { closed <- writer.Close() }()
+		} else {
+			root := bucket.c.backend.(*beRoot).b2i.(*testRoot)
+			root.bucketMap[bucket.Name()]["download"] = string(payload)
+			reader = bucket.Object("download").NewRangeReader(ctx, 0, int64(len(payload)))
+			reader.Progress = callback
+			wantTotal = int64(len(payload))
+			readDone = make(chan struct{})
+			go func() { _, _ = io.Copy(io.Discard, reader); close(readDone) }()
+		}
 		select {
 		case <-started:
 		case <-time.After(5 * time.Second):
-			t.Fatal("download callback did not start")
+			t.Fatal("progress callback did not start")
 		}
-		// Let the download finish while its first callback remains blocked.
-		// Close must still wait for the owner to deliver the terminal sample.
-		reader.wg.Wait()
-		closed := make(chan error, 1)
-		go func() { closed <- reader.Close() }()
+		if reader != nil {
+			reader.wg.Wait()
+			go func() { closed <- reader.Close() }()
+		}
+		// Wait until Close is blocked, rather than inferring it from elapsed time.
+		synctest.Wait()
 		select {
 		case err := <-closed:
-			close(release)
-			t.Fatalf("Reader.Close returned before callback finished: %v", err)
-		case <-time.After(50 * time.Millisecond):
+			t.Fatalf("%s.Close returned before callback finished: %v", mode, err)
+		default:
 		}
-		close(release)
+		releaseCallback()
 		if err := <-closed; err != nil {
 			t.Fatal(err)
 		}
-		<-readDone
-		assertProgressSamples(t, progressSnapshot(&mu, &samples), int64(len(payload)), int64(len(payload)), false)
+		if readDone != nil {
+			<-readDone
+		}
+		assertProgressSamples(t, progressSnapshot(&mu, &samples), int64(len(payload)), wantTotal, false)
 	})
 }
 
@@ -652,6 +693,10 @@ func TestProgressRangeUnknownWhenHEADUnavailable(t *testing.T) {
 }
 
 func TestProgressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
+	synctest.Test(t, progressCancellationHasNoCallbackAfterTerminal)
+}
+
+func progressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client := &Client{backend: &beRoot{b2i: &testRoot{bucketMap: make(map[string]map[string]string), errs: &errCont{}}}}
@@ -695,11 +740,12 @@ func TestProgressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
 	cancel()
 	closed := make(chan error, 1)
 	go func() { closed <- reader.Close() }()
+	synctest.Wait()
 	select {
 	case err := <-closed:
 		releaseCallback()
 		t.Fatalf("Reader.Close returned before terminal callback on cancel: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	releaseCallback()
 	select {
@@ -737,8 +783,7 @@ func TestProgressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
 	select {
 	case <-reader.reporter.wake:
 		t.Fatal("late progress update queued after terminal callback")
-	case <-time.After(100 * time.Millisecond):
-		// Give an incorrectly queued update time to reach the progress owner.
+	default: // add queues synchronously, and the progress owner has already exited.
 	}
 	after := progressSnapshot(&mu, &samples)
 	if len(after) != len(before) {

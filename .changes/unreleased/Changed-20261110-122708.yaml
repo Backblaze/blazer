@@ -1,0 +1,5 @@
+kind: Changed
+body: >-
+  **Breaking:** Object.NewRangeReader with length 0 returns no bytes instead of
+  reading the rest of the object. Pass a negative length to read the remainder.
+time: 2026-11-10T12:27:08.681220-06:00
