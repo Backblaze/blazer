@@ -207,6 +207,68 @@ func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
 	b2wiretest.AssertJSON(t, calls[1], "startFileId", "id-c")
 }
 
+func TestListedObjectAttrsStatus(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		file   string
+		call   string
+		opts   []ListOption
+		action string
+		want   ObjectState
+	}{
+		{
+			name:   "unfinished large file",
+			file:   "unfinished/large",
+			call:   "b2_list_unfinished_large_files",
+			opts:   []ListOption{ListPrefix("unfinished/"), ListUnfinished()},
+			action: "start",
+			want:   Started,
+		},
+		{
+			name:   "current file",
+			file:   "uploaded/file",
+			call:   "b2_list_file_names",
+			opts:   []ListOption{ListPrefix("uploaded/")},
+			action: "upload",
+			want:   Uploaded,
+		},
+		{
+			name:   "hidden file",
+			file:   "hidden/file",
+			call:   "b2_list_file_versions",
+			opts:   []ListOption{ListPrefix("hidden/"), ListHidden()},
+			action: "hide",
+			want:   Hider,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv := b2wiretest.New(t)
+			srv.Reply(test.call, http.StatusOK, `{"files":[{"fileName":"`+test.file+`","fileId":"id","action":"`+test.action+`"}],"nextFileName":null,"nextFileId":null}`)
+			bucket := newListingWireBucket(t, ctx, srv)
+
+			iter := bucket.List(ctx, test.opts...)
+			if !iter.Next() {
+				t.Fatalf("listing yielded no object: %v", iter.Err())
+			}
+			attrs, err := iter.Object().Attrs(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attrs.Status != test.want {
+				t.Errorf("Attrs().Status = %v, want %v", attrs.Status, test.want)
+			}
+			if iter.Next() {
+				t.Fatal("listing yielded more than one object")
+			}
+			if err := iter.Err(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestListPrefixFromKeyOrCaller(t *testing.T) {
 	for _, test := range []struct {
 		name       string
