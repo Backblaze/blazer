@@ -9,7 +9,7 @@ import (
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
-const updateAuthJSON = `{"accountId":"a","authorizationToken":"t","applicationKeyExpirationTimestamp":0,"apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"apiUrl":"%[1]s","capabilities":[],"downloadUrl":"%[1]s","storageApi":"storage","recommendedPartSize":100000000,"s3ApiUrl":"%[1]s","allowed":{"buckets":null,"capabilities":[],"namePrefix":null}}}}`
+const updateAuthJSON = `{"accountId":"a","authorizationToken":"t","applicationKeyExpirationTimestamp":0,"apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"apiUrl":"%[1]s","downloadUrl":"%[1]s","storageApi":"storage","recommendedPartSize":100000000,"s3ApiUrl":"%[1]s","allowed":{"buckets":null,"capabilities":[],"namePrefix":null}}}}`
 
 const updateBucketJSON = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":2,` +
 	`"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false,"defaultRetention":{"mode":null,"period":null}}},` +

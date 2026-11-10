@@ -707,13 +707,14 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 	// A restricted key's scope lives under storageApi.allowed. Master keys
 	// carry an allowed with null buckets and namePrefix, leaving buckets and
 	// pfx empty; the nil check also tolerates an absent allowed.
-	var buckets []string
+	var buckets, capabilities []string
 	var pfx string
 	if allowed := storageAPI.Allowed; allowed != nil {
 		for _, b := range allowed.Buckets {
 			buckets = append(buckets, b.ID)
 		}
 		pfx = allowed.Prefix
+		capabilities = allowed.Capabilities
 	}
 	return &B2{
 		accountID:           b2resp.AccountID,
@@ -725,7 +726,7 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		recommendedPartSize: storageAPI.PartSize,
 		buckets:             buckets,
 		pfx:                 pfx,
-		capabilities:        append([]string(nil), storageAPI.Capabilities...),
+		capabilities:        append([]string(nil), capabilities...),
 		opts:                b2opts,
 	}, nil
 }

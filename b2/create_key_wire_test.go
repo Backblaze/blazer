@@ -30,7 +30,7 @@ import (
 func newCreateKeyWire(t *testing.T) (*b2wiretest.Server, *Client) {
 	t.Helper()
 	srv := b2wiretest.New(t)
-	srv.Reply("b2_authorize_account", http.StatusOK, fmt.Sprintf(`{"accountId":"acct-1","authorizationToken":"test-token","applicationKeyExpirationTimestamp":0,"apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"apiUrl":%[1]q,"capabilities":[],"downloadUrl":%[1]q,"storageApi":"storage","recommendedPartSize":100000000,"s3ApiUrl":%[1]q,"allowed":{"buckets":null,"capabilities":[],"namePrefix":null}}}}`, srv.URL()))
+	srv.Reply("b2_authorize_account", http.StatusOK, fmt.Sprintf(`{"accountId":"acct-1","authorizationToken":"test-token","applicationKeyExpirationTimestamp":0,"apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"apiUrl":%[1]q,"downloadUrl":%[1]q,"storageApi":"storage","recommendedPartSize":100000000,"s3ApiUrl":%[1]q,"allowed":{"buckets":null,"capabilities":[],"namePrefix":null}}}}`, srv.URL()))
 	srv.Reply("b2_create_key", http.StatusOK, `{"applicationKeyId":"default-key-id","applicationKey":"default-secret","keyName":"default-key","capabilities":["readFiles"],"expirationTimestamp":0}`)
 
 	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))

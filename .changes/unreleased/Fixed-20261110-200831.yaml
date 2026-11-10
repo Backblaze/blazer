@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Fix `base.AuthData.AllowedCapabilities` to preserve storage capabilities from `apiInfo.storageApi.allowed.capabilities`, including in saved and restored `b2.AccountInfo` sessions. The in-process `x/b2sim` simulator uses the same documented nesting."
+time: 2026-11-10T20:08:31Z

@@ -44,7 +44,6 @@ func v4AuthJSON(apiURL string, bucketIDs, bucketNames []string, namePrefix strin
 	storageAPI := map[string]any{
 		"absoluteMinimumPartSize": 5000000,
 		"apiUrl":                  apiURL,
-		"capabilities":            []string{"readFiles", "writeFiles"},
 		"downloadUrl":             apiURL,
 		"storageApi":              "storage",
 		"recommendedPartSize":     100000000,

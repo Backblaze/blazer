@@ -970,6 +970,44 @@ func TestAuthorizeAdvertisesB2PartSizes(t *testing.T) {
 	}
 }
 
+// The v4 authorization response nests storage grants under allowed:
+// https://www.backblaze.com/apidocs/b2-authorize-account
+func TestAuthorizeAdvertisesNestedCapabilities(t *testing.T) {
+	sim := New()
+	want := []string{"listBuckets", "writeBuckets", "readBuckets", "writeFiles", "readFiles", "deleteFiles"}
+	req, err := http.NewRequest(http.MethodGet, origin+"/b2api/v4/b2_authorize_account", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("id", "key")
+	resp, err := sim.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := requireJSONFields(t, responseJSON(t, resp), "apiInfo")
+	apiInfo := requireJSONFields(t, response["apiInfo"], "storageApi")
+	storage := requireJSONFields(t, apiInfo["storageApi"], "allowed")
+	if _, ok := storage["capabilities"]; ok {
+		t.Error("storageApi has a sibling capabilities field, want capabilities only under allowed")
+	}
+	allowed := requireJSONFields(t, storage["allowed"], "capabilities")
+	var capabilities []string
+	if err := json.Unmarshal(allowed["capabilities"], &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(capabilities, want) {
+		t.Errorf("allowed.capabilities = %q, want %q", capabilities, want)
+	}
+	store := &b2.InMemoryAccountInfo{}
+	if _, err := b2.NewClient(context.Background(), "id", "key", b2.Transport(sim), b2.WithAccountInfo(store)); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := store.AuthData()
+	if !ok || !reflect.DeepEqual(data.AllowedCapabilities, want) {
+		t.Errorf("stored AllowedCapabilities = %q, ok=%t; want %q, true", data.AllowedCapabilities, ok, want)
+	}
+}
+
 func TestUploadPartRejectsOutOfRangeNumbers(t *testing.T) {
 	sim := New()
 	bucketID := sim.Seed("part-number")
