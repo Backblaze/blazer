@@ -216,14 +216,15 @@ func TestOpenWalkedFileRejectsPathChangedAfterOpen(t *testing.T) {
 		}
 		opened = file
 		if err := os.Rename(replacement, path); err != nil {
-			file.Close()
-			return nil, err
+			return nil, errors.Join(err, file.Close())
 		}
 		return file, nil
 	}
 	file, err := openWalkedFile(path, walkInfo, openAndReplace)
 	if file != nil {
-		file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			t.Errorf("close unexpected descriptor: %v", closeErr)
+		}
 		t.Fatal("accepted a path replaced after its original file was opened")
 	}
 	if err == nil || !strings.Contains(err.Error(), "changed") {

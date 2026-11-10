@@ -34,7 +34,11 @@ func TestOpenSyncFileDoesNotFollowWindowsReparsePoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	info, err := file.Stat()
 	if err != nil {
 		t.Fatal(err)
