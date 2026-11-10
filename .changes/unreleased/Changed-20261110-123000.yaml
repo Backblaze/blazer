@@ -1,0 +1,13 @@
+kind: Changed
+body: >-
+  **Breaking:** `b2.WriterOption` is now an interface so client defaults can be
+  validated without executing callbacks. Migrate custom `func(w *b2.Writer) { ... }`
+  options to `b2.WriterOptionFunc(func(w *b2.Writer) { ... })`; existing `With...`
+  calls are unchanged. Option values are no longer callable: compose them in a
+  `[]b2.WriterOption` passed to `NewWriter` or `DefaultWriterOptions` instead.
+  Default callbacks run once per initialized writer during `NewWriter`, never
+  during `NewClient` or authorization. SSE-C defaults remain rejected before
+  authorization, including an explicit nil key. A nil `b2.WriterOption` interface
+  or `b2.WriterOptionFunc(nil)` passed as a default also makes `NewClient` return
+  an error before authorization.
+time: 2026-11-10T12:30:00-06:00

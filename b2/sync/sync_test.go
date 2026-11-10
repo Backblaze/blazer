@@ -1015,11 +1015,11 @@ func TestUploadFileRejectsStaleWalkSHA1(t *testing.T) {
 func TestSyncCancelsMultipartCleanupContext(t *testing.T) {
 	transport := &cancelContextTransport{}
 	bucket, wire := newSyncWire(t,
-		b2.DefaultWriterOptions(func(writer *b2.Writer) {
+		b2.DefaultWriterOptions(b2.WriterOptionFunc(func(writer *b2.Writer) {
 			// The test wire deliberately accepts this small part size.
 			writer.ChunkSize = 3
 			writer.ConcurrentUploads = 1
-		}),
+		})),
 		b2.Transport(transport),
 	)
 	wire.mu.Lock()
@@ -1045,10 +1045,10 @@ func TestSyncCancelsMultipartCleanupContext(t *testing.T) {
 }
 
 func TestUploadFileRejectsChangeDuringStream(t *testing.T) {
-	bucket, wire := newSyncWire(t, b2.DefaultWriterOptions(func(writer *b2.Writer) {
+	bucket, wire := newSyncWire(t, b2.DefaultWriterOptions(b2.WriterOptionFunc(func(writer *b2.Writer) {
 		writer.ChunkSize = 5_000_000
 		writer.ConcurrentUploads = 1
-	}))
+	})))
 	root := t.TempDir()
 	path := filepath.Join(root, "large.bin")
 	file, err := os.Create(path)

@@ -849,29 +849,48 @@ func completedBytes(buf writeBuffer) int64 {
 	return int64(buf.Len())
 }
 
-// A WriterOption sets Writer-specific behavior.
-type WriterOption func(*Writer)
+// A WriterOption sets Writer-specific behavior when NewWriter constructs a writer.
+// Use WriterOptionFunc to adapt a custom callback. Options are not callable;
+// compose them in a []WriterOption passed to NewWriter or DefaultWriterOptions.
+type WriterOption interface {
+	apply(*Writer)
+	validateDefault() error
+}
+
+// WriterOptionFunc adapts a custom callback to a WriterOption. NewWriter calls
+// it synchronously on the initialized writer. As a default, it runs once per
+// writer, never during NewClient or authorization. The callback must not be nil.
+type WriterOptionFunc func(*Writer)
+
+func (f WriterOptionFunc) apply(w *Writer) { f(w) }
+
+func (f WriterOptionFunc) validateDefault() error {
+	if f == nil {
+		return errors.New("b2: writer option is nil")
+	}
+	return nil
+}
 
 // WithAttrsOption attaches the given Attrs to the writer. It does not copy
 // Attrs.Retention or Attrs.LegalHold; use WithFileRetention and WithLegalHold.
 func WithAttrsOption(attrs *Attrs) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.withAttrs(attrs)
-	}
+	})
 }
 
 // WithFileRetention sets Object Lock retention for the file uploaded by the writer.
 func WithFileRetention(retention *FileRetention) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.retention = retention
-	}
+	})
 }
 
 // WithLegalHold sets Object Lock legal hold for the file uploaded by the writer.
 func WithLegalHold(legalHold LegalHold) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.legalHold = legalHold
-	}
+	})
 }
 
 // WithProgress sets a callback that receives cumulative uploaded bytes. It runs
@@ -881,9 +900,9 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 // (including resume), and is -1 otherwise. Calling Close from this callback
 // is unsupported because Close waits for the callback to finish.
 func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.progress = cb
-	}
+	})
 }
 
 // WithSSECKey encrypts this upload with a caller-provided AES-256 key. The key
@@ -897,11 +916,20 @@ func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
 // file info. Before any request, uploads reject caller file info with a
 // conflicting sse_c_key_id in any letter case, an ID for a key without one, or
 // more than 10 entries after adding the key ID.
+// It cannot be used with DefaultWriterOptions, including with a nil key.
 func WithSSECKey(key *SSECKey) WriterOption {
-	return func(w *Writer) {
-		w.encryption = &uploadEncryption{ssec: key}
-		w.ssecRequested = true
-	}
+	return ssecWriterOption{key: key}
+}
+
+type ssecWriterOption struct{ key *SSECKey }
+
+func (o ssecWriterOption) apply(w *Writer) {
+	w.encryption = &uploadEncryption{ssec: o.key}
+	w.ssecRequested = true
+}
+
+func (ssecWriterOption) validateDefault() error {
+	return errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
 }
 
 // WithSSEB2 encrypts this upload with a B2-managed key using algorithm. It
@@ -909,10 +937,10 @@ func WithSSECKey(key *SSECKey) WriterOption {
 // a simple upload request or the large-file start request. It carries no
 // customer-managed key material.
 func WithSSEB2(algorithm string) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.encryption = &uploadEncryption{sse: newServerSideEncryption("SSE-B2", algorithm)}
 		w.sseb2Requested = true
-	}
+	})
 }
 
 // WithCancelOnError requests the writer, if it has started a large file
@@ -924,15 +952,19 @@ func WithSSEB2(algorithm string) WriterOption {
 // does not bound errf: it must return promptly and must not call Close or wait on
 // the goroutine that calls Close, or they will deadlock.
 func WithCancelOnError(ctxf func() context.Context, errf func(error)) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.ctxf = ctxf
 		w.errf = errf
-	}
+	})
 }
 
-// DefaultWriterOptions returns a ClientOption that will apply the given
-// WriterOptions to every Writer.  These options can be overridden by passing
-// new options to NewWriter.
+// DefaultWriterOptions applies the given options once to each initialized writer
+// during NewWriter, before its explicit options. Custom callbacks do not run
+// during NewClient or authorization. Pass WriterOptionFunc for a custom callback.
+// Explicit options passed to NewWriter can override defaults. WithSSECKey cannot
+// be a default, including with a nil key; NewClient rejects it before authorization.
+// A nil WriterOption interface or WriterOptionFunc(nil) passed as a default
+// makes NewClient return an error before authorization.
 func DefaultWriterOptions(opts ...WriterOption) ClientOption {
 	return func(c *clientOptions) {
 		c.writerOpts = opts
