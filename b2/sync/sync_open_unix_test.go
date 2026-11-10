@@ -1,3 +1,17 @@
+// Copyright 2026, the Blazer authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //go:build unix
 
 package sync
@@ -177,6 +191,49 @@ func TestSyncCancellationAfterNonRegularSwap(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOpenWalkedFileRejectsPathChangedAfterOpen(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "data.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	walkInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(root, "replacement")
+	if err := os.WriteFile(replacement, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var opened *os.File
+	openAndReplace := func(path string) (*os.File, error) {
+		file, err := openSyncFile(path)
+		if err != nil {
+			return nil, err
+		}
+		opened = file
+		if err := os.Rename(replacement, path); err != nil {
+			file.Close()
+			return nil, err
+		}
+		return file, nil
+	}
+	file, err := openWalkedFile(path, walkInfo, openAndReplace)
+	if file != nil {
+		file.Close()
+		t.Fatal("accepted a path replaced after its original file was opened")
+	}
+	if err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("openWalkedFile error = %v, want a changed-file error", err)
+	}
+	if opened == nil {
+		t.Fatal("fixture never opened the original file")
+	}
+	if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("rejected descriptor Stat error = %v, want os.ErrClosed", err)
 	}
 }
 

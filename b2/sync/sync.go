@@ -321,7 +321,7 @@ func resultError(result *Result) error {
 }
 
 func fileSHA1(ctx context.Context, path string, walkInfo os.FileInfo) (string, error) {
-	file, err := openWalkedFile(path, walkInfo)
+	file, err := openWalkedFile(path, walkInfo, openSyncFile)
 	if err != nil {
 		return "", err
 	}
@@ -336,8 +336,8 @@ func fileSHA1(ctx context.Context, path string, walkInfo os.FileInfo) (string, e
 	return digest, nil
 }
 
-func openWalkedFile(path string, walkInfo os.FileInfo) (*os.File, error) {
-	file, err := openSyncFile(path)
+func openWalkedFile(path string, walkInfo os.FileInfo, openFile func(string) (*os.File, error)) (*os.File, error) {
+	file, err := openFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +372,7 @@ func hashReader(ctx context.Context, reader io.Reader) (string, error) {
 }
 
 func uploadFile(ctx context.Context, bucket *b2.Bucket, name string, local localFile) (int64, error) {
-	file, err := openWalkedFile(local.path, local.info)
+	file, err := openWalkedFile(local.path, local.info, openSyncFile)
 	if err != nil {
 		return 0, err
 	}

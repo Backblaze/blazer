@@ -31,6 +31,10 @@ func FuzzShouldTransfer(f *testing.F) {
 		if !shouldTransfer(local, &sameTime, CompareModTime) {
 			t.Fatal("different modification times were skipped")
 		}
+		sameTime.LastModified = local.modTime.Add(-time.Millisecond)
+		if !shouldTransfer(local, &sameTime, CompareModTime) {
+			t.Fatal("newer local modification time was skipped")
+		}
 		sameSize := *dest
 		sameSize.Size = local.size
 		if shouldTransfer(local, &sameSize, CompareSize) {

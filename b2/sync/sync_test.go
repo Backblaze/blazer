@@ -57,6 +57,7 @@ func TestShouldTransfer(t *testing.T) {
 		{"modtime size differs", CompareModTime, local, &b2.Attrs{Size: 13, LastModified: baseDest.LastModified}, false},
 		{"modtime differs by millisecond", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Millisecond)}, true},
 		{"newer cloud file still yields to local source", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Hour)}, true},
+		{"older cloud file still yields to local source", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(-time.Hour)}, true},
 		{"size equal", CompareSize, local, &baseDest, false},
 		{"size equal with different mtime", CompareSize, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Second)}, false},
 		{"size differs", CompareSize, local, &b2.Attrs{Size: 13}, true},
