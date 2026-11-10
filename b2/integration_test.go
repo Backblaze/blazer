@@ -248,6 +248,49 @@ func TestCopyLive(t *testing.T) {
 	}
 }
 
+func TestComposeLive(t *testing.T) {
+	// Keep the standard helper's cleanup independent of the operation deadline.
+	bucket, done := startLiveTest(context.Background(), t)
+	defer done()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+
+	source := bucket.Object("compose-source")
+	writer := source.NewWriter(ctx)
+	if _, err := writer.Write([]byte("[copied!]")); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	uploaded := bytes.Repeat([]byte("x"), 5_000_000)
+	object, err := bucket.Compose(ctx, "composed", []ComposePart{
+		PartFromReader(bytes.NewReader(uploaded), 5_000_000),
+		PartFromCopy(source.ID(), "bytes=1-7"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := object.NewReader(ctx)
+	got, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read composed file: read=%v close=%v", readErr, closeErr)
+	}
+	want := append(bytes.Repeat([]byte("x"), 5_000_000), []byte("copied!")...)
+	if len(got) != 5_000_007 || !bytes.Equal(got, want) {
+		t.Fatalf("composed bytes differ: got %d bytes, want exactly 5000007 bytes with uploaded data followed by copied!", len(got))
+	}
+	attrs, err := object.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Size != 5_000_007 {
+		t.Fatalf("composed size = %d, want 5000007", attrs.Size)
+	}
+}
+
 type cancelReader struct {
 	r    io.Reader
 	n, l int
