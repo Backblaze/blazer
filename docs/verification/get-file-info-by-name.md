@@ -70,6 +70,15 @@ On 2026-11-10, capability owner `@ffumero2003` was informed of the canonical
 after verification. This records owner coordination, rather than treating the
 scenario registration or a local claim as owner confirmation.
 
+The identifiable owner-directed correction is
+[capability-owner PR #1864](https://github.com/backblaze-labs/demand-side-ai/pull/1864),
+submitted by `@ffumero2003` at
+`b4682c58f435af23f6543c9aa468aadb1c952be7`. Its context confirms the stale
+`partial` row and its one-file diff changes only `files.metadata` to `yes`, with
+public API citations for this inspected SDK revision. The owning repository is
+access-controlled; readers without access can verify the SDK evidence below,
+but cannot treat the pending owner correction as a merged claim.
+
 **External blocker for R3 release closeout:** the owner-managed one-row claim
 correction must be reviewed and merged. Owner: `@ffumero2003`; dependency: the
 separate capability-card correction, whose proposed row cites the SDK revision
