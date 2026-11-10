@@ -86,6 +86,14 @@ cleans up with governance bypass on a fresh bounded context. Run it with:
 go test -count=1 -v -run '^TestDeleteBypassGovernanceLive$' ./b2
 ```
 
+The capability preflight inspects B2's actual authorization response before creating
+retained data. It does not rely on `AuthData.AllowedCapabilities` while its separate
+mapping defect is tracked in [#358](https://github.com/Backblaze/blazer/issues/358).
+
+On 2026-11-10, both the `b2` and `base` subtests passed against real B2: the ordinary
+delete returned `401/access_denied`, the bypass delete succeeded, and the exact version
+was absent from a fresh listing. The scratch bucket was removed during cleanup.
+
 **Compliance enforcement is UNVERIFIED by this live check.** The live validation policy
 forbids creating compliance-retained test objects because cleanup cannot delete them before
 expiry. This exception does not change the B2 contract: governance bypass never overrides

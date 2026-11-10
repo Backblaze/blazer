@@ -15,9 +15,12 @@
 package b2
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"slices"
 	"testing"
@@ -133,11 +136,42 @@ func TestDeleteBypassGovernanceLive(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	account, err := base.AuthorizeAccount(ctx, id, key, base.UserAgent("blazer-bypass-test"))
+	// Inspect the actual wire scope until #358 fixes AuthData's capability mapping.
+	var haveBypass bool
+	authTransport := notificationTransport(func(req *http.Request) (*http.Response, error) {
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil || req.Header.Get("X-Blazer-Method") != "b2_authorize_account" {
+			return resp, err
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(data))
+		if resp.StatusCode != http.StatusOK {
+			return resp, nil
+		}
+		var authorization struct {
+			APIInfo struct {
+				StorageAPI struct {
+					Allowed struct {
+						Capabilities []string
+					}
+				}
+			}
+		}
+		if err := json.Unmarshal(data, &authorization); err != nil {
+			return nil, err
+		}
+		haveBypass = slices.Contains(authorization.APIInfo.StorageAPI.Allowed.Capabilities, "bypassGovernance")
+		return resp, nil
+	})
+	account, err := base.AuthorizeAccount(ctx, id, key, base.UserAgent("blazer-bypass-test"), base.Transport(authTransport))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(account.AuthData().AllowedCapabilities, "bypassGovernance") {
+	if !haveBypass {
 		t.Fatal("live test key requires the bypassGovernance capability")
 	}
 	client, err := NewClient(ctx, id, key, UserAgent("blazer-bypass-test"))
