@@ -340,8 +340,12 @@ func TestCreateKeyReturnsTheResponseFields(t *testing.T) {
 	}
 }
 
-// Explicit BucketIDs scopes must not fall back to account-wide key creation.
+// This tests blazer's fail-closed policy: B2 documents no minimum bucket count,
+// and b2-sdk-python's raw create_key passes bucket_ids through unchecked.
+// Rejecting empty inputs prevents legacy bucketId omitempty from requesting
+// account-wide access; it is not a claim that B2 rejects empty v4 bucketIds.
 // Wire fields: https://www.backblaze.com/apidocs/b2-create-key
+// Reference raw API: https://b2-sdk-python.readthedocs.io/en/v2.9.3/_modules/b2sdk/_internal/raw_api.html
 func TestCreateKeyRejectsEmptyBucketIDsWithoutARequest(t *testing.T) {
 	tests := []struct {
 		name string
