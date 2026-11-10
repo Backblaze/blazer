@@ -16,6 +16,7 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -389,6 +390,18 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs == nil {
 		return nil
 	}
+	if cfg := attrs.ReplicationConfig; cfg != nil {
+		if b.b.ReplicationConfigurationUnreadable {
+			return errors.New("b2: cannot update unreadable replication configuration")
+		}
+		source := cfg.AsReplicationSource
+		if source.SourceApplicationKeyID == "" && len(source.ReplicationRules) == 0 && cfg.AsReplicationDestination == nil {
+			return errors.New("b2: replication configuration requires a source or destination")
+		}
+		if dest := cfg.AsReplicationDestination; dest != nil && len(dest.SourceToDestinationKeyMapping) == 0 {
+			return errors.New("b2: replication destination requires a non-empty key mapping")
+		}
+	}
 	if attrs.Type != UnknownType {
 		b.b.Type = string(attrs.Type)
 	}
@@ -444,10 +457,18 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	previousReplication := b.b.ReplicationConfiguration
 	if attrs.ReplicationConfig != nil {
 		b.b.ReplicationConfiguration = toBaseReplicationConfiguration(attrs.ReplicationConfig, b.b.ReplicationConfiguration)
+	} else {
+		// Replication settings require a separate write capability. Cached values
+		// must not turn an unrelated update into a replication update.
+		b.b.ReplicationConfiguration = nil
 	}
 
 	newBucket, err := b.b.Update(ctx)
 	if err == nil {
+		// An unrelated update does not make hidden replication settings readable.
+		if b.b.ReplicationConfigurationUnreadable {
+			newBucket.ReplicationConfigurationUnreadable = true
+		}
 		b.b = newBucket
 	} else {
 		b.b.DefaultRetention = previousRetention

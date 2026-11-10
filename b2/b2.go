@@ -289,11 +289,11 @@ type BucketAttrs struct {
 	// Object Lock: https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-native-api.
 	FileLockEnabled bool
 
-	// The configuration to create a Replication Rule. See Cloud Replication Rules. At least one of the asReplicationSource or asReplicationDestination
-	// parameters is required, but they can also both be present.
-	// NOTE: The first time that you configure Cloud Replication, complete the following tasks to ensure that you have the correct permission:
-	// 1. Verify your email address.
-	// 2. Have a payment history on file or make a payment.
+	// ReplicationConfig configures bucket replication. NewBucket uses the service
+	// default when nil; Update leaves replication unchanged when nil.
+	// Update rejects an empty configuration and changes to an unreadable existing
+	// configuration. Use a key with readBucketReplications when changing replication.
+	// B2 requires a verified email and payment history before first configuration.
 	ReplicationConfig           *ReplicationConfiguration
 	replicationConfigUnreadable bool
 }
@@ -344,12 +344,22 @@ type RetentionPeriod struct {
 	Unit     string
 }
 
+// ReplicationConfiguration describes a bucket's source and destination roles.
+// Both roles may be present. Bucket.Update requires at least one non-empty role
+// and a readable existing configuration; it does not support clearing replication.
 type ReplicationConfiguration struct {
-	AsReplicationSource      AsReplicationSource
+	AsReplicationSource AsReplicationSource
+	// AsReplicationDestination specifies the destination key mapping. When nil
+	// in a source-only Update, the known destination mapping is preserved.
 	AsReplicationDestination *AsReplicationDestination
 }
 
+// AsReplicationDestination maps source application keys to destination keys.
+// An explicit destination in Bucket.Update replaces the existing mapping.
 type AsReplicationDestination struct {
+	// SourceToDestinationKeyMapping uses source application-key IDs as keys and
+	// destination application-key IDs as values. Bucket.Update rejects both nil
+	// and empty maps; neither is a supported way to clear the destination role.
 	SourceToDestinationKeyMapping map[string]string
 }
 
