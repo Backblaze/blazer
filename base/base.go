@@ -28,6 +28,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -2035,12 +2036,19 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 	if sha1 == "none" && info["Large_file_sha1"] != "" {
 		sha1 = info["Large_file_sha1"]
 	}
+	// Saturate ContentLength to the platform's int range so the conversion
+	// cannot truncate; the body itself is never limited. The math.MaxInt guard
+	// is the upper bound (maxInt is a test seam for the 32-bit path).
+	length := min(contentLength, maxInt)
+	if length > math.MaxInt {
+		length = math.MaxInt
+	}
 	return &FileReader{
 		ReadCloser:    sizedReadCloser{resp.Body, contentLength},
 		SHA1:          sha1,
 		ID:            resp.Header.Get("X-Bz-File-Id"),
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: int(min(contentLength, maxInt, int64(^uint(0)>>1))),
+		ContentLength: int(length),
 		Info:          info,
 	}, nil
 }
