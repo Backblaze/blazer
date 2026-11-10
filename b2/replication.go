@@ -114,8 +114,9 @@ func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatu
 // key IDs. Callers must provision and own bucket-scoped keys: the source key needs
 // readFiles, readFileLegalHolds and readFileRetentions; the destination key needs
 // writeFiles, writeFileLegalHolds, writeFileRetentions and deleteFiles. The helper
-// neither creates keys nor validates their permissions. Both bucket clients must
-// be able to read and update their replication configuration.
+// neither creates keys nor validates their permissions. Each bucket client must
+// be able to read its replication configuration; update permission is needed only
+// for a bucket whose configuration must change.
 //
 // The helper preserves existing rules and key mappings. It rejects unreadable
 // configurations, conflicting source keys or destination mappings, and an existing

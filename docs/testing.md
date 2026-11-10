@@ -120,7 +120,8 @@ no live B2 access) so a reviewer knows what is still open.
 `SetupReplication` takes caller-owned key IDs; it does not provision keys. `ReplicationStatus`
 reports configured rules, including disabled rules, rather than per-file replication progress.
 The tests and godoc in #339 leave the executable SDK code unchanged from main at
-`1acc73d81fdad30011069ecccb9fde43c8c8df78`.
+`1acc73d81fdad30011069ecccb9fde43c8c8df78`. The SDK and simulator are separate
+repositories; their tested commit IDs are recorded separately below.
 
 The focused rejection tests cover an otherwise matching disabled rule with and without a destination
 mapping, and priority 2147483648 before any bucket reads or writes. The wire test preserves the literal
@@ -158,12 +159,14 @@ A separate real-B2 run on the same SDK source passed all 17 checks in the existi
 - Cleanup deleted all three scratch buckets and six scratch keys. No key secrets were printed.
 
 To reproduce against the checked-out SDK without changing the shared demo's module replacement, set
-`DEMO_DIR` to the existing configured live rig, then run from the SDK repository:
+`DEMO_DIR` to the existing configured live rig, then run from the SDK repository. This is an external,
+local-only rig, not a program shipped in the SDK; the offline SDK tests do not require it.
 
 ```sh
 sdk=$(pwd)
 scratch=$(mktemp -d)
 cp "$DEMO_DIR/go.mod" "$scratch/demo.go.mod"
+if test -f "$DEMO_DIR/go.sum"; then cp "$DEMO_DIR/go.sum" "$scratch/demo.go.sum"; fi
 (
   cd "$DEMO_DIR" &&
   GOWORK=off go mod edit -modfile="$scratch/demo.go.mod" \
