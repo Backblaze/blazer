@@ -238,6 +238,28 @@ func TestOpenWalkedFileRejectsPathChangedAfterOpen(t *testing.T) {
 	}
 }
 
+func TestOpenSyncFileRejectsSymlinkToRegularFile(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	file, err := openSyncFile(link)
+	if file != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Errorf("close unexpected descriptor: %v", closeErr)
+		}
+		t.Fatal("opened a symlink target instead of rejecting the link")
+	}
+	if !errors.Is(err, syscall.ELOOP) {
+		t.Fatalf("openSyncFile error = %v, want ELOOP", err)
+	}
+}
+
 func syncOpenChild(t *testing.T) bool {
 	t.Helper()
 	const marker = "BLAZER_SYNC_OPEN_CHILD"
