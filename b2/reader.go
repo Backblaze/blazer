@@ -53,7 +53,8 @@ type Reader struct {
 	// and end with a final call at the bytes downloaded before Close returns.
 	// For a finite range, total is the actual available byte count (not the
 	// requested upper bound) when a HEAD request can determine it; otherwise
-	// total is -1. Set Progress before the first Read. Calling Close from this
+	// total is -1, including when HEAD reaches the platform's int size limit.
+	// Set Progress before the first Read. Calling Close from this
 	// callback is unsupported because Close waits for the callback to finish.
 	Progress func(bytesComplete, bytesTotal int64)
 
@@ -261,7 +262,9 @@ func (r *Reader) initFunc() {
 		r.progressTotal = -1
 		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true, r.ssec); err == nil {
 			size, _, _, _ := fr.stats()
-			if err := fr.Close(); err == nil {
+			// MaxInt may be a saturated compatibility length, not EOF. Keep
+			// the total unknown so a large offset cannot suppress the GET.
+			if err := fr.Close(); err == nil && size < int(^uint(0)>>1) {
 				available := int64(size) - r.offset
 				if available < 0 {
 					available = 0
