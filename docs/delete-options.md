@@ -12,6 +12,8 @@ A nil `b2.DeleteOption` returns an error before any request is sent.
 The optional parameters were introduced in **v0.9.0**, not v0.10.0. Calls without options
 still compile, but adding a variadic parameter changed each method's type. Interfaces and
 function values must include the trailing parameter too.
+The updated declarations and callback wrappers below also compile in CI through
+`b2/delete_options_example_test.go`.
 
 For example, these pre-v0.9.0 declarations do not compile against v0.9.0 or later:
 

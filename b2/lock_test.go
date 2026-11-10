@@ -229,6 +229,23 @@ func TestDeleteBypassGovernanceLive(t *testing.T) {
 			if attrs.Retention == nil || attrs.Retention.Mode != RetentionGovernance || !attrs.Retention.RetainUntil.Equal(retainUntil) || !time.Now().Before(retainUntil) {
 				t.Fatalf("active governance retention = %+v, want through %v", attrs.Retention, retainUntil)
 			}
+			assertListed := func(want bool) {
+				t.Helper()
+				found := false
+				iter := bucket.List(ctx, ListHidden(), ListPrefix(object.Name()))
+				for iter.Next() {
+					if iter.Object().ID() == object.ID() {
+						found = true
+					}
+				}
+				if err := iter.Err(); err != nil {
+					t.Fatal(err)
+				}
+				if found != want {
+					t.Fatalf("version present in fresh listing = %t, want %t", found, want)
+				}
+			}
+			assertListed(true)
 			deleteVersion := func(bypass bool) error {
 				if layer == "base" {
 					return buckets[0].File(object.ID(), object.Name()).DeleteFileVersion(ctx, bypass)
@@ -242,18 +259,11 @@ func TestDeleteBypassGovernanceLive(t *testing.T) {
 			if status, code, _ := base.MsgCode(err); status != 401 || code != "access_denied" {
 				t.Fatalf("delete without bypass: status=%d code=%q, want 401/access_denied", status, code)
 			}
+			assertListed(true)
 			if err := deleteVersion(true); err != nil {
 				t.Fatalf("delete with bypass: %v", err)
 			}
-			iter := bucket.List(ctx, ListHidden(), ListPrefix(object.Name()))
-			for iter.Next() {
-				if iter.Object().ID() == object.ID() {
-					t.Fatal("deleted version is still listed")
-				}
-			}
-			if err := iter.Err(); err != nil {
-				t.Fatal(err)
-			}
+			assertListed(false)
 			t.Log("normal delete=401/access_denied; bypass delete=succeeded; version absent from fresh listing")
 		})
 	}
