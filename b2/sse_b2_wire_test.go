@@ -92,6 +92,19 @@ func (w *sseB2Wire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		w.encryption[name] = r.Header.Get("X-Bz-Server-Side-Encryption")
 		w.mu.Unlock()
 		_, _ = fmt.Fprintf(rw, `{"fileId":%q,"fileName":%q,"action":"upload","contentLength":%d,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"uploadTimestamp":1}`, "id-"+name, name, len(data))
+	case strings.HasSuffix(r.URL.Path, "/b2_get_file_info"):
+		w.mu.Lock()
+		var name string
+		var data []byte
+		var algorithm string
+		for candidate, payload := range w.objects {
+			if recorded.body["fileId"] == "id-"+candidate {
+				name, data, algorithm = candidate, payload, w.encryption[candidate]
+				break
+			}
+		}
+		w.mu.Unlock()
+		_, _ = fmt.Fprintf(rw, `{"fileId":%q,"fileName":%q,"action":"upload","contentLength":%d,"contentSha1":"0000000000000000000000000000000000000000","contentType":"application/octet-stream","fileInfo":{},"serverSideEncryption":{"mode":"SSE-B2","algorithm":%q},"uploadTimestamp":1}`, "id-"+name, name, len(data), algorithm)
 	case strings.HasSuffix(r.URL.Path, "/b2_start_large_file"):
 		_, _ = fmt.Fprint(rw, `{"fileId":"large"}`)
 	case strings.HasSuffix(r.URL.Path, "/b2_get_upload_part_url"):
@@ -234,6 +247,38 @@ func TestWithSSEB2WireAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSSEB2WireEscapedFileName(t *testing.T) {
+	wire := newSSEB2Wire(t)
+	bucket := wire.bucket(t)
+	ctx := context.Background()
+	const name = `folder/quoted"-café+東京.bin`
+	payload := []byte("escaped SSE-B2 file name")
+	object := bucket.Object(name)
+	writer := object.NewWriter(ctx, WithSSEB2("AES256"))
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := object.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Name != name {
+		t.Fatalf("uploaded file name = %q, want %q", attrs.Name, name)
+	}
+	reader := object.NewReader(ctx)
+	got, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read = %v, close = %v", readErr, closeErr)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("round-trip bytes = %q, want %q", got, payload)
+	}
+}
+
 func TestSSEB2ListReadBackEncryption(t *testing.T) {
 	wire := newSSEB2Wire(t)
 	bucket := wire.bucket(t)
@@ -260,17 +305,17 @@ func TestSSEB2ListReadBackEncryption(t *testing.T) {
 
 func TestSSEB2ResumeRejectsWrongOrUnverifiableEncryption(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		sse       string
-		options   []WriterOption
-		wantError bool
+		name    string
+		sse     string
+		options []WriterOption
+		wantErr string
 	}{
-		{"SSE-B2 onto SSE-C", `{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":"digest"}`, []WriterOption{WithSSEB2("AES256")}, true},
-		{"no option onto SSE-C", `{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":"digest"}`, nil, true},
-		{"SSE-B2 with missing mode", `{"algorithm":"AES256"}`, []WriterOption{WithSSEB2("AES256")}, true},
-		{"SSE-B2 with wrong algorithm", `{"mode":"SSE-B2","algorithm":"other"}`, []WriterOption{WithSSEB2("AES256")}, true},
-		{"invalid requested algorithm cannot match", `{"mode":"SSE-B2","algorithm":"AES128"}`, []WriterOption{WithSSEB2("AES128")}, true},
-		{"matching SSE-B2", `{"mode":"SSE-B2","algorithm":"AES256"}`, []WriterOption{WithSSEB2("AES256")}, false},
+		{"SSE-B2 onto SSE-C", `{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":"digest"}`, []WriterOption{WithSSEB2("AES256")}, `b2: cannot resume "encrypted": unfinished upload encryption mode or algorithm is missing or does not match`},
+		{"no option onto SSE-C", `{"mode":"SSE-C","algorithm":"AES256","customerKeyMd5":"digest"}`, nil, `b2: cannot resume "encrypted": unfinished upload requires an SSE-C key`},
+		{"SSE-B2 with missing mode", `{"algorithm":"AES256"}`, []WriterOption{WithSSEB2("AES256")}, `b2: cannot resume "encrypted": unfinished upload encryption mode or algorithm is missing or does not match`},
+		{"SSE-B2 with wrong algorithm", `{"mode":"SSE-B2","algorithm":"other"}`, []WriterOption{WithSSEB2("AES256")}, `b2: cannot resume "encrypted": unfinished upload encryption mode or algorithm is missing or does not match`},
+		{"invalid requested algorithm cannot match", `{"mode":"SSE-B2","algorithm":"AES128"}`, []WriterOption{WithSSEB2("AES128")}, `b2: cannot resume "encrypted": requested SSE-B2 encryption algorithm must be AES256`},
+		{"matching SSE-B2", `{"mode":"SSE-B2","algorithm":"AES256"}`, []WriterOption{WithSSEB2("AES256")}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire := newSSECPublicWire(t)
@@ -278,15 +323,32 @@ func TestSSEB2ResumeRejectsWrongOrUnverifiableEncryption(t *testing.T) {
 			bucket := wire.newBucket(t)
 			w := bucket.Object("encrypted").NewWriter(context.Background(), tc.options...)
 			w.Resume = true
-			_, err := w.getLargeFile()
-			if tc.wantError && (err == nil || !strings.Contains(err.Error(), "cannot resume")) {
-				t.Fatalf("resume error = %v, want encryption rejection", err)
+			resumed, err := w.getLargeFile()
+			if calls := wire.requestsTo("/b2api/v4/b2_start_large_file"); len(calls) != 0 {
+				t.Fatalf("resume started %d new files, want 0", len(calls))
 			}
-			if !tc.wantError && err != nil {
+			parts := wire.requestsTo("/b2api/v4/b2_list_parts")
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("resume error = %v, want %q", err, tc.wantErr)
+				}
+				if len(parts) != 0 {
+					t.Fatal("listed parts before validating encryption")
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("matching encryption rejected: %v", err)
 			}
-			if tc.wantError && len(wire.requestsTo("/b2api/v4/b2_list_parts")) != 0 {
-				t.Fatal("listed parts before validating encryption")
+			if len(parts) != 1 || parts[0].body["fileId"] != "unfinished-id" {
+				t.Fatalf("resume part requests = %#v, want one for unfinished-id", parts)
+			}
+			if _, err := resumed.getUploadPartURL(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			urls := wire.requestsTo("/b2api/v4/b2_get_upload_part_url")
+			if len(urls) != 1 || urls[0].body["fileId"] != "unfinished-id" {
+				t.Fatalf("resumed upload URL requests = %#v, want one for unfinished-id", urls)
 			}
 		})
 	}
