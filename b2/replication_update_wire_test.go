@@ -141,9 +141,57 @@ func TestBucketUpdateRejectsUnsafeReplicationWire(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := replicationUpdateWireBucket(t, tc.response)
 			before := len(srv.Requests())
-			err := bucket.Update(context.Background(), &BucketAttrs{ReplicationConfig: tc.config})
+			err := bucket.Update(context.Background(), &BucketAttrs{
+				Type: Public, Info: map[string]string{"rejected": "value"}, ReplicationConfig: tc.config,
+			})
 			if err == nil || err.Error() != tc.want {
 				t.Errorf("Update error = %v, want %q", err, tc.want)
+			}
+			if got := len(srv.Requests()) - before; got != 0 {
+				t.Errorf("HTTP requests from rejected replication update = %d, want 0", got)
+			}
+			if err := bucket.Update(context.Background(), &BucketAttrs{Info: map[string]string{"accepted": "value"}}); err != nil {
+				t.Fatal(err)
+			}
+			request := srv.Last(t, "b2_update_bucket")
+			b2wiretest.AssertJSON(t, request, "bucketType", "allPrivate")
+			b2wiretest.AssertJSON(t, request, "bucketInfo", map[string]string{"accepted": "value"})
+			b2wiretest.AssertNoJSON(t, request, "replicationConfiguration")
+		})
+	}
+}
+
+func TestBucketUpdateTracksUnreadableReplicationResponsesWire(t *testing.T) {
+	for _, origin := range []string{"create", "update"} {
+		t.Run(origin, func(t *testing.T) {
+			srv := b2wiretest.New(t)
+			srv.Reply("b2_update_bucket", http.StatusOK, unreadableReplicationUpdateJSON)
+			client := liveOnlyClient(t, srv)
+			var bucket *Bucket
+			var err error
+			if origin == "create" {
+				srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+				srv.Reply("b2_create_bucket", http.StatusOK, unreadableReplicationUpdateJSON)
+				bucket, err = client.NewBucket(context.Background(), "n", &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{
+					AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"}},
+				}})
+			} else {
+				srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[`+noReplicationBucketJSON+`]}`)
+				bucket, err = client.Bucket(context.Background(), "n")
+				if err == nil {
+					err = bucket.Update(context.Background(), &BucketAttrs{Info: map[string]string{"metadata": "changed"}})
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := len(srv.Requests())
+			err = bucket.Update(context.Background(), &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{
+				AsReplicationSource: AsReplicationSource{SourceApplicationKeyID: "source-key"},
+			}})
+			const want = "b2: cannot update unreadable replication configuration"
+			if err == nil || err.Error() != want {
+				t.Errorf("Update from unreadable %s response = %v, want %q", origin, err, want)
 			}
 			if got := len(srv.Requests()) - before; got != 0 {
 				t.Errorf("HTTP requests from rejected replication update = %d, want 0", got)

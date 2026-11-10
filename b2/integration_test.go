@@ -31,6 +31,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
+	"github.com/Backblaze/blazer/internal/b2types"
 	"github.com/Backblaze/blazer/internal/blog"
 	"github.com/Backblaze/blazer/x/transport"
 )
@@ -1728,6 +1730,35 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 		if attrs.ReplicationConfig == nil || attrs.ReplicationConfig.AsReplicationDestination == nil ||
 			!reflect.DeepEqual(attrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping, want) {
 			t.Fatal("metadata-only update did not preserve the destination key mapping")
+		}
+	}
+	// Bypass high-level validation to pin why nil/empty maps are unsupported:
+	// the current wire encoder omits them, and B2 requires the mapping field.
+	// This checks field presence, not whether B2 accepts a present empty object.
+	raw, err := base.AuthorizeAccount(ctx, id, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := raw.ListBuckets(ctx, destination.Name())
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list destination for mapping contract: buckets=%d error=%v", len(listed), err)
+	}
+	for _, mapping := range []map[string]string{nil, {}} {
+		listed[0].ReplicationConfiguration = &b2types.ReplicationConfiguration{
+			AsReplicationDestination: &b2types.AsReplicationDestination{SourceToDestinationKeyMapping: mapping},
+		}
+		_, err := listed[0].Update(ctx)
+		status, code, message := base.MsgCode(err)
+		if status != http.StatusBadRequest || code != "bad_request" || !strings.Contains(message, "sourceToDestinationKeyMapping") {
+			t.Errorf("missing mapping field error = %v, want 400 bad_request naming sourceToDestinationKeyMapping", err)
+		}
+		attrs, err := destination.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.ReplicationConfig == nil || attrs.ReplicationConfig.AsReplicationDestination == nil ||
+			!reflect.DeepEqual(attrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping, want) {
+			t.Fatal("B2 changed the destination mapping after rejecting an omitted required field")
 		}
 	}
 }
