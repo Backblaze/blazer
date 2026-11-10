@@ -1690,7 +1690,9 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 	}{
 		{source, "source", []string{"readFiles", "readFileLegalHolds", "readFileRetentions"}},
 		{destination, "destination", []string{"writeFiles", "writeFileLegalHolds", "writeFileRetentions", "deleteFiles"}},
-		{destination, "metadata", []string{"listBuckets", "writeBuckets", "readBucketReplications"}},
+		// Cached SSE settings are still resent by unrelated updates (#108).
+		// Allow that write here to isolate the missing replication-write capability.
+		{destination, "metadata", []string{"listBuckets", "writeBuckets", "readBucketReplications", "writeBucketEncryption"}},
 	} {
 		key, err := entry.bucket.CreateKey(ctx, "blazer-repl-"+entry.name+"-"+uniq, Capabilities(entry.caps...), Lifetime(time.Hour))
 		if err != nil {
