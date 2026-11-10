@@ -823,6 +823,20 @@ func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2
 	return sse
 }
 
+// decodeReplicationConfiguration keeps hidden settings distinct from absent ones.
+func decodeReplicationConfiguration(cfg *b2types.ReplicationConfigurationResponse) (*b2types.ReplicationConfiguration, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	if !cfg.IsClientAuthorizedToRead {
+		return nil, true
+	}
+	if cfg.Value == nil || (cfg.Value.AsReplicationSource == nil && cfg.Value.AsReplicationDestination == nil) {
+		return nil, false
+	}
+	return cfg.Value, false
+}
+
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
 func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool, replicationConfiguration *b2types.ReplicationConfiguration) (*Bucket, error) {
@@ -879,10 +893,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	bucket.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
-	if cfg := b2resp.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
-		(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
-		bucket.ReplicationConfiguration = cfg.Value
-	}
+	bucket.ReplicationConfiguration, bucket.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(b2resp.ReplicationConfiguration)
 	return bucket, nil
 }
 
@@ -917,7 +928,7 @@ type Bucket struct {
 	DefaultServerSideEncryption *b2types.ServerSideEncryption
 	FileLockEnabled             bool
 	ReplicationConfiguration    *b2types.ReplicationConfiguration
-	// ReplicationConfigurationUnreadable records a list response that withheld
+	// ReplicationConfigurationUnreadable records a bucket response that withheld
 	// replication settings. Callers must not replace a config they cannot read.
 	ReplicationConfigurationUnreadable bool
 }
@@ -983,9 +994,9 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		CORSRules:                   b2resp.CORSRules,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
-		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
 	}
 	updated.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
+	updated.ReplicationConfiguration, updated.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(b2resp.ReplicationConfiguration)
 
 	return updated, nil
 }
@@ -1105,13 +1116,7 @@ func (b *B2) listBucketsWithState(ctx context.Context, state authState, bucketID
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
 		}
 		listed.DefaultRetention = decodeDefaultRetention(bucket.FileLockConfig)
-		if cfg := bucket.ReplicationConfiguration; cfg != nil && !cfg.IsClientAuthorizedToRead {
-			listed.ReplicationConfigurationUnreadable = true
-		}
-		if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
-			(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
-			listed.ReplicationConfiguration = cfg.Value
-		}
+		listed.ReplicationConfiguration, listed.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(bucket.ReplicationConfiguration)
 		buckets = append(buckets, listed)
 	}
 	return buckets, nil

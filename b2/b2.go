@@ -292,7 +292,8 @@ type BucketAttrs struct {
 	// ReplicationConfig configures bucket replication. NewBucket uses the service
 	// default when nil; Update leaves replication unchanged when nil.
 	// Update rejects an empty configuration and changes to an unreadable existing
-	// configuration. Use a key with readBucketReplications when changing replication.
+	// configuration. Changing replication requires readBucketReplications and
+	// writeBucketReplications, in addition to the normal bucket-update permissions.
 	// B2 requires a verified email and payment history before first configuration.
 	ReplicationConfig           *ReplicationConfiguration
 	replicationConfigUnreadable bool
@@ -359,7 +360,8 @@ type ReplicationConfiguration struct {
 type AsReplicationDestination struct {
 	// SourceToDestinationKeyMapping uses source application-key IDs as keys and
 	// destination application-key IDs as values. Bucket.Update rejects both nil
-	// and empty maps; neither is a supported way to clear the destination role.
+	// and empty maps because the current wire encoding omits the required mapping
+	// field. Neither form is a supported way to clear the destination role.
 	SourceToDestinationKeyMapping map[string]string
 }
 

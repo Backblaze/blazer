@@ -399,6 +399,8 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 			return errors.New("b2: replication configuration requires a source or destination")
 		}
 		if dest := cfg.AsReplicationDestination; dest != nil && len(dest.SourceToDestinationKeyMapping) == 0 {
+			// The wire type omits nil/empty maps. B2 rejects the resulting
+			// destination object because the required mapping field is missing.
 			return errors.New("b2: replication destination requires a non-empty key mapping")
 		}
 	}
@@ -465,10 +467,6 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 
 	newBucket, err := b.b.Update(ctx)
 	if err == nil {
-		// An unrelated update does not make hidden replication settings readable.
-		if b.b.ReplicationConfigurationUnreadable {
-			newBucket.ReplicationConfigurationUnreadable = true
-		}
 		b.b = newBucket
 	} else {
 		b.b.DefaultRetention = previousRetention
