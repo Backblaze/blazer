@@ -106,7 +106,7 @@ type b2FileChunkInterface interface {
 
 type b2FileReaderInterface interface {
 	io.ReadCloser
-	stats() (int, string, string, map[string]string)
+	stats() (int64, string, string, map[string]string)
 	id() string
 }
 
@@ -866,8 +866,12 @@ func (b *b2FileReader) Close() error {
 	return b.b.Close()
 }
 
-func (b *b2FileReader) stats() (int, string, string, map[string]string) {
-	return b.b.ContentLength, b.b.ContentType, b.b.SHA1, b.b.Info
+func (b *b2FileReader) stats() (int64, string, string, map[string]string) {
+	size := int64(b.b.ContentLength)
+	if body, ok := b.b.ReadCloser.(interface{ Size() int64 }); ok {
+		size = body.Size()
+	}
+	return size, b.b.ContentType, b.b.SHA1, b.b.Info
 }
 
 func (b *b2FileReader) id() string { return b.b.ID }

@@ -3,6 +3,7 @@ package base
 import (
 	"context"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,7 +42,7 @@ func FuzzDownloadFileIDQuery(f *testing.F) {
 }
 
 func FuzzFileReaderHeaders(f *testing.F) {
-	for _, length := range []string{"0", "-1", "2147483648", "9223372036854775807", "bogus"} {
+	for _, length := range []string{"0", "-1", "2147483648", "3221225472", "9223372036854775807", "bogus"} {
 		f.Add(length, "Key", "value")
 	}
 	f.Fuzz(func(t *testing.T, length, key, value string) {
@@ -58,8 +59,15 @@ func FuzzFileReaderHeaders(f *testing.F) {
 			}
 		}()
 		n, parseErr := strconv.ParseInt(length, 10, 64)
-		if parseErr != nil || n < 0 || int64(r.ContentLength) != n {
+		if parseErr != nil || n < 0 {
 			t.Fatalf("invalid content length accepted: %q -> %d", length, r.ContentLength)
+		}
+		want := n
+		if strconv.IntSize == 32 && n > math.MaxInt32 {
+			want = math.MaxInt32
+		}
+		if int64(r.ContentLength) != want {
+			t.Fatalf("content length %q -> %d, want %d", length, r.ContentLength, want)
 		}
 	})
 }

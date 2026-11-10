@@ -194,7 +194,7 @@ type beFileChunk struct {
 
 type beFileReaderInterface interface {
 	io.ReadCloser
-	stats() (int, string, string, map[string]string)
+	stats() (int64, string, string, map[string]string)
 	id() string
 }
 
@@ -1024,7 +1024,7 @@ func (b *beFileReader) Close() error {
 	return b.b2fileReader.Close()
 }
 
-func (b *beFileReader) stats() (int, string, string, map[string]string) {
+func (b *beFileReader) stats() (int64, string, string, map[string]string) {
 	return b.b2fileReader.stats()
 }
 
