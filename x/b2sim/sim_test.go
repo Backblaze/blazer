@@ -670,6 +670,42 @@ func TestMissingBucketResponses(t *testing.T) {
 	}
 }
 
+func TestListBucketsMissingFiltersReturnEmptyList(t *testing.T) {
+	// The bucketId and bucketName parameter contracts specify no buckets when
+	// there is no match: https://www.backblaze.com/apidocs/b2-list-buckets
+	sim := New()
+	kept := sim.Seed("kept")
+	deleted := sim.Seed("deleted")
+	responseJSON(t, postSimulatorJSON(t, sim, "b2_delete_bucket", map[string]any{"bucketId": deleted}))
+	for _, tc := range []struct {
+		name, key, value, wantID string
+	}{
+		{"existing ID", "bucketId", kept, kept},
+		{"deleted ID", "bucketId", deleted, ""},
+		{"existing name", "bucketName", "kept", kept},
+		{"deleted name", "bucketName", "deleted", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := responseJSON(t, postSimulatorJSON(t, sim, "b2_list_buckets", map[string]any{tc.key: tc.value}))
+			var body struct {
+				Buckets []struct {
+					ID string `json:"bucketId"`
+				} `json:"buckets"`
+			}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantID == "" {
+				if body.Buckets == nil || len(body.Buckets) != 0 {
+					t.Fatalf("missing bucket filter = %s, want HTTP 200 with buckets: []", data)
+				}
+			} else if len(body.Buckets) != 1 || body.Buckets[0].ID != tc.wantID {
+				t.Fatalf("existing bucket filter = %s, want only %q", data, tc.wantID)
+			}
+		})
+	}
+}
+
 func TestDeletedBucketIsNotExist(t *testing.T) {
 	ctx := context.Background()
 	sim := New()

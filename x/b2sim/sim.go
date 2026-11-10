@@ -361,6 +361,8 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		s.buckets[b.id] = b
 		return reply(req, 200, b.response())
 	case "b2_list_buckets":
+		// Bucket filters return an empty list when nothing matches; they do
+		// not have the missing-bucket errors of operations on a bucket.
 		result := make([]any, 0)
 		for _, b := range s.buckets {
 			if filter := str(args["bucketId"]); filter != "" && filter != b.id {
