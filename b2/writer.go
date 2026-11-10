@@ -936,6 +936,12 @@ func (ssecWriterOption) validateDefault() error {
 // overrides the bucket's default for this upload only; the setting is used for
 // a simple upload request or the large-file start request. It carries no
 // customer-managed key material.
+// Only "AES256" is supported. Invalid values cause the operation that starts
+// the upload (Write for multipart uploads or Close for simple uploads) to
+// return an error before sending an upload request.
+// An explicit writer encryption option overrides inherited client defaults.
+// Combining WithSSEB2 and WithSSECKey in one NewWriter call causes a non-empty
+// Write and Close to return an error.
 func WithSSEB2(algorithm string) WriterOption {
 	return WriterOptionFunc(func(w *Writer) {
 		w.encryption = &uploadEncryption{sse: newServerSideEncryption("SSE-B2", algorithm)}
