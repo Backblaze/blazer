@@ -65,9 +65,19 @@ The centrally owned `files.metadata` row was `partial` when checked. This is an
 existing claim under the harness contract, which runs checks for both `yes` and
 `partial`; the result below does not assert that the claim is already `yes`.
 
-The owner correction to `yes` is being submitted separately after verification.
-Until that correction merges, the canonical claim remains `partial`. This SDK
-PR creates no local capability card and changes no central harness policy.
+On 2026-11-10, capability owner `@ffumero2003` was informed of the canonical
+`partial` row and authorized a separate PR correcting only `files.metadata`
+after verification. This records owner coordination, rather than treating the
+scenario registration or a local claim as owner confirmation.
+
+**External blocker for R3 release closeout:** the owner-managed one-row claim
+correction must be reviewed and merged. Owner: `@ffumero2003`; dependency: the
+separate capability-card correction, whose proposed row cites the SDK revision
+above and its public API locations. Until that correction merges, the canonical
+claim remains `partial` and the full #340 closeout is pending. Merge that owner
+correction before closing #340. This SDK PR creates no local capability card,
+changes no central harness policy, and does not count the pending transition as
+PASS.
 
 Using the verified pinned simulator's lifecycle helper started a fresh instance
 on ephemeral loopback ports. The instance was stopped by an EXIT trap after the
