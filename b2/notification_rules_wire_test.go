@@ -96,8 +96,12 @@ func TestNotificationRulesReturnsServiceErrors(t *testing.T) {
 			bucket := newNotificationRulesWireBucket(t, srv)
 
 			err := test.run(context.Background(), bucket)
-			if status, code, _ := base.MsgCode(err); status != http.StatusBadRequest || code != test.code {
+			status, code, message := base.MsgCode(err)
+			if status != http.StatusBadRequest || code != test.code {
 				t.Errorf("service error = %d/%q, want 400/%q", status, code, test.code)
+			}
+			if message != "scripted service rejection" {
+				t.Errorf("service message = %q, want %q", message, "scripted service rejection")
 			}
 			requests := srv.Calls(test.call)
 			if len(requests) != 1 {

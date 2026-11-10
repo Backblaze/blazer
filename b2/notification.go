@@ -71,6 +71,7 @@ func (b *Bucket) NotificationRules(ctx context.Context) ([]NotificationRule, err
 // A nil or empty slice clears every rule. To add or modify one rule, callers
 // must first read the existing set, preserve the other rules, and write the
 // complete result. B2 ignores the server-managed suspension fields on set.
+// Suspended rules can only be deleted, not edited.
 func (b *Bucket) SetNotificationRules(ctx context.Context, rules []NotificationRule) error {
 	return b.b.setNotificationRules(ctx, rules)
 }
