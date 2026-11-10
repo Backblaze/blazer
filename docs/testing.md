@@ -119,9 +119,10 @@ no live B2 access) so a reviewer knows what is still open.
 
 `SetupReplication` takes caller-owned key IDs; it does not provision keys. `ReplicationStatus`
 reports configured rules, including disabled rules, rather than per-file replication progress.
-The tests and godoc in #339 leave the executable SDK code unchanged from main at
-`1acc73d81fdad30011069ecccb9fde43c8c8df78`. The SDK and simulator are separate
-repositories; their tested commit IDs are recorded separately below.
+The tests and godoc in #339 leave the executable SDK code unchanged. Both runs below used a clean SDK
+worktree at `44abeff395ecead3ea3fe719ee8f47b1f0a3de3e`, which includes all Go source and test changes in
+this PR. The following evidence-only commit changes no Go files. The simulator is a separate repository
+at `45c3ba60a944e574915b3d9b229a382e74151cb8`; that is not the SDK revision.
 
 The focused rejection tests cover an otherwise matching disabled rule with and without a destination
 mapping, and priority 2147483648 before any bucket reads or writes. The wire test preserves the literal
@@ -143,10 +144,19 @@ On 2026-11-10 the registered scenario passed against a fresh loopback B2 simulat
 SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=bucket.replication_helper \
 SDKHARNESS_SIMULATOR_URL=http://127.0.0.1:<port> \
   .sdkharness/tests/run-conformance
-# SDKHARNESS_RESULT conformance bucket.replication_helper PASS -
 ```
 
-A separate real-B2 run on the same SDK source passed all 17 checks in the existing local
+Recorded result (SDK revision checked again after the scenario):
+
+```text
+SDK_COMMIT=44abeff395ecead3ea3fe719ee8f47b1f0a3de3e
+SIMULATOR_COMMIT=45c3ba60a944e574915b3d9b229a382e74151cb8
+NOTE blazer bucket.replication_helper: source rules=1 destination mappings=1 repeat=unchanged
+SDKHARNESS_RESULT conformance bucket.replication_helper PASS -
+SDK_COMMIT_AFTER=44abeff395ecead3ea3fe719ee8f47b1f0a3de3e
+```
+
+A separate real-B2 run at the same clean SDK revision passed all 17 checks in the existing local
 `blazer-go-demo replicationhelper` cap, including cleanup:
 
 - Setup preserved an existing destination mapping and added the caller's source/destination key IDs.
@@ -157,6 +167,12 @@ A separate real-B2 run on the same SDK source passed all 17 checks in the existi
 - Real restricted keys without `readBucketReplications` demonstrated unreadable source and destination
   rejection by both setup and status, with configurations unchanged.
 - Cleanup deleted all three scratch buckets and six scratch keys. No key secrets were printed.
+
+```text
+SDK_COMMIT=44abeff395ecead3ea3fe719ee8f47b1f0a3de3e
+PASS replicationhelper: 17 checks passed
+SDK_COMMIT_AFTER=44abeff395ecead3ea3fe719ee8f47b1f0a3de3e
+```
 
 To reproduce against the checked-out SDK without changing the shared demo's module replacement, set
 `DEMO_DIR` to the existing configured live rig, then run from the SDK repository. This is an external,
