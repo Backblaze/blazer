@@ -526,6 +526,8 @@ func bucketResponseFields(t *testing.T, body json.RawMessage) map[string]json.Ra
 }
 
 func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
+	// The large starts only exercise int overflow on 32-bit hosts; CI runs
+	// this test on Linux/386. On 64-bit hosts they are out-of-range checks.
 	sim := New()
 	ctx := context.Background()
 	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
@@ -570,6 +572,19 @@ func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
 			}
 			if resp.StatusCode != tc.status {
 				t.Fatalf("status=%d body=%q, want %d", resp.StatusCode, body, tc.status)
+			}
+			if tc.status == http.StatusRequestedRangeNotSatisfiable {
+				var response struct {
+					Status  int    `json:"status"`
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal(body, &response); err != nil {
+					t.Fatal(err)
+				}
+				if response.Status != 416 || response.Code != "range_not_satisfiable" || response.Message != "range beyond end" {
+					t.Fatalf("unsatisfiable start = %+v, want 416 range_not_satisfiable: range beyond end", response)
+				}
 			}
 			if tc.body != "" && string(body) != tc.body {
 				t.Fatalf("body=%q, want %q", body, tc.body)
