@@ -76,6 +76,12 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - run: go test -race -shuffle=on -coverprofile=cover.out ./...
         shell: bash # Windows PowerShell splits cover.out into a separate .out package.
+      - name: Test simulator ranges on 32-bit Linux
+        if: ${{ matrix.os == 'ubuntu-latest' && matrix.go-version == 'stable' }}
+        run: go test -count=1 -run '^TestRangeBeyond32BitAndClippedEnd$' ./x/b2sim
+        env:
+          GOARCH: '386'
+          CGO_ENABLED: '0'
       - name: Upload coverage
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -526,6 +526,8 @@ func bucketResponseFields(t *testing.T, body json.RawMessage) map[string]json.Ra
 }
 
 func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
+	// The large starts only exercise int overflow on 32-bit hosts; CI runs
+	// this test on Linux/386. On 64-bit hosts they are out-of-range checks.
 	sim := New()
 	ctx := context.Background()
 	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
@@ -571,6 +573,19 @@ func TestRangeBeyond32BitAndClippedEnd(t *testing.T) {
 			if resp.StatusCode != tc.status {
 				t.Fatalf("status=%d body=%q, want %d", resp.StatusCode, body, tc.status)
 			}
+			if tc.status == http.StatusRequestedRangeNotSatisfiable {
+				var response struct {
+					Status  int    `json:"status"`
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal(body, &response); err != nil {
+					t.Fatal(err)
+				}
+				if response.Status != 416 || response.Code != "range_not_satisfiable" || response.Message != "range beyond end" {
+					t.Fatalf("unsatisfiable start = %+v, want 416 range_not_satisfiable: range beyond end", response)
+				}
+			}
 			if tc.body != "" && string(body) != tc.body {
 				t.Fatalf("body=%q, want %q", body, tc.body)
 			}
@@ -611,6 +626,168 @@ func TestBucketUpdateRejectsStaleRevision(t *testing.T) {
 	}
 }
 
+func TestMissingBucketResponses(t *testing.T) {
+	// B2 bucket-ID endpoints return 400 bad_bucket_id for a missing bucket:
+	// https://www.backblaze.com/apidocs/b2-delete-bucket
+	sim := New()
+	id := sim.Seed("deleted-bucket")
+	responseJSON(t, postSimulatorJSON(t, sim, "b2_delete_bucket", map[string]any{"bucketId": id}))
+	for _, method := range []string{
+		"b2_update_bucket", "b2_delete_bucket", "b2_get_upload_url",
+		"b2_start_large_file", "b2_list_file_names", "b2_list_file_versions", "upload",
+	} {
+		t.Run(method, func(t *testing.T) {
+			var resp *http.Response
+			if method == "upload" {
+				req, err := http.NewRequest(http.MethodPost, origin+"/upload/file/"+id, strings.NewReader("content"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Authorization", "b2sim-token")
+				req.Header.Set("X-Bz-File-Name", "object")
+				req.Header.Set("X-Bz-Content-Sha1", digest([]byte("content")))
+				resp, err = sim.RoundTrip(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				resp = postSimulatorJSON(t, sim, method, map[string]any{"bucketId": id})
+			}
+			defer func() { _ = resp.Body.Close() }()
+			var body struct {
+				Status  int    `json:"status"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			wantMessage := "Bucket " + id + " does not exist"
+			if resp.StatusCode != 400 || body.Status != 400 || body.Code != "bad_bucket_id" || body.Message != wantMessage {
+				t.Fatalf("missing bucket response: HTTP %d %+v, want 400 bad_bucket_id %q", resp.StatusCode, body, wantMessage)
+			}
+		})
+	}
+}
+
+func TestListBucketsMissingFiltersReturnEmptyList(t *testing.T) {
+	// The bucketId and bucketName parameter contracts specify no buckets when
+	// there is no match: https://www.backblaze.com/apidocs/b2-list-buckets
+	sim := New()
+	kept := sim.Seed("kept")
+	deleted := sim.Seed("deleted")
+	responseJSON(t, postSimulatorJSON(t, sim, "b2_delete_bucket", map[string]any{"bucketId": deleted}))
+	for _, tc := range []struct {
+		name, key, value, wantID string
+	}{
+		{"existing ID", "bucketId", kept, kept},
+		{"deleted ID", "bucketId", deleted, ""},
+		{"existing name", "bucketName", "kept", kept},
+		{"deleted name", "bucketName", "deleted", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := responseJSON(t, postSimulatorJSON(t, sim, "b2_list_buckets", map[string]any{tc.key: tc.value}))
+			var body struct {
+				Buckets []struct {
+					ID string `json:"bucketId"`
+				} `json:"buckets"`
+			}
+			if err := json.Unmarshal(data, &body); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantID == "" {
+				if body.Buckets == nil || len(body.Buckets) != 0 {
+					t.Fatalf("missing bucket filter = %s, want HTTP 200 with buckets: []", data)
+				}
+			} else if len(body.Buckets) != 1 || body.Buckets[0].ID != tc.wantID {
+				t.Fatalf("existing bucket filter = %s, want only %q", data, tc.wantID)
+			}
+		})
+	}
+}
+
+func TestDeletedBucketIsNotExist(t *testing.T) {
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "deleted-bucket", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bucket.Delete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("delete again", func(t *testing.T) {
+		if err := bucket.Delete(ctx); !b2.IsNotExist(err) {
+			t.Fatalf("Delete() error = %v, want b2.IsNotExist", err)
+		}
+	})
+	for _, hidden := range []bool{false, true} {
+		t.Run(fmt.Sprintf("list hidden=%t", hidden), func(t *testing.T) {
+			var opts []b2.ListOption
+			if hidden {
+				opts = append(opts, b2.ListHidden())
+			}
+			iter := bucket.List(ctx, opts...)
+			if iter.Next() {
+				t.Fatal("deleted bucket returned an object")
+			}
+			if err := iter.Err(); !b2.IsNotExist(err) {
+				t.Fatalf("iterator error = %v, want b2.IsNotExist", err)
+			}
+		})
+	}
+}
+
+func TestDeleteNonEmptyBucketPreservesFiles(t *testing.T) {
+	// https://www.backblaze.com/apidocs/b2-delete-bucket
+	ctx := context.Background()
+	sim := New()
+	client, err := b2.NewClient(ctx, "id", "key", b2.Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "nonempty-bucket", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := writeObject(ctx, bucket, "object", []byte("content"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := postSimulatorJSON(t, sim, "b2_delete_bucket", map[string]any{"bucketId": bucket.ID()})
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Status int    `json:"status"`
+		Code   string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 400 || body.Status != 400 || body.Code != "cannot_delete_non_empty_bucket" {
+		t.Fatalf("nonempty bucket response: HTTP %d %+v, want 400 cannot_delete_non_empty_bucket", resp.StatusCode, body)
+	}
+	listed, err := client.Bucket(ctx, bucket.Name())
+	if err != nil || listed.ID() != bucket.ID() {
+		t.Fatalf("bucket after rejected delete = %v, %v; want original bucket", listed, err)
+	}
+	if got, err := readObject(ctx, object, 0, -1); err != nil || string(got) != "content" {
+		t.Fatalf("file after rejected delete = %q, %v; want content, nil", got, err)
+	}
+	if err := object.Delete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := bucket.Delete(ctx); err != nil {
+		t.Fatalf("empty bucket delete = %v, want nil", err)
+	}
+	if got := sim.Buckets(); len(got) != 0 {
+		t.Fatalf("buckets after successful deletion = %v, want none", got)
+	}
+}
+
 func uploadSimulatorPart(t *testing.T, sim *Simulator, fileID string, number int, data []byte) string {
 	t.Helper()
 	checksum := fmt.Sprintf("%x", sha1.Sum(data))
@@ -641,11 +818,13 @@ func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
 		name       string
 		numbers    [2]int
 		wantStatus int
+		emptyHash  bool
 	}{
-		{"missing first", [2]int{2, 3}, 400},
+		{"missing first", [2]int{2, 3}, 400, false},
 		// A missing final part cannot be rejected by the non-final-size check.
-		{"missing final", [2]int{1, 3}, 400},
-		{"contiguous control", [2]int{1, 2}, 200},
+		{"missing final", [2]int{1, 3}, 400, false},
+		{"missing final with empty hash", [2]int{1, 3}, 400, true},
+		{"contiguous control", [2]int{1, 2}, 200, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sim := New()
@@ -666,9 +845,15 @@ func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
 				uploadSimulatorPart(t, sim, started.FileID, tc.numbers[0], first),
 				uploadSimulatorPart(t, sim, started.FileID, tc.numbers[1], last),
 			}
+			if tc.emptyHash {
+				// Counts match, the first part meets the minimum, and a missing
+				// final part has no stored hash to distinguish it from this value.
+				hashes[1] = ""
+			}
 			finish := postSimulatorJSON(t, sim, "b2_finish_large_file", map[string]any{"fileId": started.FileID, "partSha1Array": hashes})
 			var body struct {
-				Code string `json:"code"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
 			}
 			if err := json.NewDecoder(finish.Body).Decode(&body); err != nil {
 				t.Fatal(err)
@@ -680,6 +865,9 @@ func TestFinishRejectsMissingPartWithoutLosingUpload(t *testing.T) {
 				t.Fatalf("finish status=%d code=%q, want %d", finish.StatusCode, body.Code, tc.wantStatus)
 			}
 			if tc.wantStatus == 400 {
+				if tc.emptyHash && body.Message != "part SHA1 mismatch" {
+					t.Fatalf("missing-part message = %q, want part SHA1 mismatch", body.Message)
+				}
 				if body.Code != "bad_request" || sim.large[started.FileID] == nil || len(sim.buckets[id].versions) != 0 {
 					t.Fatalf("failed finish: code=%q unfinished=%t versions=%d, want bad_request, retained upload, no version", body.Code, sim.large[started.FileID] != nil, len(sim.buckets[id].versions))
 				}
@@ -1261,11 +1449,21 @@ func TestDeleteBucketRejectsUnfinishedLargeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp := postSimulatorJSON(t, sim, "b2_delete_bucket", map[string]any{"bucketId": bucketID})
+	var rejected struct {
+		Status int    `json:"status"`
+		Code   string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rejected); err != nil {
+		t.Fatal(err)
+	}
 	if err := resp.Body.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("delete with unfinished upload = %d, want 400", resp.StatusCode)
+	}
+	if rejected.Status != 400 || rejected.Code != "cannot_delete_non_empty_bucket" || sim.large[body.FileID] == nil {
+		t.Fatalf("delete with unfinished upload = %+v, retained=%t; want 400 cannot_delete_non_empty_bucket and retained upload", rejected, sim.large[body.FileID] != nil)
 	}
 	resp = postSimulatorJSON(t, sim, "b2_cancel_large_file", map[string]any{"fileId": body.FileID})
 	if err := resp.Body.Close(); err != nil {
