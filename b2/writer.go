@@ -51,6 +51,9 @@ type Writer struct {
 	// sse_c_key_id in file info; missing or different IDs are rejected. The ID
 	// must uniquely identify the key: B2 rejects wrong keys on uploaded parts,
 	// but receives no key if every existing part is skipped.
+	// WithFileRetention and WithLegalHold must match the unfinished file when
+	// supplied. Unspecified lock settings keep the unfinished file's settings;
+	// omitting the options does not request removal of existing protection.
 	Resume bool
 
 	// ChunkSize is the size, in bytes, of each individual part, when writing

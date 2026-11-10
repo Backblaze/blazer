@@ -239,6 +239,13 @@ func TestObjectUpdateFileRetentionReachesTheWire(t *testing.T) {
 		t.Errorf("body = %v, want governance through 1735689600000 with bypassGovernance", w.body)
 	}
 
+	if err := w.object(t).UpdateFileRetention(ctx, &FileRetention{Mode: RetentionGovernance, RetainUntil: lockUntil}, false); err != nil {
+		t.Fatal(err)
+	}
+	if w.body["bypassGovernance"] != false {
+		t.Errorf("bypassGovernance = %v, want explicit false", w.body["bypassGovernance"])
+	}
+
 	if err := w.object(t).UpdateFileRetention(ctx, nil, true); err != nil {
 		t.Fatal(err)
 	}
