@@ -144,6 +144,9 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 // symlinked root is followed. Changed large files are re-uploaded in full,
 // without resuming a previous upload. Per-file failures are returned in
 // Result.Failed along with an aggregate error; other files continue.
+// Unix rejects replaced FIFOs without blocking, and Windows does not follow a
+// final reparse-point replacement. Other platforms check file type and identity
+// but cannot guarantee that opening a replaced special file will not block.
 func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts ...Option) (*Result, error) {
 	return syncWithLocalIO(ctx, bucket, prefix, localRoot, filepath.WalkDir, fileSHA1, opts...)
 }
