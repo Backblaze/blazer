@@ -89,6 +89,7 @@ type ReplicationRuleStatus struct{ ReplicationRules }
 // ReplicationStatus returns all of the source bucket's configured replication
 // rules, including disabled rules. It reports an error if the configuration
 // cannot be read. It does not scan files or report per-file replication progress.
+// The bucket client's key needs listBuckets and readBucketReplications.
 func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatus, error) {
 	if src == nil {
 		return nil, fmt.Errorf("replication status: source bucket is nil")
@@ -114,12 +115,17 @@ func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatu
 // key IDs. Callers must provision and own bucket-scoped keys: the source key needs
 // readFiles, readFileLegalHolds and readFileRetentions; the destination key needs
 // writeFiles, writeFileLegalHolds, writeFileRetentions and deleteFiles. The helper
-// neither creates keys nor validates their permissions. Both bucket clients need
-// read access to their replication configuration. Adding a source rule requires
-// update permission for both buckets, including retries: the destination update
-// is repeated even if its mapping already matches. Repairing just a missing
-// destination mapping needs update permission only for the destination. An exact
-// existing rule and mapping need no update permission.
+// neither creates keys nor validates their permissions.
+//
+// The keys authenticating the bucket clients need listBuckets and
+// readBucketReplications to read configurations. Clients that perform updates
+// need writeBuckets and writeBucketReplications for the update-bucket requests.
+// These are management capabilities, distinct from the file capabilities of the
+// supplied replication keys. Adding a source rule requires update permission for
+// both buckets, including retries: the destination update is repeated even if its
+// mapping already matches. Repairing just a missing destination mapping needs
+// update permission only for the destination. An exact existing rule and mapping
+// need no update permission.
 //
 // The helper preserves existing rules and key mappings. It rejects unreadable
 // configurations, conflicting source keys or destination mappings, and an existing

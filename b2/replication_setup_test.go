@@ -568,6 +568,27 @@ func TestSetupReplicationRejectsEmptyKeyIDs(t *testing.T) {
 	}
 }
 
+func TestReplicationStatusIncludesDisabledRules(t *testing.T) {
+	enabled := ReplicationRules{ReplicationRuleName: "enabled", DestinationBucketID: "dst-id", FileNamePrefix: "logs/", IncludeExistingFiles: true, IsEnabled: true, Priority: 17}
+	disabled := ReplicationRules{ReplicationRuleName: "disabled", DestinationBucketID: "other-dst", FileNamePrefix: "archive/", IncludeExistingFiles: false, IsEnabled: false, Priority: 22}
+	config := &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{
+		SourceApplicationKeyID: "source-key",
+		ReplicationRules:       []ReplicationRules{enabled, disabled},
+	}}
+	_, srcBackend, dstBackend, src, _ := replicationTestPair(t, config, nil)
+	got, err := ReplicationStatus(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ReplicationRuleStatus{{ReplicationRules: enabled}, {ReplicationRules: disabled}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReplicationStatus() = %+v, want %+v", got, want)
+	}
+	if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+		t.Fatal("ReplicationStatus changed a bucket configuration")
+	}
+}
+
 func TestReplicationStatusRejectsUnreadableConfig(t *testing.T) {
 	_, srcBackend, _, src, _ := replicationTestPair(t, nil, nil)
 	srcBackend.unreadable = true

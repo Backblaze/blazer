@@ -130,6 +130,8 @@ mapping, and priority 2147483648 before any bucket reads or writes. The wire tes
 default priority 128 assertion and checks that the inclusive maximum 2147483647 reaches the source
 update unchanged. The oversized input cannot be represented by `int` on 32-bit targets, so only that
 case skips there; the maximum-priority wire case still runs.
+`TestReplicationStatusIncludesDisabledRules` independently checks that status returns both enabled
+and disabled rules with every configured field unchanged, without updating either bucket.
 
 Each independent break was killed and passed after restoration:
 
@@ -138,6 +140,7 @@ Each independent break was killed and passed after restoration:
 | Remove `\|\| !rule.IsEnabled` | `TestSetupReplicationRejectsDisabledRule` | Both mapping cases returned nil instead of the rule-conflict error. |
 | Remove `\|\| settings.priority > maxReplicationPriority` | `TestSetupReplicationRejectsTooLargePriority` | Priority 2147483648 returned nil instead of the priority-validation error. |
 | Change `settings.priority > maxReplicationPriority` to `>=` | `TestSetupReplicationDefaultAndMaximumPriorityOnWire/maximum` | Valid priority 2147483647 was rejected. |
+| Filter out disabled rules in `ReplicationStatus` | `TestReplicationStatusIncludesDisabledRules` | Only the enabled rule was returned instead of both configured rules. |
 
 On 2026-11-10 the registered scenario passed against a fresh loopback B2 simulator:
 
