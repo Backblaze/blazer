@@ -31,6 +31,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
+	"github.com/Backblaze/blazer/internal/b2types"
 	"github.com/Backblaze/blazer/internal/blog"
 	"github.com/Backblaze/blazer/x/transport"
 )
@@ -1685,4 +1687,148 @@ func startLiveTest(ctx context.Context, t *testing.T) (*Bucket, func()) {
 		}
 	}
 	return bucket, f
+}
+
+// TestReplicationDestinationPartialUpdateLive verifies that a metadata-only
+// update needs no replication-write capability and preserves the destination.
+func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
+	id, secret := os.Getenv(apiID), os.Getenv(apiKey)
+	if id == "" || secret == "" {
+		t.Skip("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := NewClient(ctx, id, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buckets []*Bucket
+	var keys []*Key
+	// This test creates two buckets and three scoped keys. Cleanup must still
+	// work after the operation context expires or a setup step fails.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		for _, bucket := range buckets {
+			if err := bucket.Delete(cleanupCtx); err != nil {
+				t.Errorf("cleanup replication bucket: %v", err)
+			}
+		}
+		for _, key := range keys {
+			if err := key.Delete(cleanupCtx); err != nil {
+				t.Errorf("cleanup replication key: %v", err)
+			}
+		}
+	})
+	for _, role := range []string{"source", "destination"} {
+		bucket, err := client.NewBucket(ctx, "blazer-repl-"+role+"-"+uniq, &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatal(err)
+		}
+		buckets = append(buckets, bucket)
+	}
+	source, destination := buckets[0], buckets[1]
+	for _, entry := range []struct {
+		bucket *Bucket
+		name   string
+		caps   []string
+	}{
+		{source, "source", []string{"readFiles", "readFileLegalHolds", "readFileRetentions"}},
+		{destination, "destination", []string{"writeFiles", "writeFileLegalHolds", "writeFileRetentions", "deleteFiles"}},
+		// Cached SSE settings are still resent by unrelated updates (#108).
+		// Allow that write here to isolate the missing replication-write capability.
+		{destination, "metadata", []string{"listBuckets", "writeBuckets", "readBucketReplications", "writeBucketEncryption"}},
+	} {
+		key, err := entry.bucket.CreateKey(ctx, "blazer-repl-"+entry.name+"-"+uniq, Capabilities(entry.caps...), Lifetime(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key)
+	}
+	want := map[string]string{keys[0].ID(): keys[1].ID()}
+	if err := destination.Update(ctx, &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{
+		AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: want},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	limited, err := NewClient(ctx, keys[2].ID(), keys[2].Secret())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := limited.Bucket(ctx, destination.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"first", "second"} {
+		if err := dst.Update(ctx, &BucketAttrs{Info: map[string]string{"metadata": value}}); err != nil {
+			t.Fatalf("metadata update without replication-write capability: %v", err)
+		}
+		attrs, err := destination.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.Info["metadata"] != value {
+			t.Errorf("metadata = %q, want %q", attrs.Info["metadata"], value)
+		}
+		if attrs.ReplicationConfig == nil || attrs.ReplicationConfig.AsReplicationDestination == nil ||
+			!reflect.DeepEqual(attrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping, want) {
+			t.Fatal("metadata-only update did not preserve the destination key mapping")
+		}
+	}
+	// Bypass high-level validation to pin why nil/empty maps are unsupported:
+	// the current wire encoder omits them, and B2 requires the mapping field.
+	// This checks field presence, not whether B2 accepts a present empty object.
+	raw, err := base.AuthorizeAccount(ctx, id, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := raw.ListBuckets(ctx, destination.Name())
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list destination for mapping contract: buckets=%d error=%v", len(listed), err)
+	}
+	for _, mapping := range []map[string]string{nil, {}} {
+		listed[0].ReplicationConfiguration = &b2types.ReplicationConfiguration{
+			AsReplicationDestination: &b2types.AsReplicationDestination{SourceToDestinationKeyMapping: mapping},
+		}
+		_, err := listed[0].Update(ctx)
+		status, code, message := base.MsgCode(err)
+		if status != http.StatusBadRequest || code != "bad_request" || !strings.Contains(message, "sourceToDestinationKeyMapping") {
+			t.Errorf("missing mapping field error = %v, want 400 bad_request naming sourceToDestinationKeyMapping", err)
+		}
+		attrs, err := destination.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.ReplicationConfig == nil || attrs.ReplicationConfig.AsReplicationDestination == nil ||
+			!reflect.DeepEqual(attrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping, want) {
+			t.Fatal("B2 changed the destination mapping after rejecting an omitted required field")
+		}
+	}
+	listed, err = raw.ListBuckets(ctx, source.Name())
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list source for mapping contract: buckets=%d error=%v", len(listed), err)
+	}
+	for _, mapping := range []map[string]string{nil, {}} {
+		listed[0].ReplicationConfiguration = &b2types.ReplicationConfiguration{
+			AsReplicationSource: &b2types.AsReplicationSource{
+				KeyID: keys[0].ID(), ReplicationRules: []b2types.ReplicationRules{{
+					DestinationBucketID: destination.ID(), FileNamePrefix: "demo/" + uniq + "/",
+					IsEnabled: true, Priority: 128, ReplicationRuleName: "mapping-contract",
+				}},
+			},
+			AsReplicationDestination: &b2types.AsReplicationDestination{SourceToDestinationKeyMapping: mapping},
+		}
+		_, err := listed[0].Update(ctx)
+		status, code, message := base.MsgCode(err)
+		if status != http.StatusBadRequest || code != "bad_request" || !strings.Contains(message, "sourceToDestinationKeyMapping") {
+			t.Errorf("source plus omitted mapping field error = %v, want 400 bad_request naming sourceToDestinationKeyMapping", err)
+		}
+		attrs, err := source.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.ReplicationConfig != nil {
+			t.Fatal("B2 changed source replication after rejecting an omitted required mapping field")
+		}
+	}
 }

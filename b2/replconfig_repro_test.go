@@ -98,18 +98,19 @@ func TestReplConfig_NilDeref(t *testing.T) {
 		t.Fatalf("updateBucket with ReplicationConfig omitted: %v", err)
 	}
 	got := f.lastReplication(t)
-	want := map[string]any{"asReplicationSource": map[string]any{
-		"sourceApplicationKeyId": "cached-key",
-		"replicationRules": []any{map[string]any{
-			"replicationRuleName": "cached-rule", "destinationBucketId": "dest",
-			"fileNamePrefix": "", "includeExistingFiles": false, "isEnabled": true, "priority": float64(1),
-		}},
-	}}
 	if seeded != nil {
 		t.Errorf("first update sent replicationConfiguration %v, want none (cache was empty)", seeded)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("replicationConfiguration after omitting the caller config = %v, want the cached config %v", got, want)
+	if got != nil {
+		t.Errorf("replicationConfiguration after omitting the caller config = %v, want none", got)
+	}
+	if len(f.updates) != 2 {
+		t.Fatalf("update requests = %d, want 2", len(f.updates))
+	}
+	for i, update := range f.updates {
+		if _, sent := update["replicationConfiguration"]; sent {
+			t.Errorf("update %d sent replicationConfiguration, want field absent", i+1)
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ package b2
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -252,6 +253,9 @@ func (*b2Root) reupload(err error) bool {
 }
 
 func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (b2BucketInterface, error) {
+	if err := validateReplicationConfiguration(replicationConfig); err != nil {
+		return nil, err
+	}
 	var baseRules []base.LifecycleRule
 	for _, rule := range rules {
 		baseRules = append(baseRules, base.LifecycleRule{
@@ -301,17 +305,33 @@ func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
 	return out
 }
 
+func replicationSourceSet(source AsReplicationSource) bool {
+	return source.SourceApplicationKeyID != "" || len(source.ReplicationRules) > 0
+}
+
+func validateReplicationConfiguration(cfg *ReplicationConfiguration) error {
+	if cfg == nil {
+		return nil
+	}
+	if !replicationSourceSet(cfg.AsReplicationSource) && cfg.AsReplicationDestination == nil {
+		return errors.New("b2: replication configuration requires a source or destination")
+	}
+	return nil
+}
+
 func toBaseReplicationConfiguration(attrs *ReplicationConfiguration, existing *b2types.ReplicationConfiguration) *b2types.ReplicationConfiguration {
 	if attrs == nil {
 		return nil
 	}
 	cfg := &b2types.ReplicationConfiguration{}
 	source := attrs.AsReplicationSource
-	if source.SourceApplicationKeyID != "" || source.ReplicationRules != nil {
+	if replicationSourceSet(source) {
 		cfg.AsReplicationSource = &b2types.AsReplicationSource{
 			KeyID:            source.SourceApplicationKeyID,
 			ReplicationRules: make([]b2types.ReplicationRules, len(source.ReplicationRules)),
 		}
+	} else if existing != nil {
+		cfg.AsReplicationSource = existing.AsReplicationSource
 	}
 	for i, rule := range source.ReplicationRules {
 		cfg.AsReplicationSource.ReplicationRules[i] = b2types.ReplicationRules{
@@ -389,6 +409,13 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs == nil {
 		return nil
 	}
+	if err := validateReplicationConfiguration(attrs.ReplicationConfig); err != nil {
+		return err
+	}
+	if cfg := attrs.ReplicationConfig; cfg != nil && b.b.ReplicationConfigurationUnreadable &&
+		(!replicationSourceSet(cfg.AsReplicationSource) || cfg.AsReplicationDestination == nil) {
+		return errors.New("b2: cannot update unreadable replication configuration")
+	}
 	if attrs.Type != UnknownType {
 		b.b.Type = string(attrs.Type)
 	}
@@ -444,6 +471,10 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	previousReplication := b.b.ReplicationConfiguration
 	if attrs.ReplicationConfig != nil {
 		b.b.ReplicationConfiguration = toBaseReplicationConfiguration(attrs.ReplicationConfig, b.b.ReplicationConfiguration)
+	} else {
+		// Replication settings require a separate write capability. Cached values
+		// must not turn an unrelated update into a replication update.
+		b.b.ReplicationConfiguration = nil
 	}
 
 	newBucket, err := b.b.Update(ctx)
