@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build unix
+//go:build (linux && !android) || (darwin && !ios)
 
 package sync
 
@@ -20,6 +20,8 @@ import (
 	"os"
 	"syscall"
 )
+
+func checkSyncPlatform() error { return nil }
 
 func openSyncFile(path string) (*os.File, error) {
 	// Check the opened descriptor in openWalkedFile. A replaced FIFO must not

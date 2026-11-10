@@ -12,24 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !unix && !windows
+//go:build (!linux && !darwin && !windows) || android || ios
 
 package sync
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 )
 
-func openSyncFile(path string) (*os.File, error) {
-	// These platforms lack the Unix/Windows atomic-open protection. Keep their
-	// existing file support, with a pre-open type check and post-open identity checks.
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("sync: file %q is not a regular file", path)
-	}
-	return os.Open(path)
+func checkSyncPlatform() error {
+	return fmt.Errorf("sync: %s/%s: %w", runtime.GOOS, runtime.GOARCH, errors.ErrUnsupported)
+}
+
+func openSyncFile(string) (*os.File, error) {
+	return nil, checkSyncPlatform()
 }

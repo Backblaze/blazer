@@ -19,6 +19,8 @@ import (
 	"syscall"
 )
 
+func checkSyncPlatform() error { return nil }
+
 func openSyncFile(path string) (*os.File, error) {
 	// Open the final reparse point itself, rather than following a replacement
 	// symlink between the walk and open. openWalkedFile then rejects its type.

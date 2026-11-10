@@ -14,8 +14,8 @@
 
 // Package sync pushes a local directory tree into a B2 bucket prefix. The local
 // tree is the source of truth: a file differing under the selected comparison
-// policy overwrites the cloud version,
-// even when the cloud version is newer. This package has no skip-newer or
+// policy overwrites the cloud version, even when the cloud version is newer.
+// This package has no skip-newer or
 // replace-newer mode, does not delete cloud-only files, and does not resume
 // interrupted large-file uploads. Symlinks below the root are not followed;
 // a symlinked root is resolved before the walk.
@@ -137,17 +137,22 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 
 // Sync pushes files below localRoot into bucket under prefix. The local tree is
 // the source of truth: a local file differing under the comparison policy
-// overwrites the cloud copy even
-// when its modification time is older; skip-newer and replace-newer policies
+// overwrites the cloud copy even when its modification time is older;
+// skip-newer and replace-newer policies
 // are not available. Matching files are skipped, and cloud objects are never
 // deleted. Symlinks below the root are not followed; a
 // symlinked root is followed. Changed large files are re-uploaded in full,
 // without resuming a previous upload. Per-file failures are returned in
 // Result.Failed along with an aggregate error; other files continue.
-// Unix rejects replaced FIFOs without blocking, and Windows does not follow a
-// final reparse-point replacement. Other platforms check file type and identity
-// but cannot guarantee that opening a replaced special file will not block.
+// Linux and macOS reject replaced FIFOs without blocking; Windows does not
+// follow a final reparse-point replacement. On other platforms, Sync returns
+// a nil result and an error wrapping errors.ErrUnsupported with GOOS/GOARCH
+// context before walking local files or making B2 requests. The package still
+// builds on those platforms.
 func Sync(ctx context.Context, bucket *b2.Bucket, prefix, localRoot string, opts ...Option) (*Result, error) {
+	if err := checkSyncPlatform(); err != nil {
+		return nil, err
+	}
 	return syncWithLocalIO(ctx, bucket, prefix, localRoot, filepath.WalkDir, fileSHA1, opts...)
 }
 
