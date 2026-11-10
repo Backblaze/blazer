@@ -152,6 +152,24 @@ func TestBucketUpdateRejectsUnsafeReplicationWire(t *testing.T) {
 	}
 }
 
+func TestBucketUpdateKeepsUnreadableReplicationStateWire(t *testing.T) {
+	srv, bucket := replicationUpdateWireBucket(t, unreadableReplicationUpdateJSON)
+	if err := bucket.Update(context.Background(), &BucketAttrs{Info: map[string]string{"metadata": "changed"}}); err != nil {
+		t.Fatal(err)
+	}
+	before := len(srv.Requests())
+	err := bucket.Update(context.Background(), &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{
+		AsReplicationSource: AsReplicationSource{SourceApplicationKeyID: "source-key"},
+	}})
+	const want = "b2: cannot update unreadable replication configuration"
+	if err == nil || err.Error() != want {
+		t.Errorf("Update after metadata-only update = %v, want %q", err, want)
+	}
+	if got := len(srv.Requests()) - before; got != 0 {
+		t.Errorf("HTTP requests from unreadable replication update = %d, want 0", got)
+	}
+}
+
 // https://www.backblaze.com/docs/cloud-storage-create-a-cloud-replication-rule-with-the-native-api
 // defines map keys as source key IDs and values as destination key IDs.
 func TestBucketUpdateReplacesDestinationMappingWire(t *testing.T) {
