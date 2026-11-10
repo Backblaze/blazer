@@ -1,3 +1,0 @@
-kind: Fixed
-body: Download-by-ID logging and free-form error details redact file IDs; HTTP status and B2 error codes remain available.
-time: 2026-10-26T16:39:23.980556-05:00

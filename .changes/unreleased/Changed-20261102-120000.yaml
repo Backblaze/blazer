@@ -1,3 +1,0 @@
-kind: Changed
-body: "**Breaking:** `(*base.B2).CreateKey`, `CreateKeyMultiBucket`, and `(*base.Bucket).GetDownloadAuthorization` now reject negative lifetimes, positive lifetimes below one second, and lifetimes of 1000 days or more with `base.ErrInvalidDuration`. This also applies to `b2.Lifetime`, `b2.Deadline`, `Bucket.AuthToken`, and `Object.AuthURL`. Pass a lifetime of at least one second (longer fractional values truncate to whole seconds) and below 1000 days for keys, or zero for a non-expiring key; download authorization requires 1 to 604800 seconds."
-time: 2026-11-02T12:00:00.000000-06:00

@@ -1,3 +1,0 @@
-kind: Fixed
-body: '`(*b2.Bucket).Compose` documentation distinguishes locally validated sizes from final whole-file copies, whose size limits are enforced by B2 after the large file starts.'
-time: 2026-11-10T12:27:20.674-06:00
