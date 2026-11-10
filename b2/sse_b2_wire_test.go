@@ -424,19 +424,36 @@ func TestSSEB2AndSSECWriterOptionsAreMutuallyExclusive(t *testing.T) {
 func TestWithSSEB2RejectsInvalidAlgorithmsWithoutUpload(t *testing.T) {
 	for _, algorithm := range []string{"", "AES128"} {
 		t.Run(fmt.Sprintf("%q", algorithm), func(t *testing.T) {
-			wire := newSSEB2Wire(t)
-			writer := wire.bucket(t).Object("invalid").NewWriter(context.Background(), WithSSEB2(algorithm))
-			if _, err := writer.Write([]byte("x")); err != nil {
-				t.Fatal(err)
-			}
-			if err := writer.Close(); err == nil || !strings.Contains(err.Error(), "AES256") {
-				t.Fatalf("Close error = %v, want an AES256 validation error", err)
-			}
-			if uploads := wire.requestsTo("/upload"); len(uploads) != 0 {
-				t.Errorf("invalid algorithm sent %d upload request(s)", len(uploads))
-			}
-			if starts := wire.requestsTo("/b2api/v4/b2_start_large_file"); len(starts) != 0 {
-				t.Errorf("invalid algorithm sent %d start_large_file request(s)", len(starts))
+			for _, tc := range []struct {
+				name         string
+				chunkSize    int
+				wantWriteErr bool
+			}{
+				{"simple", 0, false},
+				{"multipart", 1, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					wire := newSSEB2Wire(t)
+					writer := wire.bucket(t).Object("invalid").NewWriter(context.Background(), WithSSEB2(algorithm))
+					writer.ChunkSize = tc.chunkSize
+					_, writeErr := writer.Write([]byte("xy"))
+					if tc.wantWriteErr {
+						if writeErr == nil || !strings.Contains(writeErr.Error(), "AES256") {
+							t.Fatalf("Write error = %v, want an AES256 validation error", writeErr)
+						}
+					} else if writeErr != nil {
+						t.Fatal(writeErr)
+					}
+					if err := writer.Close(); err == nil || !strings.Contains(err.Error(), "AES256") {
+						t.Fatalf("Close error = %v, want an AES256 validation error", err)
+					}
+					if uploads := wire.requestsTo("/upload"); len(uploads) != 0 {
+						t.Errorf("invalid algorithm sent %d upload request(s)", len(uploads))
+					}
+					if starts := wire.requestsTo("/b2api/v4/b2_start_large_file"); len(starts) != 0 {
+						t.Errorf("invalid algorithm sent %d start_large_file request(s)", len(starts))
+					}
+				})
 			}
 		})
 	}
