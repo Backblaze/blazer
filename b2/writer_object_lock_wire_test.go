@@ -19,7 +19,7 @@ const (
 	writerObjectLockMismatchJSON                 = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":null,"retainUntilTimestamp":null}},"legalHold":{"isClientAuthorizedToRead":true,"value":"off"}}],"nextFileId":null}`
 	writerObjectLockMatchJSON                    = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1767225600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
 	writerObjectLockMismatchError                = `b2: cannot resume "resumed": the unfinished upload does not have the requested retention`
-	writerObjectLockDifferentRetentionJSON       = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1735689600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
+	writerObjectLockDifferentRetentionJSON       = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1767225600001}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
 	writerObjectLockHoldMismatchJSON             = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"compliance","retainUntilTimestamp":1767225600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"off"}}],"nextFileId":null}`
 	writerObjectLockHoldMismatchError            = `b2: cannot resume "resumed": the unfinished upload does not have the requested legal hold`
 )
@@ -172,29 +172,33 @@ func TestWriterSendsObjectLock(t *testing.T) {
 
 // B2 Object Lock file-info responses: https://www.backblaze.com/apidocs/b2-get-file-info
 func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
+	retentionOnly := []WriterOption{WithFileRetention(&FileRetention{
+		Mode: RetentionCompliance, RetainUntil: time.UnixMilli(writerObjectLockRetainUntilMillis),
+	})}
+	holdOnly := []WriterOption{WithLegalHold(LegalHoldOn)}
 	for _, tc := range []struct {
 		name     string
 		response string
 		wantErr  string
-		noLock   bool
+		options  []WriterOption
 	}{
-		{name: "mismatch", response: writerObjectLockMismatchJSON, wantErr: writerObjectLockMismatchError},
-		{name: "different retention", response: writerObjectLockDifferentRetentionJSON, wantErr: writerObjectLockMismatchError},
-		{name: "different mode", response: writerObjectLockDifferentModeJSON, wantErr: writerObjectLockMismatchError},
-		{name: "legal hold mismatch", response: writerObjectLockHoldMismatchJSON, wantErr: writerObjectLockHoldMismatchError},
-		{name: "match", response: writerObjectLockMatchJSON},
-		{name: "no lock requested", response: writerObjectLockMatchJSON, noLock: true},
+		{name: "mismatch", response: writerObjectLockMismatchJSON, wantErr: writerObjectLockMismatchError, options: writerObjectLockOptions()},
+		{name: "different retention", response: writerObjectLockDifferentRetentionJSON, wantErr: writerObjectLockMismatchError, options: writerObjectLockOptions()},
+		{name: "different mode", response: writerObjectLockDifferentModeJSON, wantErr: writerObjectLockMismatchError, options: writerObjectLockOptions()},
+		{name: "legal hold mismatch", response: writerObjectLockHoldMismatchJSON, wantErr: writerObjectLockHoldMismatchError, options: writerObjectLockOptions()},
+		{name: "match", response: writerObjectLockMatchJSON, options: writerObjectLockOptions()},
+		{name: "no lock requested", response: writerObjectLockMatchJSON},
+		{name: "retention requested, hold unspecified", response: writerObjectLockMatchJSON, options: retentionOnly},
+		{name: "hold requested, retention unspecified", response: writerObjectLockMatchJSON, options: holdOnly},
+		{name: "different retention, hold unspecified", response: writerObjectLockDifferentRetentionJSON, wantErr: writerObjectLockMismatchError, options: retentionOnly},
+		{name: "different hold, retention unspecified", response: writerObjectLockHoldMismatchJSON, wantErr: writerObjectLockHoldMismatchError, options: holdOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := newObjectLockWire(t)
 			srv.Reply("b2_list_unfinished_large_files", http.StatusOK, tc.response)
 			srv.Reply("b2_list_parts", http.StatusOK, `{"parts":[],"nextPartNumber":null}`)
 
-			options := writerObjectLockOptions()
-			if tc.noLock {
-				options = nil
-			}
-			writer := bucket.Object("resumed").NewWriter(context.Background(), options...)
+			writer := bucket.Object("resumed").NewWriter(context.Background(), tc.options...)
 			writer.Resume = true
 			writer.ChunkSize = writerObjectLockChunkSize
 			_, writeErr := writer.Write(bytes.Repeat([]byte("x"), writerObjectLockChunkSize+1))
@@ -219,8 +223,8 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 			if closeErr != nil {
 				t.Fatal(closeErr)
 			}
-			if parts := srv.Calls("b2_list_parts"); len(parts) == 0 {
-				t.Error("b2_list_parts was not requested after matching Object Lock")
+			if parts := srv.Calls("b2_list_parts"); len(parts) != 1 {
+				t.Errorf("b2_list_parts calls = %d, want 1", len(parts))
 			}
 			if starts := srv.Calls("b2_start_large_file"); len(starts) != 0 {
 				t.Errorf("b2_start_large_file calls = %d, want 0", len(starts))
