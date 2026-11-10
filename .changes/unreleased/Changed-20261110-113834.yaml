@@ -1,0 +1,3 @@
+kind: Changed
+body: '**Breaking:** The default `b2/sync.Sync` comparison and `CompareModTime` now compare modification times alone at millisecond resolution; matching times skip a file even when its size differs. Use `WithCompare(CompareSize)` to compare sizes or `WithCompare(CompareSHA1)` to detect content changes despite matching times. Sync also rejects replaced non-regular files without blocking while opening them.'
+time: 2026-11-10T11:38:34.770784-06:00

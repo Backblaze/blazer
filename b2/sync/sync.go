@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Package sync pushes a local directory tree into a B2 bucket prefix. The local
-// tree is the source of truth: a differing file overwrites the cloud version,
+// tree is the source of truth: a file differing under the selected comparison
+// policy overwrites the cloud version,
 // even when the cloud version is newer. This package has no skip-newer or
 // replace-newer mode, does not delete cloud-only files, and does not resume
 // interrupted large-file uploads. Symlinks below the root are not followed;
@@ -41,9 +42,15 @@ import (
 type CompareMode int
 
 const (
+	// CompareModTime compares modification times at millisecond resolution.
+	// It is the default; matching times are unchanged even if sizes differ.
 	CompareModTime CompareMode = iota
+	// CompareSize compares file sizes, ignoring modification times.
 	CompareSize
+	// CompareNone compares names only: an existing name is always skipped.
 	CompareNone
+	// CompareSHA1 compares checksums, ignoring size and modification time.
+	// A missing destination checksum requires uploading the local file.
 	CompareSHA1
 )
 
@@ -124,12 +131,13 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 		}
 		return local.sha1 != dest.SHA1
 	default:
-		return local.size != dest.Size || local.modTime.UnixMilli() != dest.LastModified.UnixMilli()
+		return local.modTime.UnixMilli() != dest.LastModified.UnixMilli()
 	}
 }
 
 // Sync pushes files below localRoot into bucket under prefix. The local tree is
-// the source of truth: a differing local file overwrites the cloud copy even
+// the source of truth: a local file differing under the comparison policy
+// overwrites the cloud copy even
 // when its modification time is older; skip-newer and replace-newer policies
 // are not available. Matching files are skipped, and cloud objects are never
 // deleted. Symlinks below the root are not followed; a
@@ -326,13 +334,13 @@ func fileSHA1(ctx context.Context, path string, walkInfo os.FileInfo) (string, e
 }
 
 func openWalkedFile(path string, walkInfo os.FileInfo) (*os.File, error) {
-	file, err := os.Open(path)
+	file, err := openSyncFile(path)
 	if err != nil {
 		return nil, err
 	}
 	openedInfo, statErr := file.Stat()
 	currentInfo, lstatErr := os.Lstat(path)
-	if statErr != nil || lstatErr != nil || !currentInfo.Mode().IsRegular() ||
+	if statErr != nil || lstatErr != nil || !openedInfo.Mode().IsRegular() || !currentInfo.Mode().IsRegular() ||
 		(walkInfo != nil && !os.SameFile(walkInfo, openedInfo)) || !os.SameFile(currentInfo, openedInfo) {
 		_ = file.Close()
 		return nil, fmt.Errorf("sync: file %q changed or became a symlink after walk", path)
