@@ -10,6 +10,7 @@ reviewers keep finding. The files here hold the detail behind those rules.
 | [delete-options.md](delete-options.md) | You use governance-bypass deletion or migrate pre-v0.9.0 delete interfaces and function values. |
 | [object-lock.md](object-lock.md) | You use per-file retention or legal hold, resume a locked upload, or adapt a low-level upload interface to the Object Lock signatures. |
 | [review-lessons.md](review-lessons.md) | You review a PR or prepare one for review. It groups the problems earlier reviews found, with links to the PRs where they were raised. |
+| [upgrading.md](upgrading.md) | You upgrade across a release and your build or a call starts failing. It lists, per release, only what callers must change, with before/after code. |
 
 Other process docs live at the repository root: [REVIEW.md](../REVIEW.md), [CONTRIBUTING.md](../CONTRIBUTING.md),
 [RELEASE.md](../RELEASE.md) and [SECURITY.md](../SECURITY.md).
