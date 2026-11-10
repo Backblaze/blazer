@@ -1229,16 +1229,27 @@ func (l FileLock) retentionRequest() *b2types.FileRetention {
 	return &b2types.FileRetention{Mode: &l.Retention.Mode, RetainUntilTimestamp: &l.Retention.RetainUntilTimestamp}
 }
 
+func validateFileLockCount(lock []FileLock) error {
+	if len(lock) > 1 {
+		return fmt.Errorf("b2: at most one FileLock may be given, got %d", len(lock))
+	}
+	return nil
+}
+
 // UploadFile wraps b2_upload_file. At most one FileLock may be given; it sets
-// Object Lock retention and legal hold on the new file.
+// Object Lock retention and legal hold on the new file. Extra FileLock arguments
+// return an error without sending a request.
 func (url *URL) UploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, lock ...FileLock) (*File, error) {
 	return url.UploadFileWithSSEC(ctx, r, size, name, contentType, sha1, info, nil, lock...)
 }
 
 // UploadFileWithSSEC wraps b2_upload_file and sends per-request server-side
 // encryption settings. Callers normally use package b2 instead of this
-// low-level method.
+// low-level method. Like UploadFile, it rejects extra FileLock arguments.
 func (url *URL) UploadFileWithSSEC(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*File, error) {
+	if err := validateFileLockCount(lock); err != nil {
+		return nil, err
+	}
 	state := url.b2.snapshot()
 	headers := map[string]string{
 		"Authorization":     url.token,
@@ -1391,14 +1402,18 @@ func (l *LargeFile) CopyPart(ctx context.Context, sourceFileID string, partNumbe
 }
 
 // StartLargeFile wraps b2_start_large_file. At most one FileLock may be given;
-// it sets Object Lock retention and legal hold on the new file.
+// it sets Object Lock retention and legal hold on the new file. Extra FileLock
+// arguments return an error without sending a request.
 func (b *Bucket) StartLargeFile(ctx context.Context, name, contentType string, info map[string]string, lock ...FileLock) (*LargeFile, error) {
 	return b.StartLargeFileWithSSEC(ctx, name, contentType, info, nil, lock...)
 }
 
 // StartLargeFileWithSSEC wraps b2_start_large_file and carries SSE-C settings
-// in the JSON request body.
+// in the JSON request body. Like StartLargeFile, it rejects extra FileLock arguments.
 func (b *Bucket) StartLargeFileWithSSEC(ctx context.Context, name, contentType string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*LargeFile, error) {
+	if err := validateFileLockCount(lock); err != nil {
+		return nil, err
+	}
 	if err := addServerSideEncryptionHeaders(map[string]string{}, sse); err != nil {
 		return nil, err
 	}

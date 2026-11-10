@@ -1,0 +1,3 @@
+kind: Changed
+body: "**Breaking:** `(*base.URL).UploadFile`, `UploadFileWithSSEC`, `(*base.Bucket).StartLargeFile`, and `StartLargeFileWithSSEC` now reject more than one `base.FileLock` instead of silently ignoring the extras. Combine retention and legal hold in a single `FileLock`; zero or one argument still works as before. See `docs/object-lock.md` for this validation and the original v0.9.0 interface/function-type migration."
+time: 2026-11-10T14:00:00-06:00
