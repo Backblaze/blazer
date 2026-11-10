@@ -16,9 +16,9 @@ package b2
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"testing"
 	"time"
 
@@ -93,11 +93,12 @@ func TestLargeFileHeadLookupWire(t *testing.T) {
 
 func TestLargeFileRangeWithProgressWire(t *testing.T) {
 	for _, tc := range []struct {
-		name, byteRange, contentRange string
-		offset                        int64
+		name, byteRange, contentRange, headLength, body string
+		offset, length                                  int64
 	}{
-		{"above MaxInt32", "bytes=2500000000-2500000003", "bytes 2500000000-2500000003/3221225472", 2500000000},
-		{"crossing MaxInt32", "bytes=2147483646-2147483649", "bytes 2147483646-2147483649/3221225472", 2147483646},
+		{"above MaxInt32", "bytes=2500000000-2500000003", "bytes 2500000000-2500000003/3221225472", "3221225472", "data", 2500000000, 4},
+		{"crossing MaxInt32", "bytes=2147483646-2147483649", "bytes 2147483646-2147483649/3221225472", "3221225472", "data", 2147483646, 4},
+		{"exact MaxInt32", "bytes=2147483646-2147483646", "bytes 2147483646-2147483646/2147483647", "2147483647", "x", 2147483646, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -105,12 +106,12 @@ func TestLargeFileRangeWithProgressWire(t *testing.T) {
 			srv := b2wiretest.New(t)
 			bucket := newListingWireBucket(t, ctx, srv)
 			srv.StrictReplySequence("big.bin",
-				b2wiretest.Response{Header: http.Header{"Content-Length": {"3221225472"}}},
+				b2wiretest.Response{Header: http.Header{"Content-Length": {tc.headLength}}},
 				b2wiretest.Response{Status: http.StatusPartialContent, Header: http.Header{
-					"Content-Length": {"4"}, "Content-Range": {tc.contentRange},
-				}, Body: "data"},
+					"Content-Length": {fmt.Sprint(tc.length)}, "Content-Range": {tc.contentRange},
+				}, Body: tc.body},
 			)
-			reader := bucket.Object("big.bin").NewRangeReader(ctx, tc.offset, 4)
+			reader := bucket.Object("big.bin").NewRangeReader(ctx, tc.offset, tc.length)
 			reader.ChunkSize = 4
 			reader.ConcurrentDownloads = 1
 			var samples []progressSample
@@ -125,14 +126,10 @@ func TestLargeFileRangeWithProgressWire(t *testing.T) {
 			if err := reader.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != "data" {
-				t.Fatalf("range body=%q, want data", got)
+			if string(got) != tc.body {
+				t.Fatalf("range body=%q, want %s", got, tc.body)
 			}
-			wantTotal := int64(4)
-			if strconv.IntSize == 32 {
-				wantTotal = -1 // the HEAD compatibility length may be saturated
-			}
-			assertProgressSamples(t, samples, 4, wantTotal, false)
+			assertProgressSamples(t, samples, tc.length, tc.length, false)
 			calls := srv.Calls("big.bin")
 			if len(calls) != 2 || calls[0].Method != http.MethodHead || calls[1].Method != http.MethodGet || calls[1].Header.Get("Range") != tc.byteRange {
 				t.Fatalf("requests=%+v, want HEAD then GET with %s", calls, tc.byteRange)

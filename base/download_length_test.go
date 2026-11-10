@@ -114,6 +114,10 @@ func TestFileReaderLargeContentLength(t *testing.T) {
 			if body.closed || reader.ContentLength != math.MaxInt32 || reader.ID != "large-file-id" {
 				t.Fatalf("%s: length=%d id=%q closed=%t, want 2147483647, large-file-id, false", method, reader.ContentLength, reader.ID, body.closed)
 			}
+			sized, ok := reader.ReadCloser.(interface{ Size() int64 })
+			if !ok || sized.Size() != 3221225472 {
+				t.Fatalf("%s body does not retain exact Content-Length 3221225472", method)
+			}
 			got := make([]byte, len(payload))
 			if _, err := io.ReadFull(reader, got); err != nil || string(got) != payload {
 				t.Fatalf("%s prefix = %q, %v; want %q, nil", method, got, err, payload)
