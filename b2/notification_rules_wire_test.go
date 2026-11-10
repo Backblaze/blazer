@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
@@ -26,6 +27,89 @@ func newNotificationRulesWireBucket(t *testing.T, srv *b2wiretest.Server) *Bucke
 		t.Fatal(err)
 	}
 	return bucket
+}
+
+// Both nil and empty slices clear the complete rule set using B2's empty array:
+// https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules
+func TestSetNotificationRulesClearsNilAndEmpty(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		rules []NotificationRule
+	}{
+		{name: "nil"},
+		{name: "empty", rules: []NotificationRule{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := b2wiretest.New(t)
+			srv.StrictReplySequence("b2_set_bucket_notification_rules", b2wiretest.Response{
+				Body: `{"bucketId":"bid","eventNotificationRules":[]}`,
+			})
+			bucket := newNotificationRulesWireBucket(t, srv)
+
+			if err := bucket.SetNotificationRules(context.Background(), test.rules); err != nil {
+				t.Fatal(err)
+			}
+			request := srv.Last(t, "b2_set_bucket_notification_rules")
+			if request.Method != http.MethodPost {
+				t.Errorf("set method = %s, want POST", request.Method)
+			}
+			b2wiretest.AssertJSON(t, request, "bucketId", "bid")
+			b2wiretest.AssertJSON(t, request, "eventNotificationRules", []any{})
+		})
+	}
+}
+
+// Non-retryable B2 errors must reach the caller with their documented codes:
+// https://www.backblaze.com/apidocs/b2-get-bucket-notification-rules
+// https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules
+func TestNotificationRulesReturnsServiceErrors(t *testing.T) {
+	for _, test := range []struct {
+		name, call, code string
+		run              func(context.Context, *Bucket) error
+	}{
+		{
+			name: "get", call: "b2_get_bucket_notification_rules", code: "bad_request",
+			run: func(ctx context.Context, bucket *Bucket) error {
+				_, err := bucket.NotificationRules(ctx)
+				return err
+			},
+		},
+		{
+			name: "set", call: "b2_set_bucket_notification_rules", code: "event_type_invalid",
+			run: func(ctx context.Context, bucket *Bucket) error {
+				return bucket.SetNotificationRules(ctx, []NotificationRule{{
+					EventTypes: []string{"b2:InvalidEvent"}, IsEnabled: true, Name: "uploads",
+					TargetConfiguration: NotificationTargetConfiguration{
+						TargetType: NotificationTargetWebhook,
+						Webhook:    &WebhookNotificationTarget{URL: "https://example.com/notify"},
+					},
+				}})
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := b2wiretest.New(t)
+			srv.StrictReplySequence(test.call, b2wiretest.Response{
+				Status: http.StatusBadRequest,
+				Body:   fmt.Sprintf(`{"status":400,"code":%q,"message":"scripted service rejection"}`, test.code),
+			})
+			bucket := newNotificationRulesWireBucket(t, srv)
+
+			err := test.run(context.Background(), bucket)
+			if status, code, _ := base.MsgCode(err); status != http.StatusBadRequest || code != test.code {
+				t.Errorf("service error = %d/%q, want 400/%q", status, code, test.code)
+			}
+			requests := srv.Calls(test.call)
+			if len(requests) != 1 {
+				t.Fatalf("%s requests = %d, want 1", test.call, len(requests))
+			}
+			if test.name == "get" {
+				b2wiretest.AssertQuery(t, requests[0], "bucketId", "bid")
+			} else {
+				b2wiretest.AssertJSON(t, requests[0], "bucketId", "bid")
+			}
+		})
+	}
 }
 
 // TestSetNotificationRulesSendsSigningSecret asserts B2's documented set request:

@@ -50,7 +50,8 @@ type NotificationTargetConfiguration struct {
 }
 
 // NotificationRule configures B2 to deliver matching bucket events to a
-// target. IsSuspended and SuspensionReason are returned by B2 when applicable.
+// target. IsSuspended and SuspensionReason are server-managed: B2 returns them
+// when applicable and ignores them in SetNotificationRules.
 type NotificationRule struct {
 	EventTypes          []string
 	IsEnabled           bool
@@ -67,8 +68,9 @@ func (b *Bucket) NotificationRules(ctx context.Context) ([]NotificationRule, err
 }
 
 // SetNotificationRules replaces this bucket's complete notification rule set.
-// To add one rule, callers must first read the existing set, append the rule,
-// and write the complete result.
+// A nil or empty slice clears every rule. To add or modify one rule, callers
+// must first read the existing set, preserve the other rules, and write the
+// complete result. B2 ignores the server-managed suspension fields on set.
 func (b *Bucket) SetNotificationRules(ctx context.Context, rules []NotificationRule) error {
 	return b.b.setNotificationRules(ctx, rules)
 }
