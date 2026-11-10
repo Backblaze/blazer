@@ -1,6 +1,7 @@
 package b2
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"testing"
@@ -10,6 +11,8 @@ import (
 )
 
 const (
+	writerObjectLockChunkSize                    = 5_000_000
+	writerObjectLockDifferentModeJSON            = `{"files":[{"fileId":"large-1","fileName":"resumed","action":"start","fileRetention":{"isClientAuthorizedToRead":true,"value":{"mode":"governance","retainUntilTimestamp":1767225600000}},"legalHold":{"isClientAuthorizedToRead":true,"value":"on"}}],"nextFileId":null}`
 	writerObjectLockRetainUntilMillis      int64 = 1767225600000
 	writerObjectLockFileJSON                     = `{"fileId":"small-1","fileName":"object","action":"upload"}`
 	writerObjectLockLargeFileJSON                = `{"fileId":"large-1","fileName":"object","action":"upload"}`
@@ -112,8 +115,8 @@ func TestWriterSendsObjectLock(t *testing.T) {
 			writer := bucket.Object("object").NewWriter(context.Background(), options...)
 			data := []byte("0123456789")
 			if tc.large {
-				writer.ChunkSize = 10
-				data = []byte("0123456789012345678901234")
+				writer.ChunkSize = writerObjectLockChunkSize
+				data = bytes.Repeat([]byte("x"), writerObjectLockChunkSize+1)
 			}
 			if _, err := writer.Write(data); err != nil {
 				t.Fatal(err)
@@ -177,6 +180,7 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 	}{
 		{name: "mismatch", response: writerObjectLockMismatchJSON, wantErr: writerObjectLockMismatchError},
 		{name: "different retention", response: writerObjectLockDifferentRetentionJSON, wantErr: writerObjectLockMismatchError},
+		{name: "different mode", response: writerObjectLockDifferentModeJSON, wantErr: writerObjectLockMismatchError},
 		{name: "legal hold mismatch", response: writerObjectLockHoldMismatchJSON, wantErr: writerObjectLockHoldMismatchError},
 		{name: "match", response: writerObjectLockMatchJSON},
 		{name: "no lock requested", response: writerObjectLockMatchJSON, noLock: true},
@@ -192,8 +196,8 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 			}
 			writer := bucket.Object("resumed").NewWriter(context.Background(), options...)
 			writer.Resume = true
-			writer.ChunkSize = 10
-			_, writeErr := writer.Write([]byte("0123456789012345678901234"))
+			writer.ChunkSize = writerObjectLockChunkSize
+			_, writeErr := writer.Write(bytes.Repeat([]byte("x"), writerObjectLockChunkSize+1))
 			closeErr := writer.Close()
 			if tc.wantErr != "" {
 				assertWriterObjectLockMismatch(t, "Write", writeErr, tc.wantErr)

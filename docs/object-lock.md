@@ -21,10 +21,11 @@ not mean the existing protection will be cleared.
 
 ## Low-level arguments and migration
 
-`(*base.URL).UploadFile`, `UploadFileWithSSEC`, `(*base.Bucket).StartLargeFile`, and
-`StartLargeFileWithSSEC` accept at most one `base.FileLock`. Put retention and legal
-hold in that same value. More than one now returns an error without an upload/start
-request. Zero arguments and one empty `FileLock` preserve their previous behavior.
+`(*base.URL).UploadFile`, `(*base.URL).UploadFileWithSSEC`,
+`(*base.Bucket).StartLargeFile`, and `(*base.Bucket).StartLargeFileWithSSEC` accept at
+most one `base.FileLock`. Put retention and legal hold in that same value. More than
+one now returns an error without an upload/start request. Zero arguments and one
+empty `FileLock` preserve their previous behavior.
 
 The per-file Object Lock API introduced in v0.9.0 added the final variadic
 `...base.FileLock` parameter to `(*base.URL).UploadFile` and
