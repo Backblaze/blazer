@@ -929,7 +929,8 @@ type Bucket struct {
 	FileLockEnabled             bool
 	ReplicationConfiguration    *b2types.ReplicationConfiguration
 	// ReplicationConfigurationUnreadable records a bucket response that withheld
-	// replication settings. Callers must not replace a config they cannot read.
+	// replication settings. A partial merge requires readable existing settings;
+	// a complete explicit replacement does not.
 	ReplicationConfigurationUnreadable bool
 }
 

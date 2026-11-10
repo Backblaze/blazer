@@ -375,3 +375,30 @@ func TestReplicationDestinationEmptyMapsUseServiceValidationWire(t *testing.T) {
 		})
 	}
 }
+
+func TestFailedBucketUpdateRestoresCachedReplicationWire(t *testing.T) {
+	srv, bucket := replicationUpdateWireBucket(t, bothReplBucketJSON)
+	// A terminal 5xx exercises rollback without waiting through retry backoff.
+	srv.StrictReplySequence("b2_update_bucket",
+		b2wiretest.Response{Status: http.StatusNotImplemented, Body: `{"status":501,"code":"not_implemented","message":"scripted rejection"}`},
+		b2wiretest.Response{Body: bothReplBucketJSON},
+	)
+	err := bucket.Update(context.Background(), &BucketAttrs{Info: map[string]string{"metadata": "rejected"}})
+	if status, code, message := base.MsgCode(err); status != 501 || code != "not_implemented" || message != "scripted rejection" {
+		t.Fatalf("metadata update error = %v, want scripted 501 not_implemented", err)
+	}
+	if err := bucket.Update(context.Background(), &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{
+		AsReplicationSource: replicationCreateConfig().AsReplicationSource,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	updates := srv.Calls("b2_update_bucket")
+	if len(updates) != 2 {
+		t.Fatalf("update requests = %d, want 2", len(updates))
+	}
+	b2wiretest.AssertNoJSON(t, updates[0], "replicationConfiguration")
+	b2wiretest.AssertJSON(t, updates[1], "replicationConfiguration.asReplicationSource.sourceApplicationKeyId", "source-key")
+	b2wiretest.AssertJSON(t, updates[1], "replicationConfiguration.asReplicationDestination.sourceToDestinationKeyMapping", map[string]string{
+		"source-key": "destination-key",
+	})
+}
