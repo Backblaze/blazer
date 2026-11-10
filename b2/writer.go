@@ -960,6 +960,8 @@ func WithCancelOnError(ctxf func() context.Context, errf func(error)) WriterOpti
 // during NewClient or authorization. Pass WriterOptionFunc for a custom callback.
 // Explicit options passed to NewWriter can override defaults. WithSSECKey cannot
 // be a default, including with a nil key; NewClient rejects it before authorization.
+// NewClient also rejects nil default options and nil WriterOptionFunc callbacks
+// before authorization.
 func DefaultWriterOptions(opts ...WriterOption) ClientOption {
 	return func(c *clientOptions) {
 		c.writerOpts = opts
