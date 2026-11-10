@@ -429,6 +429,9 @@ func TestCreateKeyRejectsBadOptionsWithoutARequest(t *testing.T) {
 			} else if err.Error() != test.wantErr {
 				t.Errorf("CreateKey error = %q, want %q", err, test.wantErr)
 			}
+			if test.bucket && !errors.Is(err, ErrBucketIDsOnBucket) {
+				t.Errorf("CreateKey error = %v, want ErrBucketIDsOnBucket", err)
+			}
 			if key != nil {
 				t.Errorf("CreateKey key = %#v, want nil", key)
 			}

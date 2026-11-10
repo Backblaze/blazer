@@ -76,6 +76,10 @@ type KeyOption func(*keyOptions)
 // bucket ID passed to Client.CreateKey.
 var ErrInvalidBucketIDs = errors.New("b2: BucketIDs requires a non-empty list of non-empty bucket IDs")
 
+// ErrBucketIDsOnBucket indicates that BucketIDs was passed to Bucket.CreateKey.
+// BucketIDs is supported only by Client.CreateKey.
+var ErrBucketIDsOnBucket = errors.New("BucketIDs cannot be combined with (*Bucket).CreateKey; use (*Client).CreateKey to request a multi-bucket key")
+
 // Lifetime requests a key with the given lifetime. A zero lifetime creates a
 // non-expiring key. Otherwise the lifetime must be at least one second and
 // below 1000 days; longer fractional durations truncate to whole seconds.
