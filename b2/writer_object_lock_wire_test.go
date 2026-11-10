@@ -176,25 +176,31 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 		name     string
 		response string
 		wantErr  string
-		noLock   bool
+		options  []WriterOption
 	}{
-		{name: "mismatch", response: writerObjectLockMismatchJSON, wantErr: writerObjectLockMismatchError},
-		{name: "different retention", response: writerObjectLockDifferentRetentionJSON, wantErr: writerObjectLockMismatchError},
-		{name: "different mode", response: writerObjectLockDifferentModeJSON, wantErr: writerObjectLockMismatchError},
-		{name: "legal hold mismatch", response: writerObjectLockHoldMismatchJSON, wantErr: writerObjectLockHoldMismatchError},
-		{name: "match", response: writerObjectLockMatchJSON},
-		{name: "no lock requested", response: writerObjectLockMatchJSON, noLock: true},
+		{name: "mismatch", response: writerObjectLockMismatchJSON, wantErr: writerObjectLockMismatchError, options: writerObjectLockOptions()},
+		{name: "different retention", response: writerObjectLockDifferentRetentionJSON, wantErr: writerObjectLockMismatchError, options: writerObjectLockOptions()},
+		{name: "different mode", response: writerObjectLockDifferentModeJSON, wantErr: writerObjectLockMismatchError, options: writerObjectLockOptions()},
+		{name: "legal hold mismatch", response: writerObjectLockHoldMismatchJSON, wantErr: writerObjectLockHoldMismatchError, options: writerObjectLockOptions()},
+		{name: "match", response: writerObjectLockMatchJSON, options: writerObjectLockOptions()},
+		{name: "no lock requested", response: writerObjectLockMatchJSON},
+		{
+			name: "retention requested, hold unspecified", response: writerObjectLockMatchJSON,
+			options: []WriterOption{WithFileRetention(&FileRetention{
+				Mode: RetentionCompliance, RetainUntil: time.UnixMilli(writerObjectLockRetainUntilMillis),
+			})},
+		},
+		{
+			name: "hold requested, retention unspecified", response: writerObjectLockMatchJSON,
+			options: []WriterOption{WithLegalHold(LegalHoldOn)},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := newObjectLockWire(t)
 			srv.Reply("b2_list_unfinished_large_files", http.StatusOK, tc.response)
 			srv.Reply("b2_list_parts", http.StatusOK, `{"parts":[],"nextPartNumber":null}`)
 
-			options := writerObjectLockOptions()
-			if tc.noLock {
-				options = nil
-			}
-			writer := bucket.Object("resumed").NewWriter(context.Background(), options...)
+			writer := bucket.Object("resumed").NewWriter(context.Background(), tc.options...)
 			writer.Resume = true
 			writer.ChunkSize = writerObjectLockChunkSize
 			_, writeErr := writer.Write(bytes.Repeat([]byte("x"), writerObjectLockChunkSize+1))
@@ -219,8 +225,8 @@ func TestWriterResumeChecksTheUnfinishedLock(t *testing.T) {
 			if closeErr != nil {
 				t.Fatal(closeErr)
 			}
-			if parts := srv.Calls("b2_list_parts"); len(parts) == 0 {
-				t.Error("b2_list_parts was not requested after matching Object Lock")
+			if parts := srv.Calls("b2_list_parts"); len(parts) != 1 {
+				t.Errorf("b2_list_parts calls = %d, want 1", len(parts))
 			}
 			if starts := srv.Calls("b2_start_large_file"); len(starts) != 0 {
 				t.Errorf("b2_start_large_file calls = %d, want 0", len(starts))

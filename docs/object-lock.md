@@ -14,10 +14,12 @@ capability; compliance retention cannot be removed or shortened.
 ## Resuming an unfinished upload
 
 A writer with `Resume` set checks each explicitly requested lock against the
-unfinished file. A different retention mode, retain-until millisecond, or legal hold
-returns an error before uploading parts or finishing the file. When a lock option is
+unfinished file when the upload uses the large-file path (more than `ChunkSize`
+bytes). A different retention mode, retain-until millisecond, or legal hold returns
+an error before uploading parts or finishing the file. When a lock option is
 unspecified, resume keeps that file's existing setting. Omitting lock options does
-not mean the existing protection will be cleared.
+not mean the existing protection will be cleared. Uploads of at most `ChunkSize`
+bytes use a simple upload and do not inspect unfinished large files.
 
 ## Low-level arguments and migration
 
