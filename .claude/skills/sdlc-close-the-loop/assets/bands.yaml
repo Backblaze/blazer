@@ -1,0 +1,10 @@
+metric: ci_test_failure_rate
+baseline: rolling_30d
+rules: western_electric
+tiers:
+  1sigma: { action: log }
+  # tools uses Claude Code's --allowedTools syntax; map it to your assistant (references/ai-assistants.md)
+  2sigma: { action: diagnose,
+            tools: "Read,Grep,Bash(gh run view *)" }
+  3sigma: { action: propose,
+            routes: [pull_request, "runbook:rollback-deploy"] }
