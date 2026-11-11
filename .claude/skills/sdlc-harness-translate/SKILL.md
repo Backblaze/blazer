@@ -5,7 +5,7 @@ description: Translate a repo or artifact between the AI-native SDLC playbook co
 
 # Translate between the playbook and harness engineering
 
-The playbook organizes a process (artifacts, approvals, governance). Harness engineering organizes a repo (knowledge layout, enforced architecture, garbage collection). The mapping tables live in `references/playbook-harness-translation.md` in the playbook folder; if that file is not available, use the summary below.
+The playbook organizes a process (artifacts, approvals, governance). Harness engineering organizes a repo (knowledge layout, enforced architecture, garbage collection). The mapping tables live in this skill's `references/playbook-harness-translation.md`; if that file is not available, use the summary below.
 
 ## Quick map
 

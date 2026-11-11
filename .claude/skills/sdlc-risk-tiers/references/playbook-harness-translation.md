@@ -2,10 +2,10 @@
 
 Two bodies of guidance for working with coding agents:
 
-- **The playbook** ([README](../README.md)): a process for the whole SDLC. Which artifact each stage produces, who approves it, how it is governed and measured.
+- **The playbook** (README in the playbook repo): a process for the whole SDLC. Which artifact each stage produces, who approves it, how it is governed and measured.
 - **Harness engineering** ([notes](harness-engineering-notes.md), summarizing OpenAI's article): the design of the repository and environment so an agent can work with little supervision. Knowledge layout, enforced architecture, legibility, garbage collection.
 
-They agree on the thesis (humans steer, agents execute; the repo is the system of record; enforce mechanically) and are organized differently. This guide translates in both directions; the [comparison](playbook-vs-harness-comparison.md) covers how they differ and when to lean on each. The [`sdlc-harness-translate`](../.claude/skills/sdlc-harness-translate/SKILL.md) skill applies it to a real repo.
+They agree on the thesis (humans steer, agents execute; the repo is the system of record; enforce mechanically) and are organized differently. This guide translates in both directions; the comparison (in the playbook repo) covers how they differ and when to lean on each. The [`sdlc-harness-translate`](../../sdlc-harness-translate/SKILL.md) skill applies it to a real repo.
 
 ## 1. Vocabulary
 

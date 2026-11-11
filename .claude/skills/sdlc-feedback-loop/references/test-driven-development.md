@@ -1,6 +1,6 @@
 # Test-driven development with an AI assistant
 
-How this playbook builds code: a failing test first, the smallest change that passes it, then a refactor only if one is needed. It applies to any AI assistant (Claude, Codex, Copilot, Gemini). This note collects why, and where each stage of the workflow enforces it. The skill that runs it is [`sdlc-feedback-loop`](../.claude/skills/sdlc-feedback-loop/SKILL.md).
+How this playbook builds code: a failing test first, the smallest change that passes it, then a refactor only if one is needed. It applies to any AI assistant (Claude, Codex, Copilot, Gemini). This note collects why, and where each stage of the workflow enforces it. The skill that runs it is [`sdlc-feedback-loop`](../../sdlc-feedback-loop/SKILL.md).
 
 Sources: Steve Kinney's course chapter [Test-Driven Development with Claude](https://stevekinney.com/courses/ai-development/test-driven-development-with-claude), the [Claude Code documentation](https://code.claude.com/docs/en/overview), and the Claude Code team's remarks in the [code review write-up](code-review-at-anthropic.md). The points below are our summary, not quotes; check the originals before citing them.
 
@@ -29,13 +29,13 @@ Four things, each short:
 
 | Stage | What changes | Where |
 |---|---|---|
-| Spec | Each requirement carries a `Test:` line (given, when, then). A requirement nobody can test is not ready. | [`sdlc-spec`](../.claude/skills/sdlc-spec/SKILL.md) |
-| Plan | A Test plan lists existing tests to extend, one new failing test per behavior and edge case, and where test-first does not fit and why. Each step names the failing test that starts it; refactors are separate steps. A plan critic attacks weak, missing and duplicate tests before approval. | [`sdlc-plan`](../.claude/skills/sdlc-plan/SKILL.md) |
-| Build | Red, commit the test, green, separate refactor. For risky work, one session writes the tests and another implements against them. | [`sdlc-feedback-loop`](../.claude/skills/sdlc-feedback-loop/SKILL.md), [`sdlc-subagents`](../.claude/skills/sdlc-subagents/SKILL.md) |
-| CI | `red_check.py` runs the PR's new tests against the base (must fail) and the change (must pass); code without a test fails unless the PR is a labelled refactor. | [`sdlc-feedback-loop`](../.claude/skills/sdlc-feedback-loop/SKILL.md#red-check-in-ci) |
-| Review | The reviewer checks the red evidence, that no test was weakened, and that refactors are separate. | [`sdlc-pr-review`](../.claude/skills/sdlc-pr-review/SKILL.md) |
-| PR | The Testing section shows the test written first and its failure before the change. | [PR template](../.claude/skills/sdlc-issue-templates/assets/pull_request_template.md) |
-| Audit | A row reports whether CI runs the red check. | [`sdlc-review-audit`](../.claude/skills/sdlc-review-audit/SKILL.md) |
+| Spec | Each requirement carries a `Test:` line (given, when, then). A requirement nobody can test is not ready. | [`sdlc-spec`](../../sdlc-spec/SKILL.md) |
+| Plan | A Test plan lists existing tests to extend, one new failing test per behavior and edge case, and where test-first does not fit and why. Each step names the failing test that starts it; refactors are separate steps. A plan critic attacks weak, missing and duplicate tests before approval. | [`sdlc-plan`](../../sdlc-plan/SKILL.md) |
+| Build | Red, commit the test, green, separate refactor. For risky work, one session writes the tests and another implements against them. | [`sdlc-feedback-loop`](../../sdlc-feedback-loop/SKILL.md), [`sdlc-subagents`](../../sdlc-subagents/SKILL.md) |
+| CI | `red_check.py` runs the PR's new tests against the base (must fail) and the change (must pass); code without a test fails unless the PR is a labelled refactor. | [`sdlc-feedback-loop`](../../sdlc-feedback-loop/SKILL.md#red-check-in-ci) |
+| Review | The reviewer checks the red evidence, that no test was weakened, and that refactors are separate. | [`sdlc-pr-review`](../../sdlc-pr-review/SKILL.md) |
+| PR | The Testing section shows the test written first and its failure before the change. | [PR template](../../sdlc-issue-templates/assets/pull_request_template.md) |
+| Audit | A row reports whether CI runs the red check. | [`sdlc-review-audit`](../../sdlc-review-audit/SKILL.md) |
 
 ## Limits
 

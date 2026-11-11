@@ -5,7 +5,7 @@ description: Audit a repo against the code review adoption checklist (AGENTS.md 
 
 # Review readiness audit
 
-A read-only check of a repo against the layers in `references/code-review-at-anthropic.md` in the playbook folder. It reports facts and the fix for each gap. It changes nothing.
+A read-only check of a repo against the layers in this skill's `references/code-review-at-anthropic.md`. It reports facts and the fix for each gap. It changes nothing.
 
 ## Run
 

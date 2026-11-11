@@ -78,7 +78,7 @@ Reversibility is what makes lighter human review acceptable. Put these around th
 - **Nightly review of existing code**: `sdlc-review-tuning/assets/nightly-review.yml` reviews one area a night with a read-only agent and files one issue, to catch old bugs early.
 - **Check the setup**: run `sdlc-review-audit` to see which of these layers a repo is missing.
 
-Source: `references/code-review-at-anthropic.md` in the playbook folder.
+Source: this skill's `references/code-review-at-anthropic.md`.
 
 ## Managed settings interplay
 

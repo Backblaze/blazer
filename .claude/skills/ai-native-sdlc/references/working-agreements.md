@@ -2,7 +2,7 @@
 
 A template for the team habits that make light, fast review safe. It turns the culture section of the [Claude Code review lessons](code-review-at-anthropic.md#8-culture-and-direction) into statements a team can adopt, edit and keep in its repo. Replace the bracketed parts, delete what you disagree with, and add your own. Keep it to a page.
 
-Used with: [`sdlc-risk-tiers`](../.claude/skills/sdlc-risk-tiers/SKILL.md), [`sdlc-pr-review`](../.claude/skills/sdlc-pr-review/SKILL.md), [`sdlc-close-the-loop`](../.claude/skills/sdlc-close-the-loop/SKILL.md).
+Used with: [`sdlc-risk-tiers`](../../sdlc-risk-tiers/SKILL.md), [`sdlc-pr-review`](../../sdlc-pr-review/SKILL.md), [`sdlc-close-the-loop`](../../sdlc-close-the-loop/SKILL.md).
 
 ---
 
@@ -20,7 +20,7 @@ Agreed on [date] by [names or roles]. Review again on [date].
 ## Size and reversibility
 
 - Prefer small changes. They are easier to review, debug and revert.
-- **Test first.** A behavior change starts with a test that fails without it; refactors are separate and leave tests alone ([how](test-driven-development.md)).
+- **Test first.** A behavior change starts with a test that fails without it; refactors are separate and leave tests alone ([how](../../sdlc-feedback-loop/references/test-driven-development.md)).
 - Every change says how to revert it, in the PR template.
 - New behavior ships behind a flag when it can, on for the team first.
 - A mistake we can undo in minutes is cheaper than a slow process we run on every change.

@@ -7,7 +7,7 @@ description: Set up REVIEW.md and run layered AI review on a diff or PR (bugs, s
 
 The AI assistant (Claude, Codex, Copilot, Gemini) both gives and receives reviews. Every PR gets the same review passes with findings ranked by severity, so human attention moves up to whether the change does what the plan intended and whether the risk is acceptable. The question to ask is not "did a human read this?" but "what could go wrong, and which check, automated or human, should catch it?" Review is a stack of layers (pre-PR verification, AI review, security review, blocking checks, risk-scaled human approval, merge queue and rollback), each catching what others miss.
 
-Separation of duties holds: the agent that wrote the code has no way to approve it, and an agent's approval never fills a required human slot. How many humans must approve, and when none is needed, is set by `sdlc-risk-tiers`. The lessons here come from `references/code-review-at-anthropic.md` in the playbook folder, alongside the playbook's PR review lesson.
+Separation of duties holds: the agent that wrote the code has no way to approve it, and an agent's approval never fills a required human slot. How many humans must approve, and when none is needed, is set by `sdlc-risk-tiers`. The lessons here come from this skill's `references/code-review-at-anthropic.md`, alongside the playbook's PR review lesson.
 
 ## Layers around this skill
 

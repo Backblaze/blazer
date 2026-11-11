@@ -5,7 +5,7 @@ description: Design risk-scaled human approval for PRs (none, one or two approve
 
 # Risk-scaled human approval
 
-Goal: the minimum human review time that does not raise reverts or incidents. The change decides how many people look at it, not who wrote it. Start strict and loosen only with evidence. The pattern comes from how the Claude Code team reviews code (see `references/code-review-at-anthropic.md` in the playbook folder).
+Goal: the minimum human review time that does not raise reverts or incidents. The change decides how many people look at it, not who wrote it. Start strict and loosen only with evidence. The pattern comes from how the Claude Code team reviews code (see this skill's `references/code-review-at-anthropic.md`).
 
 ## Steps
 

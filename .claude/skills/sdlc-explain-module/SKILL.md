@@ -5,7 +5,7 @@ description: Explain a slice of the codebase on demand before changing it (purpo
 
 # Explain a module
 
-When machines do most of the reading, nobody holds the whole codebase in their head. The replacement is an explainer on the slice you are about to change: it takes minutes and reflects the code as it is now, unlike a doc that went stale. Reading trivial diffs teaches little; explaining the module you are about to change teaches much more. The pattern comes from the Claude Code team (`references/code-review-at-anthropic.md` in the playbook folder).
+When machines do most of the reading, nobody holds the whole codebase in their head. The replacement is an explainer on the slice you are about to change: it takes minutes and reflects the code as it is now, unlike a doc that went stale. Reading trivial diffs teaches little; explaining the module you are about to change teaches much more. The pattern comes from the Claude Code team (this skill's `references/code-review-at-anthropic.md`).
 
 ## Steps
 

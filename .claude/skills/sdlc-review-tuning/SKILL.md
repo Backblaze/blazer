@@ -5,7 +5,7 @@ description: Measure and tune an AI code reviewer. Build an incident-derived eva
 
 # Tuning the AI reviewer
 
-Treat the reviewer as a system with a score, not a prompt you edit by feel. The priority order: catch real bugs first, reduce review rounds second. Noise is more expensive with agent authors, because every nit triggers another commit and another round. This follows the Claude Code team's account (see `references/code-review-at-anthropic.md` in the playbook folder).
+Treat the reviewer as a system with a score, not a prompt you edit by feel. The priority order: catch real bugs first, reduce review rounds second. Noise is more expensive with agent authors, because every nit triggers another commit and another round. This follows the Claude Code team's account (see this skill's `references/code-review-at-anthropic.md`).
 
 ## 1. An eval set from incidents
 
