@@ -1,3 +1,0 @@
-kind: Added
-body: '`b2.ErrInvalidAccountInfo` supports `errors.Is` for malformed or oversized data read by `AccountInfoFile.AuthData` and lets custom stores request reauthorization with `ok=false`. `AccountInfo` now documents concurrency and optional `Err` reporting: clients propagate observed storage errors, while a shared store''s last error can be overwritten or seen by another caller.'
-time: 2026-11-10T12:11:56-06:00

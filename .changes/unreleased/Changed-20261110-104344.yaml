@@ -1,3 +1,0 @@
-kind: Changed
-body: '**Breaking:** `b2.CopyToBucket(nil)` now makes `Bucket.Copy` return an error before sending any request instead of silently copying into the receiver bucket. Pass a valid destination bucket, or omit `CopyToBucket` to copy into the receiver bucket.'
-time: 2026-11-10T10:43:44.862636-06:00

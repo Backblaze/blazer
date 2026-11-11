@@ -1,3 +1,0 @@
-kind: Fixed
-body: "Concurrent bounded reads stop allocating download chunks when the requested range is exhausted, rather than requesting data past its end."
-time: 2026-10-26T13:00:06.000000-05:00
