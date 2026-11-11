@@ -43,10 +43,10 @@ An agent that writes both the test and the code can write a test shaped to its c
 
 ### Red check in CI
 
-`assets/red_check.py` shows that the new tests detect the change, even when commits are squashed. It does not show they were written first: a test added after the code passes it too. For evidence of the order, keep the `test:` commit before the code commit (merge without squashing, or have CI record the red run on the test commit). For the PR's diff it runs the changed test files against the merge base (they must fail, which shows they test the change) and against the change (they must pass). Code changed with no test changed fails; a PR labelled `refactor` must leave tests untouched instead. A tests-only PR skips red but its tests must pass, and in the merge queue the job runs the suite on the combined commit (`--green-only`).
+`assets/red_check.py` shows that the new tests detect the change, even when commits are squashed. It does not show they were written first: a test added after the code passes it too. For evidence of the order, keep the `test:` commit before the code commit (merge without squashing, or have CI record the red run on the test commit). For the PR's diff it runs the changed test files against the merge base (they must fail, which shows they test the change) and against the change (they must pass). A red run that fails to build or load the tests (a compile error, a missing import) fails the check, since no assertion ran: add the new API as a stub first so the test compiles and fails on its assertion. Code changed with no test changed fails; a PR labelled `refactor` must leave tests untouched instead. A tests-only PR skips red but its tests must pass, and in the merge queue the job runs the suite on the combined commit (`--green-only`).
 
 ```bash
-python3 red_check.py --base origin/main --test-cmd "make test"
+python3 red_check.py --base origin/main --test-cmd "go test -race ./... && make scripts-test"
 ```
 
 Copy it to `.github/scripts/` and `assets/red-check.yml` to `.github/workflows/`, set `--test-cmd`, and make the job a required check. The red run uses a fresh checkout of the base, so the test command must install what it needs. It prints the end of the failing output; the reviewer confirms the failure is the right one.

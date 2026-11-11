@@ -17,7 +17,10 @@ touches neither code nor tests (docs only) passes without running anything.
 
 RED runs in a temporary git worktree of the merge base with the new test files copied in, so
 --test-cmd must work in a fresh checkout (install dependencies inside it if needed). The tail of
-the RED output is printed so a reviewer can see the failing assertion, not just a failure.
+the RED output is printed so a reviewer can see the failing assertion, not just a failure. A RED run
+that fails to build or load the tests (a compile error, a missing import) proves nothing, because no
+assertion ran, so it fails the check: add the new API as a stub first so the test compiles and fails
+on its assertion. --build-errors sets the patterns that mark such a run.
 This compares the final diff's tests against two versions of the code, so it cannot tell whether the
 tests were written before the code: a test added last passes it too. Evidence of the order is the history
 (a test commit before the code commit, kept through squash or recorded by CI before it).
@@ -31,8 +34,13 @@ import subprocess
 import sys
 import tempfile
 
-TEST_GLOBS = ["**/test_*.py", "**/*_test.py", "**/*_test.go", "**/*.test.*", "**/*.spec.*",
+TEST_GLOBS = ["**/test_*.py", "**/*_test.py", "**/*_test.go", "**/*_test.sh", "**/*.test.*", "**/*.spec.*",
               "tests/**", "test/**", "**/__tests__/**", "spec/**"]
+# Output that means the tests never ran: Go build and setup failures, Python import and collection
+# errors, missing JS modules, TypeScript errors.
+BUILD_ERRORS = [r"\[build failed\]", r"\[setup failed\]",
+                r"\bModuleNotFoundError\b", r"\bImportError\b", r"\bSyntaxError\b", r"ERROR collecting",
+                r"Cannot find module", r"\berror TS\d+:"]
 NOT_CODE = ["**/*.md", "docs/**", "**/*.txt", "LICENSE*", "**/*.png", "**/*.svg"]
 
 
@@ -78,6 +86,8 @@ def main():
     ap.add_argument("--base", help="the branch the change merges into, e.g. origin/main")
     ap.add_argument("--test-cmd", required=True, help="runs the tests; non-zero exit means a failure")
     ap.add_argument("--tests", nargs="+", default=TEST_GLOBS, help="globs that mark test files")
+    ap.add_argument("--build-errors", nargs="+", default=BUILD_ERRORS,
+                    help="regexes in RED output that mean the tests did not build or load")
     ap.add_argument("--not-code", nargs="+", default=NOT_CODE, help="globs for files that need no test")
     ap.add_argument("--refactor", action="store_true", help="behavior unchanged: tests must not change")
     ap.add_argument("--green-only", action="store_true", help="only run the tests on this checkout")
@@ -125,6 +135,11 @@ def main():
             shutil.rmtree(work, ignore_errors=True)
         if red_rc == 0:
             print("FAIL: the new tests pass without the change, so they do not test it: " + ", ".join(tests))
+            return 1
+        if any(re.search(p, red_out, re.MULTILINE) for p in args.build_errors):
+            print("FAIL: RED did not run the tests: they fail to build or load without the change, so no")
+            print("  assertion was checked. Add the new API as a stub first so the test compiles and fails. Last lines:")
+            print(tail(red_out))
             return 1
         print("RED: the new tests fail on the code before the change. Last lines of that run:")
         print(tail(red_out))
