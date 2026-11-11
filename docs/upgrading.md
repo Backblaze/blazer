@@ -107,9 +107,12 @@ requests through unchanged.
 
 ```go
 // Copying attrs from another bucket but not its replication:
-attrs := src.Attrs(ctx)
+attrs, err := src.Attrs(ctx)
+if err != nil {
+	return err
+}
 attrs.ReplicationConfig = nil
-_, err := client.NewBucket(ctx, "new-bucket", attrs)
+_, err = client.NewBucket(ctx, "new-bucket", attrs)
 ```
 
 #### `sync`: default comparison and platform support
@@ -150,12 +153,15 @@ calling `Close` or waiting on the goroutine that calls `Close` (either deadlocks
 cancellation RPC with a deadline on the context returned by `ctxf`; that deadline does not
 bound `errf`.
 
+### Logging changes
+
+- **Upload retry log text changed.** Verbose upload-part retry logs now record the error
+  type and HTTP status without the server's error message. Code matching the old log text
+  should match on the status/type instead.
+
 ## Upgrading to v0.9.0
 
 - **Go 1.26.10 floor.** v0.9.0 requires a patched Go toolchain; build with Go 1.26.10 or
   newer.
 - **`(*base.B2).CreateBucket` gained arguments.** Low-level callers must pass the new
   parameters; high-level `b2` package users are unaffected.
-- **Upload retry log text changed.** Verbose upload-part retry logs now record the error
-  type and HTTP status without the server's error message. Code matching the old log text
-  should match on the status/type instead.
