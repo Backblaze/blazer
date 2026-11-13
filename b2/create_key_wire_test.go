@@ -31,7 +31,7 @@ func newCreateKeyWire(t *testing.T) (*b2wiretest.Server, *Client) {
 	t.Helper()
 	srv := b2wiretest.New(t)
 	srv.Reply("b2_authorize_account", http.StatusOK, fmt.Sprintf(`{"accountId":"acct-1","authorizationToken":"test-token","applicationKeyExpirationTimestamp":0,"apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"apiUrl":%[1]q,"downloadUrl":%[1]q,"storageApi":"storage","recommendedPartSize":100000000,"s3ApiUrl":%[1]q,"allowed":{"buckets":null,"capabilities":[],"namePrefix":null}}}}`, srv.URL()))
-	srv.Reply("b2_create_key", http.StatusOK, `{"applicationKeyId":"default-key-id","applicationKey":"default-secret","keyName":"default-key","capabilities":["readFiles"],"expirationTimestamp":0}`)
+	srv.Reply("b2_create_key", http.StatusOK, `{"applicationKeyId":"default-key-id","applicationKey":"default-secret","keyName":"default-key","capabilities":["readFiles"],"expirationTimestamp":null}`)
 
 	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))
 	if err != nil {
@@ -58,6 +58,42 @@ func bucketCreateKeyRequest(t *testing.T) b2wiretest.Request {
 		t.Fatalf("Bucket.CreateKey: %v", err)
 	}
 	return srv.Last(t, "b2_create_key")
+}
+
+// B2 key expiration: https://www.backblaze.com/apidocs/b2-create-key
+func TestCreateKeyExpirationWire(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		want     time.Time
+	}{
+		{name: "no expiration"},
+		{
+			name:     "expiration set",
+			response: `{"applicationKeyId":"key-id","applicationKey":"secret","keyName":"k1","capabilities":["readFiles"],"expirationTimestamp":1767225600000}`,
+			want:     time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv, client := newCreateKeyWire(t)
+			if test.response != "" {
+				srv.Reply("b2_create_key", http.StatusOK, test.response)
+			}
+			key, err := client.CreateKey(context.Background(), "k1", Capabilities("readFiles"))
+			if err != nil {
+				t.Fatalf("CreateKey: %v", err)
+			}
+			got := key.Expires()
+			if test.want.IsZero() {
+				if !got.IsZero() {
+					t.Errorf("Expires = %v, want zero time", got)
+				}
+			} else if !got.Equal(test.want) {
+				t.Errorf("Expires = %v, want %v", got, test.want)
+			}
+		})
+	}
 }
 
 // B2 b2_create_key request fields: https://www.backblaze.com/apidocs/b2-create-key
