@@ -191,6 +191,24 @@ func runCheck(ctx context.Context) (err error) {
 	}
 	fmt.Println("NOTE blazer large.compose: knownTotal=10000000000001 rejected startRequests=0")
 
+	// Exactly 2000 five-GB ranges must pass known-total validation. The small
+	// source then stops the first copy at the size check, without moving 10 TB.
+	starts = wire.starts.Load()
+	object, err = bucket.Compose(ctx, "st/at-limit.bin", tooLarge[:2000])
+	if err != nil && strings.Contains(err.Error(), "known total over the 10 TB (10,000,000,000,000 bytes)") {
+		return fmt.Errorf("at-10-TB known total was rejected: %w", err)
+	}
+	if calls := wire.starts.Load() - starts; calls != 1 {
+		return fmt.Errorf("at-10-TB pre-validation sent %d b2_start_large_file request(s), want 1", calls)
+	}
+	if object != nil || err == nil || err.Error() != "b2: Compose part 1 copied 5000003 of 5000000000 requested bytes" {
+		return fmt.Errorf("at-10-TB objectPresent=%t error=%v, want the first copied-size mismatch after start", object != nil, err)
+	}
+	if err := checkAbsent(ctx, bucket, "st/at-limit.bin"); err != nil {
+		return err
+	}
+	fmt.Println("NOTE blazer large.compose: knownTotal=10000000000000 pre-validation=accepted startRequests=1 copiedSizeMismatch=expected")
+
 	// The first uploaded part is acknowledged before the second reader fails.
 	injected := errors.New("injected part reader failure")
 	starts, uploads := wire.starts.Load(), wire.uploads.Load()
