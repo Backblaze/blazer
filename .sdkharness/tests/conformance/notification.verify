@@ -89,18 +89,27 @@ func runCheck() error {
 	for _, tc := range []struct {
 		name, body, signature, secret string
 		accept                        bool
+		wantError                     string
 	}{
-		{"valid signature", body, signature, signingSecret, true},
-		{"missing signature", body, "", signingSecret, false},
-		{"malformed signature", body, "v1=" + strings.Repeat("g", 64), signingSecret, false},
-		{"empty secret", body, "v1=357a61ecceff4feae2142fe010273575136e94312bb7b7b240925431d8554e50", "", false},
-		{"wrong secret signature", body, "v1=aa08548616187e67f80b9e34b6a6f9d4ae7b21942de2c13bfc585f7c49161b6d", signingSecret, false},
-		{"one MiB boundary", strings.Repeat("x", 1<<20), "v1=c890bb6911a7b4dcef09532978a6d99f62144de945a9643db8b54c9b59928a0e", signingSecret, true},
-		{"over one MiB", strings.Repeat("x", (1<<20)+1), "v1=ad03080ab43fc6eab27286db2e24012633bd352f06835a1aeec8499061237ea1", signingSecret, false},
+		{"valid signature", body, signature, signingSecret, true, ""},
+		{"missing signature", body, "", signingSecret, false, ""},
+		{"correct digest without prefix", body, signature[3:], signingSecret, false, "webhook signature must start with v1="},
+		{"correct digest with v2 prefix", body, "v2=" + signature[3:], signingSecret, false, "webhook signature must start with v1="},
+		{"short valid-hex signature", body, signature[:len(signature)-2], signingSecret, false, "webhook signature has invalid length"},
+		{"long valid-hex signature", body, signature + "00", signingSecret, false, "webhook signature has invalid length"},
+		{"malformed signature", body, "v1=" + strings.Repeat("g", 64), signingSecret, false, ""},
+		{"empty secret", body, "v1=357a61ecceff4feae2142fe010273575136e94312bb7b7b240925431d8554e50", "", false, ""},
+		{"wrong secret signature", body, "v1=aa08548616187e67f80b9e34b6a6f9d4ae7b21942de2c13bfc585f7c49161b6d", signingSecret, false, ""},
+		{"one MiB boundary", strings.Repeat("x", 1<<20), "v1=c890bb6911a7b4dcef09532978a6d99f62144de945a9643db8b54c9b59928a0e", signingSecret, true, ""},
+		{"over one MiB", strings.Repeat("x", (1<<20)+1), "v1=ad03080ab43fc6eab27286db2e24012633bd352f06835a1aeec8499061237ea1", signingSecret, false, ""},
 	} {
 		err := b2.VerifySignature([]byte(tc.body), tc.signature, tc.secret)
 		if (err == nil) != tc.accept {
 			return fmt.Errorf("%s: accepted=%t, want %t", tc.name, err == nil, tc.accept)
+		}
+		// Distinguish these guards from later hex-decoding or HMAC rejection.
+		if tc.wantError != "" && (err == nil || err.Error() != tc.wantError) {
+			return fmt.Errorf("%s: error=%v, want %q", tc.name, err, tc.wantError)
 		}
 	}
 	parsed, err := b2.ParseEvent([]byte(body))
@@ -123,7 +132,7 @@ func main() {
 		fmt.Printf("CONFORMANCE blazer notification.verify @simulator: FAIL (check -- %v)\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("NOTE blazer notification.verify: staticVectors=7 decodedEvents=2 simulator=not-used")
+	fmt.Println("NOTE blazer notification.verify: staticVectors=11 decodedEvents=2 simulator=not-used")
 	fmt.Println("CONFORMANCE blazer notification.verify @simulator: PASS")
 }
 __EOF_GO__
