@@ -9,7 +9,7 @@ Covered releases: v0.10.0 and v0.9.0.
 
 ## Upgrading to v0.10.0
 
-v0.10.0 adds the parity capabilities and includes twelve breaking changes. **Two require a
+v0.10.0 adds the parity capabilities and includes twelve breaking changes. **Three require a
 source change** (they cause compile errors); the rest change runtime behavior for specific
 call patterns — mostly turning a previously silent, risky behavior into an explicit error
 ("fail closed"). If you do not use the call patterns below, nothing changes for you.
@@ -46,6 +46,24 @@ var read func(context.Context) *b2.Reader = obj.NewReader
 
 // After — wrap in a closure, or pass keys through
 read := func(ctx context.Context) *b2.Reader { return obj.NewReader(ctx) }
+```
+
+#### `(*base.B2).CreateBucket` takes a replication configuration
+
+The new final argument is required. Pass `nil` to keep the previous behavior when no
+replication configuration is needed. In these examples, `b` is a `*base.B2` and `ctx`
+is a `context.Context`.
+
+Before:
+
+```go
+bucket, err := b.CreateBucket(ctx, "bucket", "allPrivate", nil, nil, nil, nil, false)
+```
+
+After:
+
+```go
+bucket, err := b.CreateBucket(ctx, "bucket", "allPrivate", nil, nil, nil, nil, false, nil)
 ```
 
 ### Behavior changes (fail closed)
@@ -102,8 +120,6 @@ requests through unchanged.
   unchanged; supply role data with normal bucket-update and `writeBucketReplications`
   permissions to change it. Partial updates that preserve an unspecified role also need
   `readBucketReplications`.
-- `(*base.B2).CreateBucket` takes the replication configuration as a new parameter; pass
-  `nil` to keep the previous behavior.
 
 ```go
 // Copying attrs from another bucket but not its replication:
