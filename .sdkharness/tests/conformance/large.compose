@@ -209,6 +209,20 @@ func runCheck(ctx context.Context) (err error) {
 	}
 	fmt.Println("NOTE blazer large.compose: knownTotal=10000000000000 pre-validation=accepted startRequests=1 copiedSizeMismatch=expected")
 
+	// The copied ranges total exactly 10 TB; the declared uploaded byte alone
+	// takes this mixed case over the limit. Keep the copied-only fixture intact.
+	uploadedTooLarge := append([]b2.ComposePart(nil), tooLarge...)
+	uploadedTooLarge[2000] = b2.PartFromReader(bytes.NewReader([]byte("!")), 1)
+	starts = wire.starts.Load()
+	object, err = bucket.Compose(ctx, "st/uploaded-too-large.bin", uploadedTooLarge)
+	if calls := wire.starts.Load() - starts; calls != 0 {
+		return fmt.Errorf("uploaded-size over-10-TB pre-validation sent %d b2_start_large_file request(s), want 0", calls)
+	}
+	if object != nil || err == nil || !strings.Contains(err.Error(), "known total over the 10 TB (10,000,000,000,000 bytes)") {
+		return fmt.Errorf("uploaded-size over-10-TB rejection objectPresent=%t error=%v, want the known-total limit error", object != nil, err)
+	}
+	fmt.Println("NOTE blazer large.compose: mixedKnownTotal=10000000000001 declaredUploadBytes=1 rejected startRequests=0")
+
 	// The first uploaded part is acknowledged before the second reader fails.
 	injected := errors.New("injected part reader failure")
 	starts, uploads := wire.starts.Load(), wire.uploads.Load()
