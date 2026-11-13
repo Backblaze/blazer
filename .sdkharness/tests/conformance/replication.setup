@@ -109,8 +109,8 @@ const capability = "replication.setup"
 // blazer x replication.setup.
 //
 // Setup   source and destination buckets in x/b2sim
-// Action  configure replication twice so the second setup must merge, read it
-//         back, and create a bucket with a replication configuration
+// Action  configure a second destination and a second source so both source
+//         rules and destination mappings must merge; read back each configuration
 // Assert  SetupReplication preserves existing source rules and destination
 //         mappings while adding the new pair; NewBucket persists its
 //         attrs.ReplicationConfig; conflicting or unreadable updates fail.
@@ -157,7 +157,7 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 	initial := replicationExpectation{
 		source: source, sourceKeyID: sourceKeyID, rules: []b2.ReplicationRules{wantRule},
-		mappings: []replicationMappingExpectation{{step: "destination readback", bucket: destination, destinationKeyID: destinationKeyID}},
+		mappings: []replicationMappingExpectation{{step: "destination readback", bucket: destination, mapping: map[string]string{sourceKeyID: destinationKeyID}}},
 	}
 	if err := initial.assert(ctx); err != nil {
 		return err
@@ -189,10 +189,45 @@ func runCheck(ctx context.Context, target *string) error {
 	merged := replicationExpectation{
 		source: source, sourceKeyID: sourceKeyID, rules: []b2.ReplicationRules{wantRule, mergedRule},
 		mappings: []replicationMappingExpectation{
-			{step: "initial destination readback", bucket: destination, destinationKeyID: destinationKeyID},
-			{step: "merged destination readback", bucket: mergedDestination, destinationKeyID: mergedDestinationKeyID},
+			{step: "initial destination readback", bucket: destination, mapping: map[string]string{sourceKeyID: destinationKeyID}},
+			{step: "merged destination readback", bucket: mergedDestination, mapping: map[string]string{sourceKeyID: mergedDestinationKeyID}},
 		},
 	}
+	if err := merged.assert(ctx); err != nil {
+		return err
+	}
+	additionalSource, err := createBucket(ctx, client, "additional-source", nil)
+	if err != nil {
+		return err
+	}
+	defer cleanupBucket(ctx, additionalSource)
+	const additionalSourceKeyID = "additional-source-application-key"
+	const additionalDestinationKeyID = "additional-destination-application-key"
+	additionalRule := b2.ReplicationRules{
+		ReplicationRuleName: "sdkharness-replication-additional-source",
+		DestinationBucketID: destination.ID(),
+		FileNamePrefix:      "additional/",
+		IsEnabled:           true,
+		Priority:            71,
+	}
+	if err := b2.SetupReplication(ctx, additionalSource, destination, additionalSourceKeyID, additionalDestinationKeyID,
+		b2.WithRuleName(additionalRule.ReplicationRuleName),
+		b2.WithFileNamePrefix(additionalRule.FileNamePrefix),
+		b2.WithRulePriority(additionalRule.Priority)); err != nil {
+		return classify("merge destination mapping", err)
+	}
+	sharedMapping := map[string]string{
+		sourceKeyID:           destinationKeyID,
+		additionalSourceKeyID: additionalDestinationKeyID,
+	}
+	additional := replicationExpectation{
+		source: additionalSource, sourceKeyID: additionalSourceKeyID, rules: []b2.ReplicationRules{additionalRule},
+		mappings: []replicationMappingExpectation{{step: "shared destination readback", bucket: destination, mapping: sharedMapping}},
+	}
+	if err := additional.assert(ctx); err != nil {
+		return err
+	}
+	merged.mappings[0].mapping = sharedMapping
 	if err := merged.assert(ctx); err != nil {
 		return err
 	}
@@ -301,9 +336,9 @@ type replicationExpectation struct {
 }
 
 type replicationMappingExpectation struct {
-	step             string
-	bucket           *b2.Bucket
-	destinationKeyID string
+	step    string
+	bucket  *b2.Bucket
+	mapping map[string]string
 }
 
 func (want replicationExpectation) assert(ctx context.Context) error {
@@ -329,9 +364,11 @@ func (want replicationExpectation) assert(ctx context.Context) error {
 			return failf(mappingWant.step, "the destination reports no replication key mapping")
 		}
 		mapping := destinationAttrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping
-		wantMapping := map[string]string{want.sourceKeyID: mappingWant.destinationKeyID}
-		if !reflect.DeepEqual(mapping, wantMapping) {
-			return failf(mappingWant.step, "destination key mappings = %+v, want %+v", mapping, wantMapping)
+		if len(mapping) != len(mappingWant.mapping) {
+			return failf(mappingWant.step, "destination key mappings = %d, want %d", len(mapping), len(mappingWant.mapping))
+		}
+		if !reflect.DeepEqual(mapping, mappingWant.mapping) {
+			return failf(mappingWant.step, "destination key mappings = %+v, want %+v", mapping, mappingWant.mapping)
 		}
 	}
 	status, err := b2.ReplicationStatus(ctx, want.source)
