@@ -71,7 +71,9 @@ exit "$run_rc"
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"strings"
@@ -85,13 +87,14 @@ const signingSecret = "0123456789abcdef0123456789abcdef"
 const body = `{"events":[{"accountId":"account-id","bucketId":"bucket-id","bucketName":"test-bucket","eventId":"event-1","eventTimestamp":1684793309123,"eventType":"b2:ObjectCreated:Upload","eventVersion":1,"matchedRuleName":"uploads","objectName":"logs/file.txt","objectSize":12,"objectVersionId":"version-1"},{"accountId":"account-id","bucketId":"bucket-id","bucketName":"test-bucket","eventId":"event-2","eventTimestamp":1684793309124,"eventType":"b2:HideMarkerCreated:Hide","eventVersion":1,"matchedRuleName":"hides","objectName":"logs/hidden.txt","objectSize":0,"objectVersionId":"version-2"}]}`
 const signature = "v1=75b3de3a38eb8eb189bbf894c123577fb21d80e0991df96b54ec61b4df011d5f"
 
-func runCheck() error {
+func checkSignatures(verify func([]byte, string, string) error) error {
 	for _, tc := range []struct {
 		name, body, signature, secret string
 		accept                        bool
 		wantError                     string
 	}{
 		{"valid signature", body, signature, signingSecret, true, ""},
+		{"wrong secret signature", body, "v1=aa08548616187e67f80b9e34b6a6f9d4ae7b21942de2c13bfc585f7c49161b6d", signingSecret, false, ""},
 		{"missing signature", body, "", signingSecret, false, ""},
 		{"correct digest without prefix", body, signature[3:], signingSecret, false, "webhook signature must start with v1="},
 		{"correct digest with v2 prefix", body, "v2=" + signature[3:], signingSecret, false, "webhook signature must start with v1="},
@@ -99,11 +102,10 @@ func runCheck() error {
 		{"long valid-hex signature", body, signature + "00", signingSecret, false, "webhook signature has invalid length"},
 		{"malformed signature", body, "v1=" + strings.Repeat("g", 64), signingSecret, false, ""},
 		{"empty secret", body, "v1=357a61ecceff4feae2142fe010273575136e94312bb7b7b240925431d8554e50", "", false, ""},
-		{"wrong secret signature", body, "v1=aa08548616187e67f80b9e34b6a6f9d4ae7b21942de2c13bfc585f7c49161b6d", signingSecret, false, ""},
 		{"one MiB boundary", strings.Repeat("x", 1<<20), "v1=c890bb6911a7b4dcef09532978a6d99f62144de945a9643db8b54c9b59928a0e", signingSecret, true, ""},
 		{"over one MiB", strings.Repeat("x", (1<<20)+1), "v1=ad03080ab43fc6eab27286db2e24012633bd352f06835a1aeec8499061237ea1", signingSecret, false, ""},
 	} {
-		err := b2.VerifySignature([]byte(tc.body), tc.signature, tc.secret)
+		err := verify([]byte(tc.body), tc.signature, tc.secret)
 		if (err == nil) != tc.accept {
 			return fmt.Errorf("%s: accepted=%t, want %t", tc.name, err == nil, tc.accept)
 		}
@@ -111,6 +113,28 @@ func runCheck() error {
 		if tc.wantError != "" && (err == nil || err.Error() != tc.wantError) {
 			return fmt.Errorf("%s: error=%v, want %q", tc.name, err, tc.wantError)
 		}
+	}
+	return nil
+}
+
+func checkAlwaysAcceptVerifier() error {
+	err := checkSignatures(func([]byte, string, string) error { return nil })
+	// Capture the mutation's FAIL without emitting a second standing verdict.
+	var output bytes.Buffer
+	writeVerdict(&output, err)
+	const want = "CONFORMANCE blazer notification.verify @simulator: FAIL (check -- wrong secret signature: accepted=true, want false)\n"
+	if output.String() != want {
+		return fmt.Errorf("always-accept self-check did not report the expected FAIL verdict")
+	}
+	return nil
+}
+
+func runCheck() error {
+	if err := checkSignatures(b2.VerifySignature); err != nil {
+		return err
+	}
+	if err := checkAlwaysAcceptVerifier(); err != nil {
+		return err
 	}
 	parsed, err := b2.ParseEvent([]byte(body))
 	if err != nil {
@@ -127,12 +151,20 @@ func runCheck() error {
 	return nil
 }
 
+func writeVerdict(output io.Writer, err error) {
+	if err != nil {
+		fmt.Fprintf(output, "CONFORMANCE blazer notification.verify @simulator: FAIL (check -- %v)\n", err)
+		return
+	}
+	fmt.Fprintln(output, "CONFORMANCE blazer notification.verify @simulator: PASS")
+}
+
 func main() {
 	if err := runCheck(); err != nil {
-		fmt.Printf("CONFORMANCE blazer notification.verify @simulator: FAIL (check -- %v)\n", err)
+		writeVerdict(os.Stdout, err)
 		os.Exit(1)
 	}
-	fmt.Println("NOTE blazer notification.verify: staticVectors=11 decodedEvents=2 simulator=not-used")
-	fmt.Println("CONFORMANCE blazer notification.verify @simulator: PASS")
+	fmt.Println("NOTE blazer notification.verify: staticVectors=11 decodedEvents=2 mutationSelfCheck=detected simulator=not-used")
+	writeVerdict(os.Stdout, nil)
 }
 __EOF_GO__
