@@ -158,6 +158,9 @@ func runCheck(ctx context.Context, target *string) error {
 	if err := assertReplicationRoundTrip(ctx, source, destination, sourceKeyID, destinationKeyID, wantRule); err != nil {
 		return err
 	}
+	if err := assertCorruptMappingRejected(ctx, sim, source, destination, sourceKeyID, destinationKeyID, wantRule); err != nil {
+		return err
+	}
 
 	createConfig := &b2.ReplicationConfiguration{AsReplicationSource: b2.AsReplicationSource{
 		SourceApplicationKeyID: "created-source-key",
@@ -179,12 +182,22 @@ func runCheck(ctx context.Context, target *string) error {
 		return err
 	}
 
-	if err := b2.SetupReplication(ctx, source, destination, sourceKeyID, destinationKeyID,
-		b2.WithRuleName("first"), b2.WithRuleName("second")); err == nil || err.Error() != "setup replication: conflicting rule names" {
-		return failf("conflicting options", "SetupReplication error = %v, want conflicting rule names", err)
+	if err := expectError("conflicting rule names", b2.SetupReplication(ctx, source, destination, sourceKeyID, destinationKeyID,
+		b2.WithRuleName("first"), b2.WithRuleName("second")), "setup replication: conflicting rule names"); err != nil {
+		return err
+	}
+	if err := expectError("source key conflict", b2.SetupReplication(ctx, source, destination, "different-source-key", destinationKeyID, options...), "setup replication: source already uses a different application key ID"); err != nil {
+		return err
+	}
+	if err := expectError("destination mapping conflict", b2.SetupReplication(ctx, source, destination, sourceKeyID, "different-destination-key", options...), "setup replication: destination already maps the source key to a different application key ID"); err != nil {
+		return err
+	}
+	if err := expectError("rule options conflict", b2.SetupReplication(ctx, source, destination, sourceKeyID, destinationKeyID,
+		b2.WithRuleName(wantRule.ReplicationRuleName), b2.WithFileNamePrefix("other/")), "setup replication: rule name \"sdkharness-replication\" is already in use with different options"); err != nil {
+		return err
 	}
 
-	maskedClient, err := simulatorClient(ctx, unreadableReplicationTransport{next: sim})
+	maskedClient, err := simulatorClient(ctx, replicationReadbackTransport{next: sim, mutate: markReplicationUnreadable})
 	if err != nil {
 		return err
 	}
@@ -206,7 +219,7 @@ func runCheck(ctx context.Context, target *string) error {
 		return err
 	}
 
-	note("source rule and destination key mapping round-tripped; no data replication asserted")
+	note("source rule and destination key mapping round-tripped; corrupted mapping rejected; no data replication asserted")
 	return nil
 }
 
@@ -266,6 +279,33 @@ func assertReplicationRoundTrip(ctx context.Context, source, destination *b2.Buc
 	return nil
 }
 
+func assertCorruptMappingRejected(ctx context.Context, sim http.RoundTripper, source, destination *b2.Bucket, sourceKeyID, destinationKeyID string, want b2.ReplicationRules) error {
+	client, err := simulatorClient(ctx, replicationReadbackTransport{
+		next:   sim,
+		mutate: corruptDestinationMapping(sourceKeyID),
+	})
+	if err != nil {
+		return err
+	}
+	corruptSource, err := client.Bucket(ctx, source.Name())
+	if err != nil {
+		return classify("read corrupt source", err)
+	}
+	corruptDestination, err := client.Bucket(ctx, destination.Name())
+	if err != nil {
+		return classify("read corrupt destination", err)
+	}
+	err = assertReplicationRoundTrip(ctx, corruptSource, corruptDestination, sourceKeyID, destinationKeyID, want)
+	if err == nil {
+		return failf("mapping corruption", "the corrupted destination key mapping was accepted")
+	}
+	failure, ok := err.(*failErr)
+	if !ok || failure.step != "destination readback" {
+		return failf("mapping corruption", "corrupt readback failed at %v, want destination mapping comparison", err)
+	}
+	return nil
+}
+
 func assertConfig(step string, attrs *b2.BucketAttrs, keyID string, want b2.ReplicationRules) error {
 	if attrs.ReplicationConfig == nil {
 		return failf(step, "the bucket reports no replication configuration")
@@ -290,12 +330,15 @@ func expectError(step string, err error, want string) error {
 	return nil
 }
 
-// unreadableReplicationTransport leaves the simulator's stored configuration
-// alone, but changes list responses to the documented unreadable shape. That
-// makes the public client reject unsafe partial merges before it writes.
-type unreadableReplicationTransport struct{ next http.RoundTripper }
+// replicationReadbackTransport leaves the simulator's stored configuration
+// alone, but changes a list response before blazer decodes it. The scenario
+// uses it to prove safe behavior for unreadable and corrupted readbacks.
+type replicationReadbackTransport struct {
+	next   http.RoundTripper
+	mutate func(map[string]any) error
+}
 
-func (t unreadableReplicationTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+func (t replicationReadbackTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := t.next.RoundTrip(request)
 	if err != nil || !strings.HasSuffix(request.URL.Path, "/b2_list_buckets") {
 		return response, err
@@ -324,8 +367,9 @@ func (t unreadableReplicationTransport) RoundTrip(request *http.Request) (*http.
 		if !ok {
 			return nil, fmt.Errorf("bucket has no replicationConfiguration object")
 		}
-		replication["isClientAuthorizedToRead"] = false
-		replication["value"] = nil
+		if err := t.mutate(replication); err != nil {
+			return nil, err
+		}
 	}
 	encoded, err := json.Marshal(listed)
 	if err != nil {
@@ -334,6 +378,33 @@ func (t unreadableReplicationTransport) RoundTrip(request *http.Request) (*http.
 	response.Body = io.NopCloser(bytes.NewReader(encoded))
 	response.ContentLength = int64(len(encoded))
 	return response, nil
+}
+
+func markReplicationUnreadable(replication map[string]any) error {
+	replication["isClientAuthorizedToRead"] = false
+	replication["value"] = nil
+	return nil
+}
+
+func corruptDestinationMapping(sourceKeyID string) func(map[string]any) error {
+	return func(replication map[string]any) error {
+		value, ok := replication["value"].(map[string]any)
+		if !ok || value == nil {
+			return nil
+		}
+		destination, ok := value["asReplicationDestination"].(map[string]any)
+		if !ok || destination == nil {
+			return nil
+		}
+		mapping, ok := destination["sourceToDestinationKeyMapping"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("replication destination has no source-to-destination key mapping")
+		}
+		if _, ok := mapping[sourceKeyID]; ok {
+			mapping[sourceKeyID] = "different-destination-key"
+		}
+		return nil
+	}
 }
 
 // ---------------------------------------------------------------------------
