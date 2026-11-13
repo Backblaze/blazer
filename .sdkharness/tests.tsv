@@ -47,6 +47,7 @@ resilience	api.retry_after_429	simulator	./.sdkharness/tests/run-resilience
 resilience	api.retry_after_503	simulator	./.sdkharness/tests/run-resilience
 resilience	auth.clock_expiry	simulator	./.sdkharness/tests/run-resilience
 resilience	auth.expired_401	simulator	./.sdkharness/tests/run-resilience
+resilience	download.range_validation	simulator	./.sdkharness/tests/run-resilience
 resilience	part.retry_503	simulator	./.sdkharness/tests/run-resilience
 resilience	upload.cap_exceeded_403	simulator	./.sdkharness/tests/run-resilience
 resilience	upload.expired_token_401	simulator	./.sdkharness/tests/run-resilience
