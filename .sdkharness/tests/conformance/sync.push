@@ -248,7 +248,19 @@ func checkModTime(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, 
 	if err := checkResult(name+" changed millisecond", result, err, []string{"file.txt"}, nil, 9); err != nil {
 		return err
 	}
-	return checkRemote(ctx, bucket, prefix+"/file.txt", "new-value", 1700000000124)
+	if err := checkRemote(ctx, bucket, prefix+"/file.txt", "new-value", 1700000000124); err != nil {
+		return err
+	}
+	// The local tree wins even when older. This instant is only 50 us before
+	// the destination's 124 ms timestamp, but lies in a different millisecond.
+	if err := writeLocal(root, "file.txt", "old-again", time.Unix(1_700_000_000, 123_950_000)); err != nil {
+		return err
+	}
+	result, err = b2sync.Sync(ctx, bucket, prefix, root, opts...)
+	if err := checkResult(name+" older sub-millisecond boundary", result, err, []string{"file.txt"}, nil, 9); err != nil {
+		return err
+	}
+	return checkRemote(ctx, bucket, prefix+"/file.txt", "old-again", 1700000000123)
 }
 
 func checkComparison(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root, name, changed string, count int64, mode b2sync.CompareMode) error {
