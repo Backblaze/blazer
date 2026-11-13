@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x notification.verify -- the contract is bin/conformance/README.md.
+#
+# Scenario: verify signed event-notification bodies and decode their events.
+#
+# DOCS. B2 signs the raw request payload with HMAC-SHA256 and sends the
+# hex digest prefixed with v1=. Blazer v0.10.0 rejects missing/malformed
+# signatures, empty signing secrets, and bodies larger than 1 MiB.
+# https://www.backblaze.com/docs/cloud-storage-event-notifications-reference-guide
+# https://github.com/Backblaze/blazer/releases/tag/v0.10.0
+#
+# Static vectors only: the catalog's simulator target is retained for contract
+# compatibility, but this check needs no simulator URL, server, or credentials.
+# Exercises the checked-out module through a local Go replace.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+SLUG=blazer
+CAP=notification.verify
+TARGET=simulator
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET; then
+  say "$TARGET" "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.10.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+import (
+	"fmt"
+	"os"
+	"reflect"
+	"strings"
+
+	"github.com/Backblaze/blazer/b2"
+)
+
+// Digests were computed independently with Python's hmac/sha256, not blazer.
+// These public test values are not credentials for any service.
+const signingSecret = "0123456789abcdef0123456789abcdef"
+const body = `{"events":[{"accountId":"account-id","bucketId":"bucket-id","bucketName":"test-bucket","eventId":"event-1","eventTimestamp":1684793309123,"eventType":"b2:ObjectCreated:Upload","eventVersion":1,"matchedRuleName":"uploads","objectName":"logs/file.txt","objectSize":12,"objectVersionId":"version-1"},{"accountId":"account-id","bucketId":"bucket-id","bucketName":"test-bucket","eventId":"event-2","eventTimestamp":1684793309124,"eventType":"b2:HideMarkerCreated:Hide","eventVersion":1,"matchedRuleName":"hides","objectName":"logs/hidden.txt","objectSize":0,"objectVersionId":"version-2"}]}`
+const signature = "v1=75b3de3a38eb8eb189bbf894c123577fb21d80e0991df96b54ec61b4df011d5f"
+
+func runCheck() error {
+	for _, tc := range []struct {
+		name, body, signature, secret string
+		accept                        bool
+	}{
+		{"valid signature", body, signature, signingSecret, true},
+		{"missing signature", body, "", signingSecret, false},
+		{"malformed signature", body, "v1=" + strings.Repeat("g", 64), signingSecret, false},
+		{"empty secret", body, "v1=357a61ecceff4feae2142fe010273575136e94312bb7b7b240925431d8554e50", "", false},
+		{"wrong secret signature", body, "v1=aa08548616187e67f80b9e34b6a6f9d4ae7b21942de2c13bfc585f7c49161b6d", signingSecret, false},
+		{"one MiB boundary", strings.Repeat("x", 1<<20), "v1=c890bb6911a7b4dcef09532978a6d99f62144de945a9643db8b54c9b59928a0e", signingSecret, true},
+		{"over one MiB", strings.Repeat("x", (1<<20)+1), "v1=ad03080ab43fc6eab27286db2e24012633bd352f06835a1aeec8499061237ea1", signingSecret, false},
+	} {
+		err := b2.VerifySignature([]byte(tc.body), tc.signature, tc.secret)
+		if (err == nil) != tc.accept {
+			return fmt.Errorf("%s: accepted=%t, want %t", tc.name, err == nil, tc.accept)
+		}
+	}
+	parsed, err := b2.ParseEvent([]byte(body))
+	if err != nil {
+		return fmt.Errorf("parse valid notification: %w", err)
+	}
+	size, zero := int64(12), int64(0)
+	want := &b2.EventNotification{Events: []b2.Event{
+		{AccountID: "account-id", BucketID: "bucket-id", BucketName: "test-bucket", EventID: "event-1", EventTimestamp: 1684793309123, EventType: "b2:ObjectCreated:Upload", EventVersion: 1, MatchedRuleName: "uploads", ObjectName: "logs/file.txt", ObjectSize: &size, ObjectVersionID: "version-1"},
+		{AccountID: "account-id", BucketID: "bucket-id", BucketName: "test-bucket", EventID: "event-2", EventTimestamp: 1684793309124, EventType: "b2:HideMarkerCreated:Hide", EventVersion: 1, MatchedRuleName: "hides", ObjectName: "logs/hidden.txt", ObjectSize: &zero, ObjectVersionID: "version-2"},
+	}}
+	if !reflect.DeepEqual(parsed, want) {
+		return fmt.Errorf("parsed events differ from the two expected events")
+	}
+	return nil
+}
+
+func main() {
+	if err := runCheck(); err != nil {
+		fmt.Printf("CONFORMANCE blazer notification.verify @simulator: FAIL (check -- %v)\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("NOTE blazer notification.verify: staticVectors=7 decodedEvents=2 simulator=not-used")
+	fmt.Println("CONFORMANCE blazer notification.verify @simulator: PASS")
+}
+__EOF_GO__

@@ -7,9 +7,19 @@ evidence retention and reporting. Each assertion builds a tiny Go program agains
 checkout** (a local `replace`, so the revision under test is the one on disk) and runs it
 against the simulator.
 
+`notification.verify` is the exception: it exercises `b2.VerifySignature` and
+`b2.ParseEvent` with static vectors and needs no simulator or credentials. Its catalog
+target remains `simulator` for contract compatibility, but it makes no requests. Run it
+without starting a simulator or setting `SDKHARNESS_SIMULATOR_URL`:
+
+```bash
+SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=notification.verify \
+  .sdkharness/tests/run-conformance
+```
+
 ## What these checks can and cannot reach
 
-- **Only the loopback simulator.** Every check refuses to run unless its simulator URL is a
+- **Only the loopback simulator for service checks.** Each service check refuses to run unless its simulator URL is a
   bare IPv4 loopback HTTP origin (`http://127.0.0.1:<port>`). There is no staging or
   production mode and no default realm.
 - **Only the simulator's fixed test credential** (`test-key-id` / `test-key`). Ambient
