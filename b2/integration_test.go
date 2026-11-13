@@ -769,7 +769,7 @@ func TestNewBucket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	client, err := NewClient(ctx, id, key)
+	client, err := NewClient(ctx, id, key, endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -845,7 +845,7 @@ func TestBucketDefaultEncryption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	client, err := NewClient(ctx, id, key)
+	client, err := NewClient(ctx, id, key, endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1228,7 +1228,7 @@ func TestListBucketsWithKey(t *testing.T) {
 		}
 	}()
 
-	client, err := NewClient(ctx, key.ID(), key.Secret())
+	client, err := NewClient(ctx, key.ID(), key.Secret(), endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1257,7 +1257,7 @@ func TestListBucketContentsWithKey(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	client, err := NewClient(ctx, key.ID(), key.Secret())
+	client, err := NewClient(ctx, key.ID(), key.Secret(), endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1334,7 +1334,7 @@ func TestMultiBucketKeyListsAllowedBuckets(t *testing.T) {
 	}()
 
 	// Authorizing with a multi-bucket key only works against v4.
-	mbClient, err := NewClient(ctx, key.ID(), key.Secret())
+	mbClient, err := NewClient(ctx, key.ID(), key.Secret(), endpointOpts()...)
 	if err != nil {
 		t.Fatalf("NewClient with multi-bucket key: %v", err)
 	}
@@ -1652,7 +1652,7 @@ func startLiveTest(ctx context.Context, t *testing.T) (*Bucket, func()) {
 	ccport := &ccTripper{rt: defaultTransport, t: t}
 	tport := eofTripper{rt: ccport, t: t}
 	errport := transport.WithFailures(tport, transport.FailureRate(.25), transport.MatchPathSubstring("/b2_get_upload_url"), transport.Response(503))
-	client, err := NewClient(ctx, id, key, FailSomeUploads(), ExpireSomeAuthTokens(), Transport(errport), UserAgent("b2-test"), UserAgent("integration-test"))
+	client, err := NewClient(ctx, id, key, append([]ClientOption{FailSomeUploads(), ExpireSomeAuthTokens(), Transport(errport), UserAgent("b2-test"), UserAgent("integration-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 		return nil, nil

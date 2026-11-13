@@ -37,7 +37,7 @@ func TestObjectLockLive(t *testing.T) {
 	if id == "" || key == "" {
 		t.Skipf("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration tests")
 	}
-	client, err := NewClient(ctx, id, key, UserAgent("b2-test"), UserAgent("object-lock-test"))
+	client, err := NewClient(ctx, id, key, append([]ClientOption{UserAgent("b2-test"), UserAgent("object-lock-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -62,7 +62,7 @@ func TestStorage(t *testing.T) {
 	ctx := context.Background()
 
 	// b2_authorize_account
-	b2, err := AuthorizeAccount(ctx, id, key, UserAgent("blazer-base-test"))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{UserAgent("blazer-base-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestUploadAuthAfterConnectionHang(t *testing.T) {
 	}
 	tport := transport.WithFailures(nil, transport.AfterNBytes(10000, hang))
 
-	b2, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestCancelledContextCancelsHTTPRequest(t *testing.T) {
 
 	tport := transport.WithFailures(nil, transport.MatchPathSubstring("b2_upload_file"), transport.FailureRate(1), transport.Stall(2*time.Second))
 
-	b2, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +555,7 @@ func TestDeadlineExceededContextCancelsHTTPRequest(t *testing.T) {
 	ctx := context.Background()
 
 	tport := transport.WithFailures(nil, transport.MatchPathSubstring("b2_upload_file"), transport.FailureRate(1), transport.Stall(2*time.Second))
-	b2, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +601,11 @@ func TestUnknownCA(t *testing.T) {
 		TLSClientConfig: &tls.Config{RootCAs: x509.NewCertPool()},
 	}
 
-	_, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	eopts, ok := tlsEndpointOpts()
+	if !ok {
+		t.Skipf("%s is not https and %s is unset; an untrusted CA cannot be tested over plain http", endpointVar, tlsEndpointVar)
+	}
+	_, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, eopts...)...)
 	if err == nil {
 		t.Error("expected an error, got none")
 	}
@@ -771,7 +775,7 @@ func TestUploadDownloadFilenameEscaping(t *testing.T) {
 	ctx := context.Background()
 
 	// b2_authorize_account
-	b2, err := AuthorizeAccount(ctx, id, key, UserAgent("blazer-base-test"))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{UserAgent("blazer-base-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
