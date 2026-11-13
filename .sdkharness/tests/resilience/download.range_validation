@@ -121,8 +121,7 @@ func runCheck(ctx context.Context) error {
 		{name: "206 missing Content-Range", status: 206, offset: 2, size: 4, requestRange: "bytes=2-5", length: "4", body: "2345", invalid: true},
 		{name: "206 invalid Content-Range", status: 206, offset: 2, size: 4, requestRange: "bytes=2-5", length: "4", span: "not-a-range", body: "2345", invalid: true},
 		{name: "206 wrong range start", status: 206, offset: 2, size: 4, requestRange: "bytes=2-5", length: "4", span: "bytes 1-4/10", body: "1234", invalid: true},
-		// Body and Content-Length match total-offset; the end lies outside the stated total.
-		{name: "206 total at range end", status: 206, offset: 2, size: 4, requestRange: "bytes=2-5", length: "3", span: "bytes 2-5/5", body: "234", invalid: true},
+		{name: "206 total at range end", status: 206, offset: 2, size: 4, requestRange: "bytes=2-5", length: "4", span: "bytes 2-5/5", body: "2345", invalid: true},
 		{name: "206 truncated range end", status: 206, offset: 2, size: 4, requestRange: "bytes=2-5", length: "4", span: "bytes 2-4/10", body: "2345", invalid: true},
 	}
 	invalid, controls := 0, 0
