@@ -31,6 +31,7 @@ conformance	large.unbound_incremental	simulator	./.sdkharness/tests/run-conforma
 conformance	lock.bucket_default	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.bypass_governance	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.legal_hold	simulator	./.sdkharness/tests/run-conformance
+conformance	lock.per_file	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.per_file_retention	simulator	./.sdkharness/tests/run-conformance
 conformance	logs.no_secrets	simulator	./.sdkharness/tests/run-conformance
 conformance	replication.setup	simulator	./.sdkharness/tests/run-conformance
