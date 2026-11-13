@@ -317,13 +317,13 @@ func runCheck(ctx context.Context, target *string) error {
 	if err := assertSDKEncryption("copy metadata", copyAttrs); err != nil {
 		return err
 	}
-	if err := assertPublicSSECMetadata(audit.since(0), keyValue); err != nil {
-		return err
-	}
 	if err := assertInvalidSSECInfo(ctx, bucket, audit, key, rawKey, keyID); err != nil {
 		return err
 	}
 	if err := assertUnsafeResumeRejected(ctx, baseURL, bucket, audit, key, keyValue, keyMD5, keyID); err != nil {
+		return err
+	}
+	if err := assertPublicSSECMetadata(audit.since(0), keyValue); err != nil {
 		return err
 	}
 
@@ -370,7 +370,14 @@ func (a *wireAudit) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	resp, err := http.DefaultTransport.RoundTrip(req)
-	if err == nil && resp.StatusCode == http.StatusOK && strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
+	if resp != nil {
+		for _, values := range resp.Header {
+			for _, value := range values {
+				call.keyEchoed = call.keyEchoed || strings.Contains(value, a.key)
+			}
+		}
+	}
+	if resp != nil && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			resp.Body.Close()
@@ -378,8 +385,8 @@ func (a *wireAudit) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(body))
-		call.keyEchoed = bytes.Contains(body, []byte(a.key))
-		if strings.HasSuffix(call.path, "/b2_get_file_info") {
+		call.keyEchoed = call.keyEchoed || bytes.Contains(body, []byte(a.key))
+		if resp.StatusCode == http.StatusOK && strings.HasSuffix(call.path, "/b2_get_file_info") {
 			if err := json.Unmarshal(body, &call.response); err != nil {
 				return nil, err
 			}
@@ -436,7 +443,7 @@ func assertPublicSSECMetadata(calls []wireCall, key string) error {
 	seen := false
 	for _, call := range calls {
 		if call.keyEchoed {
-			return failf("SSE-C metadata", "%s echoed the customer key in a JSON response", call.path)
+			return failf("SSE-C metadata", "%s echoed the customer key in a response", call.path)
 		}
 		if !strings.HasSuffix(call.path, "/b2_get_file_info") || call.response == nil {
 			continue
@@ -519,9 +526,34 @@ func assertInvalidSSECInfo(ctx context.Context, bucket *b2.Bucket, audit *wireAu
 	if err != nil {
 		return failf("invalid info setup", "a valid key without ID was rejected")
 	}
-	fullInfo := make(map[string]string, 10)
+	atLimitInfo := make(map[string]string, 9)
+	for i := 0; i < 9; i++ {
+		atLimitInfo[fmt.Sprintf("entry_%d", i)] = "value"
+	}
+	atLimitObject := bucket.Object(objectName("ten-info-entries"))
+	before := audit.count()
+	atLimitWriter := atLimitObject.NewWriter(ctx,
+		b2.WithSSECKey(key), b2.WithAttrsOption(&b2.Attrs{Info: atLimitInfo}))
+	if _, err := atLimitWriter.Write([]byte("x")); err != nil {
+		atLimitWriter.Close()
+		return failf("file info limit", "nine caller entries plus key ID failed to write: %v", err)
+	}
+	if err := atLimitWriter.Close(); err != nil {
+		return failf("file info limit", "nine caller entries plus key ID failed to close: %v", err)
+	}
+	if audit.count() == before {
+		return failf("file info limit", "the accepted 10-entry upload sent no B2 request")
+	}
+	atLimitAttrs, err := atLimitObject.Attrs(ctx, key)
+	if err != nil {
+		return classify("file info limit metadata", err)
+	}
+	if len(atLimitAttrs.Info) != 10 || atLimitAttrs.Info["sse_c_key_id"] != id {
+		return failf("file info limit", "stored %d file-info entries and key ID %q, want 10 entries including the caller key ID", len(atLimitAttrs.Info), atLimitAttrs.Info["sse_c_key_id"])
+	}
+	overLimitInfo := make(map[string]string, 10)
 	for i := 0; i < 10; i++ {
-		fullInfo[fmt.Sprintf("entry_%d", i)] = "value"
+		overLimitInfo[fmt.Sprintf("entry_%d", i)] = "value"
 	}
 	for _, test := range []struct {
 		name string
@@ -534,8 +566,8 @@ func assertInvalidSSECInfo(ctx context.Context, bucket *b2.Bucket, audit *wireAu
 		{"uppercase-conflict", key, map[string]string{"SSE_C_KEY_ID": "other"}, []byte("x"), "conflicts"},
 		{"mixedcase-conflict", key, map[string]string{"Sse_C_Key_Id": "other"}, []byte("x"), "conflicts"},
 		{"id-without-key-id", plainKey, map[string]string{"sse_c_key_id": id}, []byte("x"), "requires a caller-supplied key ID"},
-		{"eleven-info-entries-simple", key, fullInfo, []byte("x"), "10-entry file info limit"},
-		{"eleven-info-entries", key, fullInfo, payloadOf(5_000_001), "10-entry file info limit"},
+		{"eleven-info-entries-simple", key, overLimitInfo, []byte("x"), "10-entry file info limit"},
+		{"eleven-info-entries", key, overLimitInfo, payloadOf(5_000_001), "10-entry file info limit"},
 	} {
 		before := audit.count()
 		writer := bucket.Object(objectName("invalid-"+test.name)).NewWriter(ctx,
