@@ -1,0 +1,34 @@
+# Always-human paths. Code-owner review is required here whatever the risk tier says
+# (enable "Require review from Code Owners" in branch protection or the ruleset).
+# The last matching pattern wins. There is no `*` catch-all on purpose: with code-owner review required it
+# would put a person on every PR and cancel the no-human tier. Paths not listed get their approvals from
+# the tier check (classify.py's humans_required as a required check).
+
+/.github/                   @your-org/platform
+/infra/                     @your-org/platform
+/CODEOWNERS                 @your-org/platform
+/docs/CODEOWNERS            @your-org/platform
+/evals/                     @your-org/tech-leads
+# Sensitive directories at any depth (no leading slash), matching the ** globs in risk-tiers.json.
+auth/                       @your-org/security
+billing/                    @your-org/payments @your-org/security
+migrations/                 @your-org/data
+installer/                  @your-org/release
+# Agent configuration, reviewer instructions and the tier rules, at any depth (no leading slash), so nested
+# workstreams count too. A PR must not change the agent's tools or lower its own tier without an owner.
+# Covers Claude Code, Codex, Copilot and Gemini CLI; /.github/ above covers Copilot's copilot-instructions.md,
+# instructions/, agents/, hooks/ and skills/. Drop the lines for assistants you do not use, and add any
+# instruction file names you configure (Codex project_doc_fallback_filenames, Gemini context.fileName).
+REVIEW.md                   @your-org/tech-leads
+AGENTS.md                   @your-org/tech-leads
+AGENTS.override.md          @your-org/tech-leads
+CLAUDE.md                   @your-org/tech-leads
+CLAUDE.local.md             @your-org/tech-leads
+GEMINI.md                   @your-org/tech-leads
+.claude/                    @your-org/tech-leads
+.codex/                     @your-org/tech-leads
+.gemini/                    @your-org/tech-leads
+.agents/                    @your-org/tech-leads
+.mcp.json                   @your-org/tech-leads
+risk-tiers.json             @your-org/tech-leads
+classify.py                 @your-org/tech-leads

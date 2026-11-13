@@ -97,7 +97,9 @@ Each line was raised by a reviewer on at least two PRs.
 - Non-trivial changes start in `intent/<slug>/`: `intent.md` (problem) → `spec.md` (numbered requirements
   R1..) → `plan.md` (steps cite R numbers). A human approves each before the next. Templates in
   [`intent/README.md`](intent/README.md). Bug fixes with a linked issue may skip straight to a failing test.
-- Bug fixes: commit the failing regression test first, then the fix, without editing the test.
+- Test first for every behavior change: commit the failing test, then the change, without editing the test.
+  Show it fails without the change ([docs/testing.md](docs/testing.md#showing-a-test-pins-the-fix)).
+- Before a plan is approved, run the `plan-critic` agent (`.claude/agents/`) on it and record the result.
 - Skills in `.claude/skills/` (`ai-native-sdlc` routes to the right one).
 - Before opening a PR, review your own diff in a fresh context (`/code-review` and `/security-review`, or a
   subagent that did not write the code) and fix or answer what it finds. Say in the PR what it reported.

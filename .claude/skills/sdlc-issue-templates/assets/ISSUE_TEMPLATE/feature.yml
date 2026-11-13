@@ -1,0 +1,53 @@
+name: Feature or enhancement
+description: Propose something new or an improvement to something that exists
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the idea in your own words. This becomes the starting point for `intent.md`, so focus on the problem and the outcome, not the implementation.
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't be done today, who is affected, and how do you know?
+      placeholder: Customers phone support to ask where their order is, which takes about a third of call time.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed outcome
+      description: What does better look like? Describe the result, not the design.
+    validations:
+      required: true
+  - type: textarea
+    id: affected
+    attributes:
+      label: Affected users and systems
+      description: People, services, data and teams that touch this.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Security, compliance, authentication, performance, deadlines, anything out of scope.
+  - type: textarea
+    id: success
+    attributes:
+      label: How we will know it worked
+      description: A measurable signal, such as a metric, a behavior a test can check, or a before and after.
+  - type: textarea
+    id: questions
+    attributes:
+      label: Open questions
+      description: Anything you do not know yet, and who might.

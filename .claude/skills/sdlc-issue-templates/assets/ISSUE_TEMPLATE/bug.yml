@@ -1,0 +1,88 @@
+name: Bug report
+description: Something is broken or behaves differently than expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Give enough detail that someone, or an agent, can reproduce this as a failing test.
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: This report contains no secrets, credentials or personal data
+          required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences on what is wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from a clean state. Include the exact command or input.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happens instead. Paste the exact error text.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, stack traces, screenshots or a link to a failing run. Remove anything sensitive.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release, commit SHA or build where you saw it.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, runtime versions, browser or deployment (dev, staging, production).
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (data loss, security issue or outage)
+        - High (major feature broken, no workaround)
+        - Medium (broken, workaround exists)
+        - Low (cosmetic or minor)
+    validations:
+      required: true
+  - type: input
+    id: regression
+    attributes:
+      label: Last known good version
+      description: If this used to work, the last version or commit where it did.
+  - type: textarea
+    id: suspected
+    attributes:
+      label: Suspected cause or area
+      description: Optional. A guess helps, and a wrong guess is fine.
