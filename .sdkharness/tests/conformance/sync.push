@@ -1,0 +1,387 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x sync.push -- local-to-B2 sync using in-process x/b2sim.
+# Oracle: v0.10.0 release notes, b2/sync entries under Added, Changed and Fixed:
+# https://github.com/Backblaze/blazer/releases/tag/v0.10.0
+# Push results, dry-run reporting, millisecond modtime comparison, size/SHA1
+# overrides, and changed large files re-uploaded in full rather than resumed.
+# The dispatcher's loopback origin is guarded as usual; all SDK requests use
+# x/b2sim, so this scenario needs no listening server or live credentials.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+SLUG=blazer
+CAP=sync.push
+TARGET=simulator
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+  say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.10.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
+	b2sync "github.com/Backblaze/blazer/b2/sync"
+	"github.com/Backblaze/blazer/x/b2sim"
+)
+
+// Inject a permanent failure for exactly one wire upload. The other files use
+// the real simulator, independently of Sync's result bookkeeping.
+type failingUpload struct {
+	sim      *b2sim.Simulator
+	attempts atomic.Int32
+}
+
+func (t *failingUpload) RoundTrip(req *http.Request) (*http.Response, error) {
+	name, err := url.PathUnescape(req.Header.Get("X-Bz-File-Name"))
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(req.URL.Path, "/upload/file/") && name == "push/failure/bad.txt" {
+		t.attempts.Add(1)
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return &http.Response{
+			StatusCode: http.StatusBadRequest, Header: make(http.Header), Request: req,
+			Body: io.NopCloser(strings.NewReader(`{"status":400,"code":"bad_request","message":"deliberate sync.push rejection"}`)),
+		}, nil
+	}
+	return t.sim.RoundTrip(req)
+}
+
+func writeLocal(root, name, content string, modified time.Time) error {
+	path := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return err
+	}
+	return os.Chtimes(path, modified, modified)
+}
+
+func checkResult(stage string, result *b2sync.Result, err error, uploaded, skipped []string, count int64) error {
+	if err != nil || result == nil {
+		return fmt.Errorf("%s: result=%+v error=%v", stage, result, err)
+	}
+	if !slices.Equal(result.Uploaded, uploaded) || !slices.Equal(result.Skipped, skipped) || len(result.Failed) != 0 || result.BytesUploaded != count {
+		return fmt.Errorf("%s: result=%+v, want uploaded=%v skipped=%v failed=0 bytes=%d", stage, result, uploaded, skipped, count)
+	}
+	return nil
+}
+
+func checkRemote(ctx context.Context, bucket *b2.Bucket, name, content string, millis int64) error {
+	object := bucket.Object(name)
+	reader := object.NewReader(ctx)
+	data, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if !bytes.Equal(data, []byte(content)) {
+		return fmt.Errorf("%s: remote bytes differ", name)
+	}
+	attrs, err := object.Attrs(ctx)
+	if err != nil {
+		return err
+	}
+	if attrs.LastModified.UnixMilli() != millis {
+		return fmt.Errorf("%s: modtime=%d, want %d", name, attrs.LastModified.UnixMilli(), millis)
+	}
+	return nil
+}
+
+func checkNames(ctx context.Context, bucket *b2.Bucket, prefix string, want []string) error {
+	var names []string
+	iter := bucket.List(ctx, b2.ListPrefix(prefix))
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	if !slices.Equal(names, want) {
+		return fmt.Errorf("%s: object names=%v, want %v", prefix, names, want)
+	}
+	return nil
+}
+
+func uploadCalls(sim *b2sim.Simulator) int {
+	calls := sim.Calls()
+	return calls["b2_get_upload_url"] + calls["b2_upload_file"] + calls["b2_start_large_file"] +
+		calls["b2_get_upload_part_url"] + calls["b2_upload_part"] + calls["b2_finish_large_file"] + calls["b2_cancel_large_file"]
+}
+
+func checkTree(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root string) error {
+	modified := time.Unix(1_700_000_000, 123_100_000)
+	if err := writeLocal(root, "a.txt", "first", modified); err != nil {
+		return err
+	}
+	if err := writeLocal(root, "nested/b.txt", "second", modified); err != nil {
+		return err
+	}
+	result, err := b2sync.Sync(ctx, bucket, "push/tree", root)
+	if err := checkResult("tree push", result, err, []string{"a.txt", "nested/b.txt"}, nil, 11); err != nil {
+		return err
+	}
+	names := []string{"push/tree/a.txt", "push/tree/nested/b.txt"}
+	if err := checkNames(ctx, bucket, "push/tree/", names); err != nil {
+		return err
+	}
+	if err := checkRemote(ctx, bucket, names[0], "first", 1700000000123); err != nil {
+		return err
+	}
+	if err := writeLocal(root, "a.txt", "updated", modified.Add(time.Millisecond)); err != nil {
+		return err
+	}
+	if err := writeLocal(root, "new.txt", "new", modified); err != nil {
+		return err
+	}
+	before := uploadCalls(sim)
+	result, err = b2sync.Sync(ctx, bucket, "push/tree", root, b2sync.WithDryRun())
+	if err := checkResult("dry run", result, err, []string{"a.txt", "new.txt"}, []string{"nested/b.txt"}, 0); err != nil {
+		return err
+	}
+	if uploadCalls(sim) != before {
+		return fmt.Errorf("dry run made upload requests")
+	}
+	if err := checkNames(ctx, bucket, "push/tree/", names); err != nil {
+		return err
+	}
+	if err := checkRemote(ctx, bucket, names[0], "first", 1700000000123); err != nil {
+		return err
+	}
+	return checkRemote(ctx, bucket, names[1], "second", 1700000000123)
+}
+
+func checkModTime(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root, name string, opts ...b2sync.Option) error {
+	prefix := "push/" + name
+	modified := time.Unix(1_700_000_000, 123_100_000)
+	if err := writeLocal(root, "file.txt", "old", modified); err != nil {
+		return err
+	}
+	result, err := b2sync.Sync(ctx, bucket, prefix, root, opts...)
+	if err := checkResult(name+" seed", result, err, []string{"file.txt"}, nil, 3); err != nil {
+		return err
+	}
+	// Different bytes, size and nanoseconds still share the same millisecond.
+	if err := writeLocal(root, "file.txt", "new-value", time.Unix(1_700_000_000, 123_900_000)); err != nil {
+		return err
+	}
+	before := uploadCalls(sim)
+	result, err = b2sync.Sync(ctx, bucket, prefix, root, opts...)
+	if err := checkResult(name+" same millisecond", result, err, nil, []string{"file.txt"}, 0); err != nil {
+		return err
+	}
+	if uploadCalls(sim) != before {
+		return fmt.Errorf("%s: same-millisecond file caused an upload", name)
+	}
+	if err := checkRemote(ctx, bucket, prefix+"/file.txt", "old", 1700000000123); err != nil {
+		return err
+	}
+	// Advance by one millisecond within the same second, keeping the new bytes.
+	if err := writeLocal(root, "file.txt", "new-value", time.Unix(1_700_000_000, 124_100_000)); err != nil {
+		return err
+	}
+	result, err = b2sync.Sync(ctx, bucket, prefix, root, opts...)
+	if err := checkResult(name+" changed millisecond", result, err, []string{"file.txt"}, nil, 9); err != nil {
+		return err
+	}
+	return checkRemote(ctx, bucket, prefix+"/file.txt", "new-value", 1700000000124)
+}
+
+func checkComparison(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root, name, changed string, count int64, mode b2sync.CompareMode) error {
+	prefix := "push/" + name
+	modified := time.UnixMilli(1700000000123)
+	if err := writeLocal(root, "file.txt", "old", modified); err != nil {
+		return err
+	}
+	result, err := b2sync.Sync(ctx, bucket, prefix, root, b2sync.WithCompare(mode))
+	if err := checkResult(name+" seed", result, err, []string{"file.txt"}, nil, 3); err != nil {
+		return err
+	}
+	if err := writeLocal(root, "file.txt", changed, modified); err != nil {
+		return err
+	}
+	result, err = b2sync.Sync(ctx, bucket, prefix, root, b2sync.WithCompare(mode))
+	if err := checkResult(name+" changed", result, err, []string{"file.txt"}, nil, count); err != nil {
+		return err
+	}
+	if err := checkRemote(ctx, bucket, prefix+"/file.txt", changed, 1700000000123); err != nil {
+		return err
+	}
+	before := uploadCalls(sim)
+	result, err = b2sync.Sync(ctx, bucket, prefix, root, b2sync.WithCompare(mode))
+	if err := checkResult(name+" unchanged", result, err, nil, []string{"file.txt"}, 0); err != nil {
+		return err
+	}
+	if uploadCalls(sim) != before {
+		return fmt.Errorf("%s: unchanged file caused an upload", name)
+	}
+	return nil
+}
+
+func checkFailure(ctx context.Context, bucket *b2.Bucket, transport *failingUpload, root string) error {
+	modified := time.UnixMilli(1700000000123)
+	for name, content := range map[string]string{"bad.txt": "bad", "good.txt": "good"} {
+		if err := writeLocal(root, name, content, modified); err != nil {
+			return err
+		}
+	}
+	result, err := b2sync.Sync(ctx, bucket, "push/failure", root)
+	if err == nil || result == nil || len(result.Failed) != 1 || result.Failed[0].Rel != "bad.txt" ||
+		result.Failed[0].Err == nil || !strings.Contains(result.Failed[0].Err.Error(), "deliberate sync.push rejection") ||
+		!slices.Equal(result.Uploaded, []string{"good.txt"}) || len(result.Skipped) != 0 || result.BytesUploaded != 4 || transport.attempts.Load() != 1 {
+		return fmt.Errorf("per-file failure: result=%+v error=%v rejected-requests=%d", result, err, transport.attempts.Load())
+	}
+	if err := checkNames(ctx, bucket, "push/failure/", []string{"push/failure/good.txt"}); err != nil {
+		return err
+	}
+	return checkRemote(ctx, bucket, "push/failure/good.txt", "good", 1700000000123)
+}
+
+func checkLarge(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root string) error {
+	modified := time.UnixMilli(1700000000123)
+	initial := strings.Repeat("a", 5_000_001)
+	if err := writeLocal(root, "large.bin", initial, modified); err != nil {
+		return err
+	}
+	result, err := b2sync.Sync(ctx, bucket, "push/large", root)
+	if err := checkResult("large seed", result, err, []string{"large.bin"}, nil, 5_000_001); err != nil {
+		return err
+	}
+	before := sim.Calls()
+	if before["b2_start_large_file"] != 1 || before["b2_upload_part"] != 2 || before["b2_finish_large_file"] != 1 {
+		return fmt.Errorf("large seed did not use two multipart uploads: %v", before)
+	}
+	changed := strings.Repeat("b", 5_000_001)
+	if err := writeLocal(root, "large.bin", changed, modified.Add(time.Millisecond)); err != nil {
+		return err
+	}
+	result, err = b2sync.Sync(ctx, bucket, "push/large", root)
+	if err := checkResult("changed large file", result, err, []string{"large.bin"}, nil, 5_000_001); err != nil {
+		return err
+	}
+	after := sim.Calls()
+	if after["b2_start_large_file"]-before["b2_start_large_file"] != 1 ||
+		after["b2_upload_part"]-before["b2_upload_part"] != 2 ||
+		after["b2_finish_large_file"]-before["b2_finish_large_file"] != 1 ||
+		after["b2_list_unfinished_large_files"] != 0 || after["b2_list_parts"] != 0 {
+		return fmt.Errorf("changed large file was not uploaded afresh in two parts: before=%v after=%v", before, after)
+	}
+	return checkRemote(ctx, bucket, "push/large/large.bin", changed, 1700000000124)
+}
+
+func runCheck(ctx context.Context) error {
+	sim := b2sim.New()
+	transport := &failingUpload{sim: sim}
+	client, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.Transport(transport),
+		b2.DefaultWriterOptions(b2.WriterOptionFunc(func(w *b2.Writer) {
+			// Use B2's real minimum, so a 5,000,001-byte file takes two parts.
+			w.ChunkSize = 5_000_000
+		})))
+	if err != nil {
+		return err
+	}
+	bucket, err := client.NewBucket(ctx, "sync-push", nil)
+	if err != nil {
+		return err
+	}
+	root, err := os.MkdirTemp("", "blazer-sync-push-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(root)
+	if err := checkTree(ctx, bucket, sim, filepath.Join(root, "tree")); err != nil {
+		return err
+	}
+	if err := checkModTime(ctx, bucket, sim, filepath.Join(root, "default"), "default"); err != nil {
+		return err
+	}
+	if err := checkModTime(ctx, bucket, sim, filepath.Join(root, "modtime"), "modtime", b2sync.WithCompare(b2sync.CompareModTime)); err != nil {
+		return err
+	}
+	if err := checkComparison(ctx, bucket, sim, filepath.Join(root, "size"), "size", "longer", 6, b2sync.CompareSize); err != nil {
+		return err
+	}
+	if err := checkComparison(ctx, bucket, sim, filepath.Join(root, "sha1"), "sha1", "NEW", 3, b2sync.CompareSHA1); err != nil {
+		return err
+	}
+	if err := checkFailure(ctx, bucket, transport, filepath.Join(root, "failure")); err != nil {
+		return err
+	}
+	return checkLarge(ctx, bucket, sim, filepath.Join(root, "large"))
+}
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := runCheck(ctx); err != nil {
+		fmt.Printf("CONFORMANCE blazer sync.push @simulator: FAIL (sync -- %v)\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("NOTE blazer sync.push: tree/dry-run/default/modtime/size/sha1/failure/large-reupload passed")
+	fmt.Println("CONFORMANCE blazer sync.push @simulator: PASS")
+}
+__EOF_GO__
