@@ -1,0 +1,560 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x files.copy -- the contract is bin/conformance/README.md.
+#
+# Scenario: copy whole files and ranges, reject nil destinations, retry transient responses.
+#
+# DOCS. b2_copy_file copies an existing file by ID without uploading its bytes;
+# its optional range selects only the requested bytes. Blazer v0.10.0 rejects
+# CopyToBucket(nil) before any request and retries HTTP 408, 502 and 504 for
+# server-side copy and other non-upload calls.
+# https://www.backblaze.com/apidocs/b2-copy-file
+# https://github.com/Backblaze/blazer/releases/tag/v0.10.0
+#
+# Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+SLUG=blazer
+CAP=files.copy
+TARGET=simulator
+
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+
+# A detail never carries a response body, a multi-line diagnostic or a
+# credential: one line, printable, capped.
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+  say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# The Go program is carried at the end of this file as an INERT heredoc, so
+# `bash -n` parses this check as the shell script it is rather than choking on
+# Go syntax.
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+// blazer x files.copy.
+//
+// Assert copy bytes and request counts, reject a nil destination before any
+// request, and retry 408/502/504 for copy and bucket lookup.
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
+)
+
+const capability = "files.copy"
+
+func runCheck(ctx context.Context, target *string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	transport := &copyTransport{next: http.DefaultTransport, calls: make(map[string]int)}
+	client, err := newClient(ctx, *target, transport)
+	if err != nil {
+		return err
+	}
+	bucket, cleanup, err := newBucket(ctx, client, nil)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	payload := []byte("0123456789: server-side copy payload")
+	source, err := upload(ctx, bucket, objectName("copy-source"), payload, nil, nil)
+	if err != nil {
+		return err
+	}
+	if source.ID() == "" || transport.snapshot().uploads() == 0 {
+		return failf("upload source", "the source has no ID or the transport recorded no upload")
+	}
+
+	before := transport.snapshot()
+	name := objectName("copy-whole")
+	copied, err := bucket.Copy(ctx, source.ID(), name)
+	if err != nil {
+		return classify("copy whole file", err)
+	}
+	if err := assertCopyTraffic("copy whole file", "b2_copy_file", before, transport.snapshot(), 1, 0); err != nil {
+		return err
+	}
+	if err := assertCopyResult(ctx, bucket, copied, source.ID(), name, payload); err != nil {
+		return err
+	}
+	note("whole-file copy: copy requests=1 upload requests=0 bytes=%d", len(payload))
+
+	before = transport.snapshot()
+	copied, err = bucket.Copy(ctx, source.ID(), objectName("copy-nil-destination"), b2.CopyToBucket(nil))
+	const wantNilError = "b2: CopyToBucket requires a non-nil destination bucket"
+	if err == nil || err.Error() != wantNilError || copied != nil {
+		return failf("nil destination", "Copy returned object=%t error=%v, want no object and %q", copied != nil, err, wantNilError)
+	}
+	if got := transport.snapshot().total() - before.total(); got != 0 {
+		return failf("nil destination", "Copy sent %d requests before rejecting a nil destination, want 0", got)
+	}
+	note("nil destination: rejected before any request")
+
+	before = transport.snapshot()
+	name = objectName("copy-range")
+	copied, err = bucket.Copy(ctx, source.ID(), name, b2.CopyRange("bytes=2-5"))
+	if err != nil {
+		return classify("copy range", err)
+	}
+	if err := assertCopyTraffic("copy range", "b2_copy_file", before, transport.snapshot(), 1, 0); err != nil {
+		return err
+	}
+	if err := assertCopyResult(ctx, bucket, copied, source.ID(), name, []byte("2345")); err != nil {
+		return err
+	}
+	note("range bytes=2-5: copied exactly 2345")
+
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusBadGateway, http.StatusGatewayTimeout} {
+		transport.arm("b2_copy_file", status)
+		before = transport.snapshot()
+		name = objectName(fmt.Sprintf("copy-retry-%d", status))
+		copied, err = bucket.Copy(ctx, source.ID(), name)
+		if err != nil {
+			return classify(fmt.Sprintf("copy retry %d", status), err)
+		}
+		if err := assertCopyTraffic("copy retry", "b2_copy_file", before, transport.snapshot(), 2, 1); err != nil {
+			return err
+		}
+		if err := assertCopyResult(ctx, bucket, copied, source.ID(), name, payload); err != nil {
+			return err
+		}
+		note("b2_copy_file status=%d: attempts=2 injected=1 upload requests=0", status)
+
+		transport.arm("b2_list_buckets", status)
+		before = transport.snapshot()
+		found, err := client.Bucket(ctx, bucket.Name())
+		if err != nil {
+			return classify(fmt.Sprintf("list buckets retry %d", status), err)
+		}
+		if err := assertCopyTraffic("list buckets retry", "b2_list_buckets", before, transport.snapshot(), 2, 1); err != nil {
+			return err
+		}
+		if found.ID() != bucket.ID() {
+			return failf("list buckets retry", "the retried lookup returned a different bucket")
+		}
+		note("b2_list_buckets status=%d: attempts=2 injected=1 correct bucket returned", status)
+	}
+	return nil
+}
+
+func assertCopyResult(ctx context.Context, bucket *b2.Bucket, copied *b2.Object, sourceID, name string, want []byte) error {
+	if copied == nil || copied.ID() == "" || copied.ID() == sourceID || copied.Name() != name {
+		return failf("copy result", "the copy must have a new file ID and the requested destination name")
+	}
+	got, err := download(ctx, bucket, name, nil)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, want) {
+		return failf("copy bytes", "downloaded %d bytes, want exactly the requested %d bytes", len(got), len(want))
+	}
+	return nil
+}
+
+func assertCopyTraffic(step, call string, before, after copyTraffic, attempts, injected int) error {
+	if got := after.calls[call] - before.calls[call]; got != attempts {
+		return failf(step, "%s attempts=%d, want %d", call, got, attempts)
+	}
+	if got := after.injected - before.injected; got != injected {
+		return failf(step, "injected responses=%d, want %d", got, injected)
+	}
+	if got := after.uploads() - before.uploads(); got != 0 {
+		return failf(step, "upload requests=%d, want 0", got)
+	}
+	return nil
+}
+
+type copyTraffic struct {
+	calls    map[string]int
+	injected int
+}
+
+func (s copyTraffic) uploads() int {
+	return s.calls["b2_upload_file"] + s.calls["b2_upload_part"]
+}
+
+func (s copyTraffic) total() int {
+	total := 0
+	for _, count := range s.calls {
+		total += count
+	}
+	return total
+}
+
+// Count requests at the SDK's transport boundary. Successful requests always
+// reach CONFORMANCE_SIMULATOR_URL through the loopback-guarded default transport.
+// The armed endpoint gets one retryable HTTP response before normal forwarding.
+type copyTransport struct {
+	next        http.RoundTripper
+	mu          sync.Mutex
+	calls       map[string]int
+	injected    int
+	faultCall   string
+	faultStatus int
+}
+
+func (t *copyTransport) snapshot() copyTraffic {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	snapshot := copyTraffic{calls: make(map[string]int), injected: t.injected}
+	for call, count := range t.calls {
+		snapshot.calls[call] = count
+	}
+	return snapshot
+}
+
+func (t *copyTransport) arm(call string, status int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.faultCall, t.faultStatus = call, status
+}
+
+func (t *copyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	call := path.Base(request.URL.Path)
+	t.mu.Lock()
+	t.calls[call]++
+	status := 0
+	if call == t.faultCall && t.faultStatus != 0 {
+		status = t.faultStatus
+		t.faultStatus = 0
+		t.injected++
+	}
+	t.mu.Unlock()
+	if status == 0 {
+		return t.next.RoundTrip(request)
+	}
+	if request.Body != nil {
+		request.Body.Close()
+	}
+	code := strings.ToLower(strings.ReplaceAll(http.StatusText(status), " ", "_"))
+	body := fmt.Sprintf("{\"status\":%d,\"code\":%q,\"message\":\"injected retryable response\"}", status, code)
+	return &http.Response{
+		StatusCode:    status,
+		Status:        fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       request,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Shared plumbing follows keys.crud and bin/conformance/README.md. This check
+// additionally supplies a counting transport and an independent cleanup context.
+// ---------------------------------------------------------------------------
+
+const slug = "blazer"
+
+// The closed reason set, mirrored from bin/conformance/README.md. The runner
+// enforces it; a reason outside it is a FAIL the runner manufactures.
+const (
+	reasonNoRealm   = "no-realm-option"
+	reasonUnreach   = "unreachable"
+	reasonUnauth    = "unauthorized"
+	reasonNoCred    = "no-credential"
+	reasonNoRuntime = "missing-runtime"
+	reasonNotClaim  = "not-claimed"
+)
+
+// amberErr: the question could not be asked. failErr: it was asked, and the
+// answer contradicts the card.
+type amberErr struct{ reason, detail string }
+
+func (e *amberErr) Error() string { return e.reason + ": " + e.detail }
+
+type failErr struct{ step, detail string }
+
+func (e *failErr) Error() string { return e.step + ": " + e.detail }
+
+func amberf(reason, format string, args ...interface{}) error {
+	return &amberErr{reason: reason, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+func failf(step, format string, args ...interface{}) error {
+	return &failErr{step: step, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+// secretsToScrub holds every value that must never reach stdout: the key id,
+// the application key, and any download token this check mints.
+var secretsToScrub []string
+
+// opaqueToken matches anything long and token-shaped. A detail never needs a
+// 25-character opaque string, and a leaked credential is far worse than a
+// vague detail.
+var opaqueToken = regexp.MustCompile(`[A-Za-z0-9+/=_-]{25,}`)
+
+func scrub(s string) string { return scrubTo(s, 180) }
+
+// scrubTo is scrub with a caller-chosen cap: a result-line detail stays short,
+// while a NOTE may carry the evidence it is there to carry.
+func scrubTo(s string, limit int) string {
+	for _, secret := range secretsToScrub {
+		if secret != "" {
+			s = strings.Replace(s, secret, "REDACTED", -1)
+		}
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	s = opaqueToken.ReplaceAllString(s, "REDACTED")
+	if len(s) > limit {
+		s = s[:limit] + "..."
+	}
+	return s
+}
+
+// classify turns an error into a FAIL. This check only runs when the harness
+// handed it a loopback simulator URL, so a 401/403, a refused connection, a
+// deadline or a reset is the simulator or blazer misbehaving (an auth, hang or
+// retry regression), never a legitimate environment problem. Only a missing Go
+// toolchain or dependency is COULD-NOT-RUN, and that is decided before this
+// program exists (sdkharness_go_build in lib/contract.sh).
+func classify(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch err.(type) {
+	case *amberErr, *failErr:
+		return err
+	}
+	return failf(step, "%s", err.Error())
+}
+
+func say(target, verdict string) {
+	fmt.Printf("CONFORMANCE %s %s @%s: %s\n", slug, capability, target, verdict)
+}
+
+// note carries evidence that is weaker than the assertion it supports. It is a
+// SEPARATE line on purpose: the runner parses `PASS` exactly, so a PASS may
+// never carry a detail.
+func note(format string, args ...interface{}) {
+	fmt.Printf("NOTE %s %s: %s\n", slug, capability, scrubTo(fmt.Sprintf(format, args...), 600))
+}
+
+func requestedTarget() string {
+	if t := os.Getenv("CONFORMANCE_TARGET"); t != "" {
+		return t
+	}
+	return "simulator"
+}
+
+// apiBase maps a requested target onto a realm blazer can reach. `simulator` is
+// the harness's own server (bin/simulator/serve.mjs), whose URL the runner
+// exports as CONFORMANCE_SIMULATOR_URL and blazer reaches through b2.APIBase;
+// unset, there is nothing to reach: no-realm-option.
+func apiBase(target string) (string, error) {
+	if target == "simulator" {
+		if url := os.Getenv("CONFORMANCE_SIMULATOR_URL"); url != "" {
+			return url, nil
+		}
+		return "", amberf(reasonNoRealm, "CONFORMANCE_SIMULATOR_URL is unset")
+	}
+	return "", amberf(reasonNoRealm, "blazer checks run only against the loopback simulator, not %q", target)
+}
+
+// credentials at @simulator is the simulator's fixed test credential, so a real
+// B2_* value can never be sent there.
+func credentials(target string) (string, string, error) {
+	if target == "simulator" {
+		return "test-key-id", "test-key", nil
+	}
+	return "", "", amberf(reasonNoRealm, "blazer checks use only the simulator's fixed test credential")
+}
+
+func newClient(ctx context.Context, target string, transport http.RoundTripper) (*b2.Client, error) {
+	base, err := apiBase(target)
+	if err != nil {
+		return nil, err
+	}
+	id, key, err := credentials(target)
+	if err != nil {
+		return nil, err
+	}
+	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"), b2.Transport(transport))
+	if err != nil {
+		return nil, classify("authenticate", err)
+	}
+	return client, nil
+}
+
+func randomHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return strings.Repeat("0", 2*n)
+	}
+	return hex.EncodeToString(buf)
+}
+
+func bucketName() string { return "sdkharness-conf-" + randomHex(6) }
+
+func objectName(leaf string) string { return "st/" + leaf }
+
+// newBucket creates an ephemeral bucket and returns a cleanup that empties and
+// removes it. A check owns every resource it creates and destroys all of them,
+// on the error path too -- hence the returned func is always deferred.
+func newBucket(ctx context.Context, client *b2.Client, attrs *b2.BucketAttrs) (*b2.Bucket, func(), error) {
+	if attrs == nil {
+		attrs = &b2.BucketAttrs{Type: b2.Private}
+	}
+	bucket, err := client.NewBucket(ctx, bucketName(), attrs)
+	if err != nil {
+		return nil, func() {}, classify("create bucket", err)
+	}
+	return bucket, func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancel()
+		destroyBucket(cleanupCtx, bucket)
+	}, nil
+}
+
+func destroyBucket(ctx context.Context, bucket *b2.Bucket) {
+	for attempt := 0; attempt < 2; attempt++ {
+		emptyBucket(ctx, bucket)
+		if err := bucket.Delete(ctx); err == nil {
+			return
+		} else if attempt == 1 {
+			// Never mask the verdict with a cleanup failure -- say it and move on.
+			note("cleanup left bucket %s behind: %s", bucket.Name(), scrub(err.Error()))
+		}
+	}
+}
+
+func emptyBucket(ctx context.Context, bucket *b2.Bucket) {
+	iter := bucket.List(ctx, b2.ListHidden())
+	for iter.Next() {
+		iter.Object().Delete(ctx)
+	}
+	unfinished := bucket.List(ctx, b2.ListUnfinished())
+	for unfinished.Next() {
+		unfinished.Object().Cancel(ctx)
+	}
+}
+
+// upload writes payload to name. tune runs before the first Write, because
+// blazer requires Writer fields to be set before then.
+func upload(ctx context.Context, bucket *b2.Bucket, name string, payload []byte, attrs *b2.Attrs, tune func(*b2.Writer)) (*b2.Object, error) {
+	object := bucket.Object(name)
+	var opts []b2.WriterOption
+	if attrs != nil {
+		opts = append(opts, b2.WithAttrsOption(attrs))
+	}
+	writer := object.NewWriter(ctx, opts...)
+	if tune != nil {
+		tune(writer)
+	}
+	if _, err := writer.Write(payload); err != nil {
+		writer.Close()
+		return nil, classify("upload", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, classify("upload", err)
+	}
+	return object, nil
+}
+
+func download(ctx context.Context, bucket *b2.Bucket, name string, tune func(*b2.Reader)) ([]byte, error) {
+	reader := bucket.Object(name).NewReader(ctx)
+	if tune != nil {
+		tune(reader)
+	}
+	data, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, classify("download", readErr)
+	}
+	if closeErr != nil {
+		return nil, classify("download", closeErr)
+	}
+	return data, nil
+}
+
+func main() {
+	target := requestedTarget()
+	defer func() {
+		if r := recover(); r != nil {
+			say(target, fmt.Sprintf("FAIL (panic -- %s)", scrub(fmt.Sprint(r))))
+			os.Exit(1)
+		}
+	}()
+	err := runCheck(context.Background(), &target)
+	switch e := err.(type) {
+	case nil:
+		say(target, "PASS")
+	case *amberErr:
+		say(target, fmt.Sprintf("COULD-NOT-RUN (%s -- %s)", e.reason, e.detail))
+	case *failErr:
+		say(target, fmt.Sprintf("FAIL (%s -- %s)", e.step, e.detail))
+		os.Exit(1)
+	default:
+		say(target, fmt.Sprintf("FAIL (check -- %s)", scrub(err.Error())))
+		os.Exit(1)
+	}
+}
+__EOF_GO__
