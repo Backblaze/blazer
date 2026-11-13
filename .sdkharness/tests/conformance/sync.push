@@ -6,6 +6,7 @@
 # overrides, and changed large files re-uploaded in full rather than resumed.
 # The dispatcher's loopback origin is guarded as usual; all SDK requests use
 # x/b2sim, so this scenario needs no listening server or live credentials.
+# Filesystems that round the sub-millisecond fixtures report COULD-NOT-RUN.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
@@ -66,6 +67,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -81,6 +83,8 @@ import (
 	b2sync "github.com/Backblaze/blazer/b2/sync"
 	"github.com/Backblaze/blazer/x/b2sim"
 )
+
+var errMtimeResolution = errors.New("filesystem cannot preserve the required sub-millisecond mtimes")
 
 // Inject a permanent failure for exactly one wire upload. The other files use
 // the real simulator, independently of Sync's result bookkeeping.
@@ -115,7 +119,20 @@ func writeLocal(root, name, content string, modified time.Time) error {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return err
 	}
-	return os.Chtimes(path, modified, modified)
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	// Check the stored fixture before Sync sees it: rounding can erase the
+	// 50-microsecond boundary case and make correct SDK behavior look wrong.
+	if !info.ModTime().Equal(modified) {
+		return fmt.Errorf("%w: requested %s, read back %s", errMtimeResolution,
+			modified.UTC().Format(time.RFC3339Nano), info.ModTime().UTC().Format(time.RFC3339Nano))
+	}
+	return nil
 }
 
 func checkResult(stage string, result *b2sync.Result, err error, uploaded, skipped []string, count int64) error {
@@ -390,6 +407,10 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := runCheck(ctx); err != nil {
+		if errors.Is(err, errMtimeResolution) {
+			fmt.Printf("CONFORMANCE blazer sync.push @simulator: COULD-NOT-RUN (mtime-resolution -- %v)\n", err)
+			return
+		}
 		fmt.Printf("CONFORMANCE blazer sync.push @simulator: FAIL (sync -- %v)\n", err)
 		os.Exit(1)
 	}
