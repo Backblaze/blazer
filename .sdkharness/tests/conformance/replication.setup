@@ -1,0 +1,451 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x replication.setup -- the contract is bin/conformance/README.md.
+#
+# Scenario: round-trip replication setup and reject unsafe configuration changes.
+#
+# DOCS. The expected values are B2's published contract. b2_update_bucket
+# accepts replicationConfiguration with source rules and destination key
+# mappings, and b2_list_buckets returns that configuration to authorized
+# clients. This scenario checks configuration only: the simulator stores and
+# echoes it but does not enforce data replication.
+# https://www.backblaze.com/apidocs/b2-update-bucket
+#
+# Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+SLUG=blazer
+CAP=replication.setup
+TARGET=simulator
+
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+
+# A detail never carries a response body, a multi-line diagnostic or a
+# credential: one line, printable, capped.
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+	say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+	exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+	say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+	exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+	say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+	exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# The Go program is carried at the end of this file as an INERT heredoc, so
+# `bash -n` parses this check as the shell script it is rather than choking on
+# Go syntax.
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.8.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+	0) ;;
+	10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+	*) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+	say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+	exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"reflect"
+	"regexp"
+	"strings"
+
+	"github.com/Backblaze/blazer/b2"
+	"github.com/Backblaze/blazer/x/b2sim"
+)
+
+const capability = "replication.setup"
+
+// blazer x replication.setup.
+//
+// Setup   source and destination buckets in x/b2sim
+// Action  configure replication, read it back, and create a bucket with a
+//         replication configuration
+// Assert  SetupReplication persists the source key, destination mapping, and
+//         exact rule returned by ReplicationStatus; NewBucket persists its
+//         attrs.ReplicationConfig; conflicting or unreadable updates fail.
+//
+// x/b2sim stores replicationConfiguration but does not implement replication
+// effects, so this deliberately asserts configuration rather than copied data.
+
+func runCheck(ctx context.Context, target *string) error {
+	sim := b2sim.New()
+	client, err := simulatorClient(ctx, sim)
+	if err != nil {
+		return err
+	}
+
+	destination, err := createBucket(ctx, client, "destination", nil)
+	if err != nil {
+		return err
+	}
+	defer cleanupBucket(ctx, destination)
+	source, err := createBucket(ctx, client, "source", nil)
+	if err != nil {
+		return err
+	}
+	defer cleanupBucket(ctx, source)
+
+	const sourceKeyID = "source-application-key"
+	const destinationKeyID = "destination-application-key"
+	wantRule := b2.ReplicationRules{
+		ReplicationRuleName: "sdkharness-replication",
+		DestinationBucketID:  destination.ID(),
+		FileNamePrefix:       "st/",
+		IncludeExistingFiles: true,
+		IsEnabled:            true,
+		Priority:             37,
+	}
+	options := []b2.ReplicationOption{
+		b2.WithRuleName(wantRule.ReplicationRuleName),
+		b2.WithFileNamePrefix(wantRule.FileNamePrefix),
+		b2.WithIncludeExistingFiles(wantRule.IncludeExistingFiles),
+		b2.WithRulePriority(wantRule.Priority),
+	}
+	if err := b2.SetupReplication(ctx, source, destination, sourceKeyID, destinationKeyID, options...); err != nil {
+		return classify("setup replication", err)
+	}
+	if err := assertReplicationRoundTrip(ctx, source, destination, sourceKeyID, destinationKeyID, wantRule); err != nil {
+		return err
+	}
+
+	createConfig := &b2.ReplicationConfiguration{AsReplicationSource: b2.AsReplicationSource{
+		SourceApplicationKeyID: "created-source-key",
+		ReplicationRules:       []b2.ReplicationRules{wantRule},
+	}}
+	created, err := createBucket(ctx, client, "created", &b2.BucketAttrs{
+		Type:              b2.Private,
+		ReplicationConfig: createConfig,
+	})
+	if err != nil {
+		return err
+	}
+	defer cleanupBucket(ctx, created)
+	attrs, err := created.Attrs(ctx)
+	if err != nil {
+		return classify("read created bucket", err)
+	}
+	if err := assertConfig("create replication configuration", attrs, createConfig.AsReplicationSource.SourceApplicationKeyID, wantRule); err != nil {
+		return err
+	}
+
+	if err := b2.SetupReplication(ctx, source, destination, sourceKeyID, destinationKeyID,
+		b2.WithRuleName("first"), b2.WithRuleName("second")); err == nil || err.Error() != "setup replication: conflicting rule names" {
+		return failf("conflicting options", "SetupReplication error = %v, want conflicting rule names", err)
+	}
+
+	maskedClient, err := simulatorClient(ctx, unreadableReplicationTransport{next: sim})
+	if err != nil {
+		return err
+	}
+	maskedSource, err := maskedClient.Bucket(ctx, source.Name())
+	if err != nil {
+		return classify("read unreadable source", err)
+	}
+	maskedDestination, err := maskedClient.Bucket(ctx, destination.Name())
+	if err != nil {
+		return classify("read unreadable destination", err)
+	}
+	if err := expectError("unreadable setup", b2.SetupReplication(ctx, maskedSource, maskedDestination, sourceKeyID, destinationKeyID), "setup replication: cannot read existing replication config to merge safely"); err != nil {
+		return err
+	}
+	partial := &b2.BucketAttrs{ReplicationConfig: &b2.ReplicationConfiguration{
+		AsReplicationSource: b2.AsReplicationSource{SourceApplicationKeyID: sourceKeyID},
+	}}
+	if err := expectError("unreadable update", maskedSource.Update(ctx, partial), "b2: cannot update unreadable replication configuration"); err != nil {
+		return err
+	}
+
+	note("source rule and destination key mapping round-tripped; no data replication asserted")
+	return nil
+}
+
+func simulatorClient(ctx context.Context, transport http.RoundTripper) (*b2.Client, error) {
+	client, err := b2.NewClient(ctx, "test-key-id", "test-key",
+		b2.Transport(transport), b2.UserAgent("sdkharness-conformance/blazer"))
+	if err != nil {
+		return nil, classify("authenticate", err)
+	}
+	return client, nil
+}
+
+func createBucket(ctx context.Context, client *b2.Client, role string, attrs *b2.BucketAttrs) (*b2.Bucket, error) {
+	if attrs == nil {
+		attrs = &b2.BucketAttrs{Type: b2.Private}
+	}
+	bucket, err := client.NewBucket(ctx, "sdkharness-replication-"+role+"-"+randomHex(6), attrs)
+	if err != nil {
+		return nil, classify("create "+role+" bucket", err)
+	}
+	return bucket, nil
+}
+
+func cleanupBucket(ctx context.Context, bucket *b2.Bucket) {
+	if err := bucket.Delete(ctx); err != nil {
+		note("cleanup left bucket %s behind: %s", bucket.Name(), scrub(err.Error()))
+	}
+}
+
+func assertReplicationRoundTrip(ctx context.Context, source, destination *b2.Bucket, sourceKeyID, destinationKeyID string, want b2.ReplicationRules) error {
+	sourceAttrs, err := source.Attrs(ctx)
+	if err != nil {
+		return classify("read source replication", err)
+	}
+	if err := assertConfig("source readback", sourceAttrs, sourceKeyID, want); err != nil {
+		return err
+	}
+	destinationAttrs, err := destination.Attrs(ctx)
+	if err != nil {
+		return classify("read destination replication", err)
+	}
+	if destinationAttrs.ReplicationConfig == nil || destinationAttrs.ReplicationConfig.AsReplicationDestination == nil {
+		return failf("destination readback", "the destination reports no replication key mapping")
+	}
+	mapping := destinationAttrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping
+	if got := mapping[sourceKeyID]; got != destinationKeyID {
+		return failf("destination readback", "destination key mapping = %q, want %q", got, destinationKeyID)
+	}
+	status, err := b2.ReplicationStatus(ctx, source)
+	if err != nil {
+		return classify("replication status", err)
+	}
+	wantStatus := []b2.ReplicationRuleStatus{{ReplicationRules: want}}
+	if !reflect.DeepEqual(status, wantStatus) {
+		return failf("replication status", "rules = %+v, want %+v", status, wantStatus)
+	}
+	return nil
+}
+
+func assertConfig(step string, attrs *b2.BucketAttrs, keyID string, want b2.ReplicationRules) error {
+	if attrs.ReplicationConfig == nil {
+		return failf(step, "the bucket reports no replication configuration")
+	}
+	if got := attrs.ReplicationConfig.AsReplicationSource.SourceApplicationKeyID; got != keyID {
+		return failf(step, "source application key id = %q, want %q", got, keyID)
+	}
+	rules := attrs.ReplicationConfig.AsReplicationSource.ReplicationRules
+	if len(rules) != 1 {
+		return failf(step, "source rules = %d, want 1", len(rules))
+	}
+	if rules[0] != want {
+		return failf(step, "source rule = %+v, want %+v", rules[0], want)
+	}
+	return nil
+}
+
+func expectError(step string, err error, want string) error {
+	if err == nil || err.Error() != want {
+		return failf(step, "error = %v, want %q", err, want)
+	}
+	return nil
+}
+
+// unreadableReplicationTransport leaves the simulator's stored configuration
+// alone, but changes list responses to the documented unreadable shape. That
+// makes the public client reject unsafe partial merges before it writes.
+type unreadableReplicationTransport struct{ next http.RoundTripper }
+
+func (t unreadableReplicationTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := t.next.RoundTrip(request)
+	if err != nil || !strings.HasSuffix(request.URL.Path, "/b2_list_buckets") {
+		return response, err
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err := response.Body.Close(); err != nil {
+		return nil, err
+	}
+	var listed map[string]any
+	if err := json.Unmarshal(body, &listed); err != nil {
+		return nil, err
+	}
+	buckets, ok := listed["buckets"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("b2_list_buckets response has no buckets array")
+	}
+	for _, value := range buckets {
+		bucket, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("b2_list_buckets bucket is not an object")
+		}
+		replication, ok := bucket["replicationConfiguration"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("bucket has no replicationConfiguration object")
+		}
+		replication["isClientAuthorizedToRead"] = false
+		replication["value"] = nil
+	}
+	encoded, err := json.Marshal(listed)
+	if err != nil {
+		return nil, err
+	}
+	response.Body = io.NopCloser(bytes.NewReader(encoded))
+	response.ContentLength = int64(len(encoded))
+	return response, nil
+}
+
+// ---------------------------------------------------------------------------
+// Shared plumbing follows the blazer conformance-check contract in
+// bin/conformance/README.md.
+// ---------------------------------------------------------------------------
+
+const slug = "blazer"
+
+// The closed reason set, mirrored from bin/conformance/README.md. The runner
+// enforces it; a reason outside it is a FAIL the runner manufactures.
+const (
+	reasonNoRealm   = "no-realm-option"
+	reasonUnreach   = "unreachable"
+	reasonUnauth    = "unauthorized"
+	reasonNoCred    = "no-credential"
+	reasonNoRuntime = "missing-runtime"
+	reasonNotClaim  = "not-claimed"
+)
+
+// amberErr: the question could not be asked. failErr: it was asked, and the
+// answer contradicts the card.
+type amberErr struct{ reason, detail string }
+
+func (e *amberErr) Error() string { return e.reason + ": " + e.detail }
+
+type failErr struct{ step, detail string }
+
+func (e *failErr) Error() string { return e.step + ": " + e.detail }
+
+func amberf(reason, format string, args ...interface{}) error {
+	return &amberErr{reason: reason, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+func failf(step, format string, args ...interface{}) error {
+	return &failErr{step: step, detail: scrub(fmt.Sprintf(format, args...))}
+}
+
+// opaqueToken matches anything long and token-shaped. A detail never needs a
+// 25-character opaque string, and a leaked credential is far worse than a
+// vague detail.
+var opaqueToken = regexp.MustCompile(`[A-Za-z0-9+/=_-]{25,}`)
+
+func scrub(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	s = opaqueToken.ReplaceAllString(s, "REDACTED")
+	if len(s) > 180 {
+		s = s[:180] + "..."
+	}
+	return s
+}
+
+// classify turns an error into a FAIL. This check only runs against the
+// in-memory x/b2sim transport, so a transport or service error is a blazer or
+// simulator regression, not an unavailable external realm.
+func classify(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch err.(type) {
+	case *amberErr, *failErr:
+		return err
+	}
+	return failf(step, "%s", err.Error())
+}
+
+func say(target, verdict string) {
+	fmt.Printf("CONFORMANCE %s %s @%s: %s\n", slug, capability, target, verdict)
+}
+
+// note carries evidence that is weaker than the assertion it supports. It is a
+// SEPARATE line on purpose: the runner parses `PASS` exactly, so a PASS may
+// never carry a detail.
+func note(format string, args ...interface{}) {
+	fmt.Printf("NOTE %s %s: %s\n", slug, capability, scrub(fmt.Sprintf(format, args...)))
+}
+
+func requestedTarget() string {
+	if target := os.Getenv("CONFORMANCE_TARGET"); target != "" {
+		return target
+	}
+	return "simulator"
+}
+
+func randomHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return strings.Repeat("0", 2*n)
+	}
+	return hex.EncodeToString(buf)
+}
+
+func main() {
+	target := requestedTarget()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			say(target, fmt.Sprintf("FAIL (panic -- %s)", scrub(fmt.Sprint(recovered))))
+			os.Exit(1)
+		}
+	}()
+	err := runCheck(context.Background(), &target)
+	switch typed := err.(type) {
+	case nil:
+		say(target, "PASS")
+	case *amberErr:
+		say(target, fmt.Sprintf("COULD-NOT-RUN (%s -- %s)", typed.reason, typed.detail))
+	case *failErr:
+		say(target, fmt.Sprintf("FAIL (%s -- %s)", typed.step, typed.detail))
+		os.Exit(1)
+	default:
+		say(target, fmt.Sprintf("FAIL (check -- %s)", scrub(err.Error())))
+		os.Exit(1)
+	}
+}
+__EOF_GO__
