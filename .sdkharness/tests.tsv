@@ -36,6 +36,7 @@ conformance	lock.legal_hold	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.per_file	simulator	./.sdkharness/tests/run-conformance
 conformance	lock.per_file_retention	simulator	./.sdkharness/tests/run-conformance
 conformance	logs.no_secrets	simulator	./.sdkharness/tests/run-conformance
+conformance	notification.verify	simulator	./.sdkharness/tests/run-conformance
 conformance	replication.setup	simulator	./.sdkharness/tests/run-conformance
 conformance	session.reuse	simulator	./.sdkharness/tests/run-conformance
 conformance	sync.push	simulator	./.sdkharness/tests/run-conformance
