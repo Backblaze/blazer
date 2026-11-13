@@ -6,7 +6,7 @@
 # overrides, and changed large files re-uploaded in full rather than resumed.
 # The dispatcher's loopback origin is guarded as usual; all SDK requests use
 # x/b2sim, so this scenario needs no listening server or live credentials.
-# Filesystems that round the sub-millisecond fixtures report COULD-NOT-RUN.
+# Whole-second checks run before the sub-millisecond comparison checks.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
@@ -67,7 +67,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -83,8 +82,6 @@ import (
 	b2sync "github.com/Backblaze/blazer/b2/sync"
 	"github.com/Backblaze/blazer/x/b2sim"
 )
-
-var errMtimeResolution = errors.New("filesystem cannot preserve the required sub-millisecond mtimes")
 
 // Inject a permanent failure for exactly one wire upload. The other files use
 // the real simulator, independently of Sync's result bookkeeping.
@@ -129,7 +126,7 @@ func writeLocal(root, name, content string, modified time.Time) error {
 	// Check the stored fixture before Sync sees it: rounding can erase the
 	// 50-microsecond boundary case and make correct SDK behavior look wrong.
 	if !info.ModTime().Equal(modified) {
-		return fmt.Errorf("%w: requested %s, read back %s", errMtimeResolution,
+		return fmt.Errorf("filesystem cannot preserve fixture mtime: requested %s, read back %s",
 			modified.UTC().Format(time.RFC3339Nano), info.ModTime().UTC().Format(time.RFC3339Nano))
 	}
 	return nil
@@ -191,7 +188,7 @@ func uploadCalls(sim *b2sim.Simulator) int {
 }
 
 func checkTree(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root string) error {
-	modified := time.Unix(1_700_000_000, 123_100_000)
+	modified := time.Unix(1_700_000_000, 0)
 	if err := writeLocal(root, "a.txt", "first", modified); err != nil {
 		return err
 	}
@@ -206,10 +203,10 @@ func checkTree(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, roo
 	if err := checkNames(ctx, bucket, "push/tree/", names); err != nil {
 		return err
 	}
-	if err := checkRemote(ctx, bucket, names[0], "first", 1700000000123); err != nil {
+	if err := checkRemote(ctx, bucket, names[0], "first", 1700000000000); err != nil {
 		return err
 	}
-	if err := writeLocal(root, "a.txt", "updated", modified.Add(time.Millisecond)); err != nil {
+	if err := writeLocal(root, "a.txt", "updated", modified.Add(2*time.Second)); err != nil {
 		return err
 	}
 	if err := writeLocal(root, "new.txt", "new", modified); err != nil {
@@ -226,10 +223,10 @@ func checkTree(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, roo
 	if err := checkNames(ctx, bucket, "push/tree/", names); err != nil {
 		return err
 	}
-	if err := checkRemote(ctx, bucket, names[0], "first", 1700000000123); err != nil {
+	if err := checkRemote(ctx, bucket, names[0], "first", 1700000000000); err != nil {
 		return err
 	}
-	return checkRemote(ctx, bucket, names[1], "second", 1700000000123)
+	return checkRemote(ctx, bucket, names[1], "second", 1700000000000)
 }
 
 func checkModTime(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root, name string, opts ...b2sync.Option) error {
@@ -282,7 +279,7 @@ func checkModTime(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, 
 
 func checkComparison(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root, name, changed string, count int64, mode b2sync.CompareMode) error {
 	prefix := "push/" + name
-	modified := time.UnixMilli(1700000000123)
+	modified := time.Unix(1_700_000_000, 0)
 	if err := writeLocal(root, "file.txt", "old", modified); err != nil {
 		return err
 	}
@@ -297,7 +294,7 @@ func checkComparison(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulato
 	if err := checkResult(name+" changed", result, err, []string{"file.txt"}, nil, count); err != nil {
 		return err
 	}
-	if err := checkRemote(ctx, bucket, prefix+"/file.txt", changed, 1700000000123); err != nil {
+	if err := checkRemote(ctx, bucket, prefix+"/file.txt", changed, 1700000000000); err != nil {
 		return err
 	}
 	before := uploadCalls(sim)
@@ -312,7 +309,7 @@ func checkComparison(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulato
 }
 
 func checkFailure(ctx context.Context, bucket *b2.Bucket, transport *failingUpload, root string) error {
-	modified := time.UnixMilli(1700000000123)
+	modified := time.Unix(1_700_000_000, 0)
 	for name, content := range map[string]string{"bad.txt": "bad", "good.txt": "good"} {
 		if err := writeLocal(root, name, content, modified); err != nil {
 			return err
@@ -327,11 +324,11 @@ func checkFailure(ctx context.Context, bucket *b2.Bucket, transport *failingUplo
 	if err := checkNames(ctx, bucket, "push/failure/", []string{"push/failure/good.txt"}); err != nil {
 		return err
 	}
-	return checkRemote(ctx, bucket, "push/failure/good.txt", "good", 1700000000123)
+	return checkRemote(ctx, bucket, "push/failure/good.txt", "good", 1700000000000)
 }
 
 func checkLarge(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, root string) error {
-	modified := time.UnixMilli(1700000000123)
+	modified := time.Unix(1_700_000_000, 0)
 	initial := strings.Repeat("a", 5_000_001)
 	if err := writeLocal(root, "large.bin", initial, modified); err != nil {
 		return err
@@ -345,7 +342,7 @@ func checkLarge(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, ro
 		return fmt.Errorf("large seed did not use two multipart uploads: %v", before)
 	}
 	changed := strings.Repeat("b", 5_000_001)
-	if err := writeLocal(root, "large.bin", changed, modified.Add(time.Millisecond)); err != nil {
+	if err := writeLocal(root, "large.bin", changed, modified.Add(2*time.Second)); err != nil {
 		return err
 	}
 	result, err = b2sync.Sync(ctx, bucket, "push/large", root)
@@ -359,7 +356,7 @@ func checkLarge(ctx context.Context, bucket *b2.Bucket, sim *b2sim.Simulator, ro
 		after["b2_list_unfinished_large_files"] != 0 || after["b2_list_parts"] != 0 {
 		return fmt.Errorf("changed large file was not uploaded afresh in two parts: before=%v after=%v", before, after)
 	}
-	return checkRemote(ctx, bucket, "push/large/large.bin", changed, 1700000000124)
+	return checkRemote(ctx, bucket, "push/large/large.bin", changed, 1700000002000)
 }
 
 func runCheck(ctx context.Context) error {
@@ -385,12 +382,6 @@ func runCheck(ctx context.Context) error {
 	if err := checkTree(ctx, bucket, sim, filepath.Join(root, "tree")); err != nil {
 		return err
 	}
-	if err := checkModTime(ctx, bucket, sim, filepath.Join(root, "default"), "default"); err != nil {
-		return err
-	}
-	if err := checkModTime(ctx, bucket, sim, filepath.Join(root, "modtime"), "modtime", b2sync.WithCompare(b2sync.CompareModTime)); err != nil {
-		return err
-	}
 	if err := checkComparison(ctx, bucket, sim, filepath.Join(root, "size"), "size", "longer", 6, b2sync.CompareSize); err != nil {
 		return err
 	}
@@ -400,17 +391,20 @@ func runCheck(ctx context.Context) error {
 	if err := checkFailure(ctx, bucket, transport, filepath.Join(root, "failure")); err != nil {
 		return err
 	}
-	return checkLarge(ctx, bucket, sim, filepath.Join(root, "large"))
+	if err := checkLarge(ctx, bucket, sim, filepath.Join(root, "large")); err != nil {
+		return err
+	}
+	fmt.Println("NOTE blazer sync.push: tree/dry-run/size/sha1/failure/large-reupload passed")
+	if err := checkModTime(ctx, bucket, sim, filepath.Join(root, "default"), "default"); err != nil {
+		return err
+	}
+	return checkModTime(ctx, bucket, sim, filepath.Join(root, "modtime"), "modtime", b2sync.WithCompare(b2sync.CompareModTime))
 }
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := runCheck(ctx); err != nil {
-		if errors.Is(err, errMtimeResolution) {
-			fmt.Printf("CONFORMANCE blazer sync.push @simulator: COULD-NOT-RUN (mtime-resolution -- %v)\n", err)
-			return
-		}
 		fmt.Printf("CONFORMANCE blazer sync.push @simulator: FAIL (sync -- %v)\n", err)
 		os.Exit(1)
 	}
