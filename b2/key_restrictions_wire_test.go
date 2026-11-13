@@ -58,7 +58,7 @@ func newKeyRestrictionsWire(t *testing.T) (*Client, *keyRestrictionsWire) {
 			wire.mu.Lock()
 			wire.createV4 = sent
 			wire.mu.Unlock()
-			_, _ = fmt.Fprint(w, `{"accountId":"a","applicationKeyId":"key-v4","applicationKey":"secret-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":0,"bucketIds":["b1","b2"],"namePrefix":"p/"}`)
+			_, _ = fmt.Fprint(w, `{"accountId":"a","applicationKeyId":"key-v4","applicationKey":"secret-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":null,"bucketIds":["b1","b2"],"namePrefix":"p/"}`)
 		case strings.HasSuffix(r.URL.Path, "/b2_create_key"):
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
@@ -72,9 +72,9 @@ func newKeyRestrictionsWire(t *testing.T) (*Client, *keyRestrictionsWire) {
 			wire.mu.Lock()
 			wire.createV3 = sent
 			wire.mu.Unlock()
-			_, _ = fmt.Fprint(w, `{"accountId":"a","applicationKeyId":"key-v3","applicationKey":"secret-v3","capabilities":["listFiles"],"keyName":"v3","expirationTimestamp":0,"bucketId":"bid","namePrefix":"bucket/"}`)
+			_, _ = fmt.Fprint(w, `{"accountId":"a","applicationKeyId":"key-v3","applicationKey":"secret-v3","capabilities":["listFiles"],"keyName":"v3","expirationTimestamp":null,"bucketId":"bid","namePrefix":"bucket/"}`)
 		case strings.HasSuffix(r.URL.Path, "/b2_list_keys"):
-			_, _ = fmt.Fprint(w, `{"keys":[{"accountId":"a","applicationKeyId":"key-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":0,"bucketIds":["b1","b2"],"namePrefix":"p/"},{"accountId":"a","applicationKeyId":"key-unrestricted","capabilities":["listBuckets"],"keyName":"unrestricted","expirationTimestamp":0,"bucketIds":null,"namePrefix":null},{"accountId":"a","applicationKeyId":"key-empty","capabilities":["listBuckets"],"keyName":"empty","expirationTimestamp":0,"bucketIds":[],"namePrefix":null}],"nextApplicationKeyId":null}`)
+			_, _ = fmt.Fprint(w, `{"keys":[{"accountId":"a","applicationKeyId":"key-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":null,"bucketIds":["b1","b2"],"namePrefix":"p/"},{"accountId":"a","applicationKeyId":"key-unrestricted","capabilities":["listBuckets"],"keyName":"unrestricted","expirationTimestamp":null,"bucketIds":null,"namePrefix":null},{"accountId":"a","applicationKeyId":"key-empty","capabilities":["listBuckets"],"keyName":"empty","expirationTimestamp":null,"bucketIds":[],"namePrefix":null}],"nextApplicationKeyId":null}`)
 		default:
 			t.Errorf("unexpected request path: %s", r.URL.Path)
 			http.NotFound(w, r)
