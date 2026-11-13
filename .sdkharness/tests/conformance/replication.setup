@@ -186,6 +186,9 @@ func runCheck(ctx context.Context, target *string) error {
 		b2.WithRuleName("first"), b2.WithRuleName("second")), "setup replication: conflicting rule names"); err != nil {
 		return err
 	}
+	if err := assertRejectedWriteHadNoEffect(ctx, source, destination, sourceKeyID, destinationKeyID, wantRule); err != nil {
+		return err
+	}
 	if err := expectError("source key conflict", b2.SetupReplication(ctx, source, destination, "different-source-key", destinationKeyID, options...), "setup replication: source already uses a different application key ID"); err != nil {
 		return err
 	}
@@ -212,10 +215,16 @@ func runCheck(ctx context.Context, target *string) error {
 	if err := expectError("unreadable setup", b2.SetupReplication(ctx, maskedSource, maskedDestination, sourceKeyID, destinationKeyID), "setup replication: cannot read existing replication config to merge safely"); err != nil {
 		return err
 	}
+	if err := assertRejectedWriteHadNoEffect(ctx, source, destination, sourceKeyID, destinationKeyID, wantRule); err != nil {
+		return err
+	}
 	partial := &b2.BucketAttrs{ReplicationConfig: &b2.ReplicationConfiguration{
 		AsReplicationSource: b2.AsReplicationSource{SourceApplicationKeyID: sourceKeyID},
 	}}
 	if err := expectError("unreadable update", maskedSource.Update(ctx, partial), "b2: cannot update unreadable replication configuration"); err != nil {
+		return err
+	}
+	if err := assertRejectedWriteHadNoEffect(ctx, source, destination, sourceKeyID, destinationKeyID, wantRule); err != nil {
 		return err
 	}
 
@@ -302,6 +311,15 @@ func assertCorruptMappingRejected(ctx context.Context, sim http.RoundTripper, so
 	failure, ok := err.(*failErr)
 	if !ok || failure.step != "destination readback" {
 		return failf("mapping corruption", "corrupt readback failed at %v, want destination mapping comparison", err)
+	}
+	return nil
+}
+
+// source and destination use the original, unmasked client. Re-reading them
+// proves a rejected call did not make a durable change through the simulator.
+func assertRejectedWriteHadNoEffect(ctx context.Context, source, destination *b2.Bucket, sourceKeyID, destinationKeyID string, want b2.ReplicationRules) error {
+	if err := assertReplicationRoundTrip(ctx, source, destination, sourceKeyID, destinationKeyID, want); err != nil {
+		return failf("rejected write", "replication configuration changed after rejection: %v", err)
 	}
 	return nil
 }
