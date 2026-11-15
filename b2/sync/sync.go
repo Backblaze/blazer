@@ -161,6 +161,9 @@ func syncWithLocalIO(ctx context.Context, bucket *b2.Bucket, prefix, localRoot s
 	hashFile func(context.Context, string, os.FileInfo) (string, error), opts ...Option) (*Result, error) {
 	settings := options{concurrency: 4}
 	for _, opt := range opts {
+		if opt == nil {
+			return nil, fmt.Errorf("sync: nil option")
+		}
 		opt(&settings)
 	}
 	if settings.err != nil {
