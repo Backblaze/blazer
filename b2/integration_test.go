@@ -1698,7 +1698,7 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	client, err := NewClient(ctx, id, secret)
+	client, err := NewClient(ctx, id, secret, endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1751,7 +1751,7 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	limited, err := NewClient(ctx, keys[2].ID(), keys[2].Secret())
+	limited, err := NewClient(ctx, keys[2].ID(), keys[2].Secret(), endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1778,7 +1778,7 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 	// Bypass high-level validation to pin why nil/empty maps are unsupported:
 	// the current wire encoder omits them, and B2 requires the mapping field.
 	// This checks field presence, not whether B2 accepts a present empty object.
-	raw, err := base.AuthorizeAccount(ctx, id, secret)
+	raw, err := base.AuthorizeAccount(ctx, id, secret, authEndpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}

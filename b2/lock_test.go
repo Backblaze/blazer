@@ -252,14 +252,14 @@ func TestDeleteBypassGovernanceLive(t *testing.T) {
 		haveBypass = slices.Contains(authorization.APIInfo.StorageAPI.Allowed.Capabilities, "bypassGovernance")
 		return resp, nil
 	})
-	account, err := base.AuthorizeAccount(ctx, id, key, base.UserAgent("blazer-bypass-test"), base.Transport(authTransport))
+	account, err := base.AuthorizeAccount(ctx, id, key, append([]base.AuthOption{base.UserAgent("blazer-bypass-test"), base.Transport(authTransport)}, authEndpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !haveBypass {
 		t.Fatal("live test key requires the bypassGovernance capability")
 	}
-	client, err := NewClient(ctx, id, key, UserAgent("blazer-bypass-test"))
+	client, err := NewClient(ctx, id, key, append([]ClientOption{UserAgent("blazer-bypass-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
