@@ -41,7 +41,9 @@ func PartFromReader(r io.Reader, size int64) ComposePart {
 }
 
 // PartFromCopy copies byteRange from sourceFileID as one part. The range has
-// the form "bytes=0-4999999". An empty range copies the entire source.
+// the form "bytes=0-4999999". An empty range copies the entire source and is
+// allowed only for the final part. Its size is not looked up before Compose
+// starts; B2 enforces its size limits after the large file has started.
 func PartFromCopy(sourceFileID, byteRange string) ComposePart {
 	return ComposePart{sourceFileID: sourceFileID, byteRange: byteRange}
 }
@@ -214,7 +216,9 @@ func validateComposeTotalSize(parts []ComposePart) error {
 // may overlap. Compose defaults the content type to application/octet-stream.
 // The known total of uploaded parts and ranged copies may not exceed 10 TB
 // (10,000,000,000,000 bytes); whole-file copies have an unknown size and are
-// not counted toward that limit.
+// not counted toward that limit. For a final whole-file copy, validation of the
+// part size and total file size is deferred to B2 after the large file starts.
+// A service rejection cancels the unfinished file like any other part failure.
 func (b *Bucket) Compose(ctx context.Context, name string, parts []ComposePart, opts ...ComposeOption) (object *Object, err error) {
 	options := composeOptions{}
 	for _, option := range opts {

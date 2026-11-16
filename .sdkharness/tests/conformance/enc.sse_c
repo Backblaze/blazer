@@ -13,6 +13,7 @@
 # https://www.backblaze.com/apidocs/b2-upload-part
 # https://www.backblaze.com/apidocs/b2-download-file-by-name
 # https://www.backblaze.com/apidocs/b2-copy-file
+# https://github.com/Backblaze/blazer/releases/tag/v0.10.0
 #
 # Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
 set -uo pipefail
@@ -100,16 +101,21 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/Backblaze/blazer/b2"
 )
@@ -117,6 +123,7 @@ import (
 const capability = "enc.sse_c"
 
 func runCheck(ctx context.Context, target *string) error {
+	const keyID = "sdkharness-sse-c-key-1"
 	rawKey := make([]byte, 32)
 	wrongRawKey := make([]byte, 32)
 	if _, err := rand.Read(rawKey); err != nil {
@@ -125,7 +132,7 @@ func runCheck(ctx context.Context, target *string) error {
 	if _, err := rand.Read(wrongRawKey); err != nil {
 		return failf("key setup", "could not generate a second test key")
 	}
-	key, err := b2.NewSSECKey(rawKey)
+	key, err := b2.NewSSECKeyWithID(rawKey, keyID)
 	if err != nil {
 		return failf("key setup", "a 32-byte key was rejected")
 	}
@@ -134,10 +141,23 @@ func runCheck(ctx context.Context, target *string) error {
 		return failf("key setup", "a second 32-byte key was rejected")
 	}
 	secretsToScrub = append(secretsToScrub, string(rawKey), string(wrongRawKey))
+	keyValue := base64.StdEncoding.EncodeToString(rawKey)
+	keyDigest := md5.Sum(rawKey)
+	keyMD5 := base64.StdEncoding.EncodeToString(keyDigest[:])
+	secretsToScrub = append(secretsToScrub, keyValue)
 
-	client, err := newClient(ctx, *target)
+	baseURL, err := apiBase(*target)
 	if err != nil {
 		return err
+	}
+	id, secret, err := credentials(*target)
+	if err != nil {
+		return err
+	}
+	audit := &wireAudit{key: keyValue}
+	client, err := b2.NewClient(ctx, id, secret, b2.APIBase(baseURL), b2.Transport(audit), b2.UserAgent("sdkharness-conformance/blazer"))
+	if err != nil {
+		return classify("authenticate", err)
 	}
 
 	bucket, cleanup, err := newBucket(ctx, client, &b2.BucketAttrs{Type: b2.Private})
@@ -164,6 +184,7 @@ func runCheck(ctx context.Context, target *string) error {
 	if _, err := readAll(ctx, object.NewReader(ctx, wrongKey)); err == nil {
 		return failf("wrong key", "an SSE-C object downloaded with the wrong key")
 	}
+	beforeGoodRead := audit.count()
 	got, err := readAll(ctx, object.NewReader(ctx, key))
 	if err != nil {
 		return classify("simple download", err)
@@ -171,8 +192,12 @@ func runCheck(ctx context.Context, target *string) error {
 	if !bytes.Equal(got, payload) {
 		return failf("simple round trip", "the keyed download bytes differ from the upload")
 	}
+	if err := assertKeyedRead(audit.since(beforeGoodRead), http.MethodGet, keyValue, keyMD5); err != nil {
+		return err
+	}
 
 	beforeAttrs := rpcCounts(client)
+	beforeHead := audit.count()
 	// A fresh handle has no cached version, so Attrs resolves the SSE-C object by name with a keyed HEAD.
 	attrs, err := bucket.Object(name).Attrs(ctx, key)
 	if err != nil {
@@ -181,8 +206,17 @@ func runCheck(ctx context.Context, target *string) error {
 	if attrs.Size != int64(len(payload)) {
 		return failf("keyed HEAD", "size %d, expected %d", attrs.Size, len(payload))
 	}
+	if got := attrs.Info["sse_c_key_id"]; got != keyID {
+		return failf("keyed HEAD", "sse_c_key_id = %q, want caller key ID", got)
+	}
+	if err := assertSDKEncryption("keyed HEAD", attrs); err != nil {
+		return err
+	}
 	if !anyContains(rpcDelta(beforeAttrs, rpcCounts(client)), "download_file_by_name") {
 		return failf("keyed HEAD", "Object.Attrs with an SSE-C key did not issue the required HEAD request")
+	}
+	if err := assertKeyedRead(audit.since(beforeHead), http.MethodHead, keyValue, keyMD5); err != nil {
+		return err
 	}
 	// This handle already identifies the version, so Attrs reads its metadata by ID.
 	beforeResolvedAttrs := rpcCounts(client)
@@ -192,6 +226,9 @@ func runCheck(ctx context.Context, target *string) error {
 	}
 	if resolvedAttrs.Size != int64(len(payload)) {
 		return failf("resolved attrs", "size %d, expected %d", resolvedAttrs.Size, len(payload))
+	}
+	if err := assertSDKEncryption("resolved attrs", resolvedAttrs); err != nil {
+		return err
 	}
 	if anyContains(rpcDelta(beforeResolvedAttrs, rpcCounts(client)), "download_file_by_name") {
 		return failf("resolved attrs", "an already resolved object unexpectedly issued a keyed HEAD request")
@@ -203,12 +240,26 @@ func runCheck(ctx context.Context, target *string) error {
 	largeWriter := largeObject.NewWriter(ctx, b2.WithSSECKey(key))
 	largeWriter.ChunkSize = 5_000_000
 	largeWriter.ConcurrentUploads = 2
+	beforeLarge := audit.count()
 	if _, err := largeWriter.Write(largePayload); err != nil {
 		largeWriter.Close()
 		return classify("multipart upload", err)
 	}
 	if err := largeWriter.Close(); err != nil {
 		return classify("multipart upload", err)
+	}
+	if err := assertLargeSSECWire(audit.since(beforeLarge), keyValue, keyMD5, keyID); err != nil {
+		return err
+	}
+	largeAttrs, err := largeObject.Attrs(ctx, key)
+	if err != nil {
+		return classify("multipart metadata", err)
+	}
+	if got := largeAttrs.Info["sse_c_key_id"]; got != keyID {
+		return failf("multipart metadata", "sse_c_key_id = %q, want caller key ID", got)
+	}
+	if err := assertSDKEncryption("multipart metadata", largeAttrs); err != nil {
+		return err
 	}
 	largeGot, err := readAll(ctx, largeObject.NewReader(ctx, key))
 	if err != nil {
@@ -240,10 +291,14 @@ func runCheck(ctx context.Context, target *string) error {
 		return failf("copy setup", "could not identify the sole source version")
 	}
 	copyName := objectName("sse-c-copy.bin")
+	beforeCopy := audit.count()
 	copyObject, err := bucket.Copy(ctx, versions[0].ID(), copyName,
 		b2.CopySourceSSECKey(key), b2.CopyDestinationSSECKey(key))
 	if err != nil {
 		return classify("copy", err)
+	}
+	if err := assertKeyedCopy(audit.since(beforeCopy), keyValue, keyMD5); err != nil {
+		return err
 	}
 	copyGot, err := readAll(ctx, copyObject.NewReader(ctx, key))
 	if err != nil {
@@ -252,8 +307,27 @@ func runCheck(ctx context.Context, target *string) error {
 	if !bytes.Equal(copyGot, payload) {
 		return failf("copy", "the keyed copy bytes differ from the source")
 	}
+	copyAttrs, err := copyObject.Attrs(ctx, key)
+	if err != nil {
+		return classify("copy metadata", err)
+	}
+	if got := copyAttrs.Info["sse_c_key_id"]; got != keyID {
+		return failf("copy metadata", "sse_c_key_id = %q, want caller key ID", got)
+	}
+	if err := assertSDKEncryption("copy metadata", copyAttrs); err != nil {
+		return err
+	}
+	if err := assertInvalidSSECInfo(ctx, bucket, audit, key, rawKey, keyID); err != nil {
+		return err
+	}
+	if err := assertUnsafeResumeRejected(ctx, baseURL, bucket, audit, key, keyValue, keyMD5, keyID); err != nil {
+		return err
+	}
+	if err := assertPublicSSECMetadata(audit.since(0), keyValue); err != nil {
+		return err
+	}
 
-	note("simple and multipart SSE-C round-trips, missing/wrong-key rejection, keyed HEAD, parallel range and keyed copy all passed")
+	note("SSE-C start and every part carried the key; key IDs, public metadata, keyed reads/copy, unsafe resume and pre-request validation passed")
 	return nil
 }
 
@@ -267,6 +341,335 @@ func readAll(ctx context.Context, reader *b2.Reader) ([]byte, error) {
 		return nil, closeErr
 	}
 	return data, nil
+}
+
+type wireCall struct {
+	method, path string
+	headers      http.Header
+	request      map[string]any
+	response     map[string]any
+	keyEchoed    bool
+}
+
+type wireAudit struct {
+	mu    sync.Mutex
+	key   string
+	calls []wireCall
+}
+
+func (a *wireAudit) RoundTrip(req *http.Request) (*http.Response, error) {
+	call := wireCall{method: req.Method, path: req.URL.Path, headers: req.Header.Clone()}
+	if strings.HasSuffix(call.path, "/b2_start_large_file") || strings.HasSuffix(call.path, "/b2_copy_file") {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		if err := json.Unmarshal(body, &call.request); err != nil {
+			return nil, err
+		}
+	}
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if resp != nil {
+		for _, values := range resp.Header {
+			for _, value := range values {
+				call.keyEchoed = call.keyEchoed || strings.Contains(value, a.key)
+			}
+		}
+	}
+	if resp != nil && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json") {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			resp.Body.Close()
+			return nil, readErr
+		}
+		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		call.keyEchoed = call.keyEchoed || bytes.Contains(body, []byte(a.key))
+		if resp.StatusCode == http.StatusOK && strings.HasSuffix(call.path, "/b2_get_file_info") {
+			if err := json.Unmarshal(body, &call.response); err != nil {
+				return nil, err
+			}
+		}
+	}
+	a.mu.Lock()
+	a.calls = append(a.calls, call)
+	a.mu.Unlock()
+	return resp, err
+}
+
+func (a *wireAudit) count() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.calls)
+}
+
+func (a *wireAudit) since(n int) []wireCall {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]wireCall(nil), a.calls[n:]...)
+}
+
+func assertLargeSSECWire(calls []wireCall, key, digest, id string) error {
+	starts, parts := 0, 0
+	for _, call := range calls {
+		switch {
+		case strings.HasSuffix(call.path, "/b2_start_large_file"):
+			starts++
+			sse, _ := call.request["serverSideEncryption"].(map[string]any)
+			if sse["mode"] != "SSE-C" || sse["algorithm"] != "AES256" || sse["customerKey"] != key || sse["customerKeyMd5"] != digest {
+				return failf("multipart wire", "b2_start_large_file did not carry the requested SSE-C mode, algorithm, key and digest")
+			}
+			info, _ := call.request["fileInfo"].(map[string]any)
+			if info["sse_c_key_id"] != id {
+				return failf("multipart wire", "b2_start_large_file did not store the caller's sse_c_key_id")
+			}
+		case strings.HasSuffix(call.path, "/b2_upload_part"):
+			parts++
+			if call.headers.Get("X-Bz-Server-Side-Encryption-Customer-Algorithm") != "AES256" ||
+				call.headers.Get("X-Bz-Server-Side-Encryption-Customer-Key") != key ||
+				call.headers.Get("X-Bz-Server-Side-Encryption-Customer-Key-Md5") != digest {
+				return failf("multipart wire", "b2_upload_part %d did not carry all three SSE-C headers", parts)
+			}
+		}
+	}
+	if starts != 1 || parts < 2 {
+		return failf("multipart wire", "got %d start calls and %d part calls, want one start and at least two parts", starts, parts)
+	}
+	return nil
+}
+
+func assertPublicSSECMetadata(calls []wireCall, key string) error {
+	seen := false
+	for _, call := range calls {
+		if call.keyEchoed {
+			return failf("SSE-C metadata", "%s echoed the customer key in a response", call.path)
+		}
+		if !strings.HasSuffix(call.path, "/b2_get_file_info") || call.response == nil {
+			continue
+		}
+		seen = true
+		sse, _ := call.response["serverSideEncryption"].(map[string]any)
+		if sse["customerKey"] != nil || sse["mode"] != "SSE-C" || sse["algorithm"] != "AES256" {
+			return failf("multipart metadata", "want no customer key and SSE-C/AES256 mode and algorithm")
+		}
+		if md5, present := sse["customerKeyMd5"]; present {
+			if digest, ok := md5.(string); !ok || digest == key {
+				return failf("multipart metadata", "customerKeyMd5 must be a digest distinct from the customer key")
+			}
+		}
+		// The B2-profile simulator mirrors a real-B2 response that also
+		// reports the key MD5; it never returns the customer key itself.
+		// https://github.com/backblaze-labs/b2-simulator/blob/main/bin/tests/test-sse-c-key-md5.mjs
+		for field := range sse {
+			switch field {
+			case "mode", "algorithm", "customerKeyMd5":
+			default:
+				return failf("multipart metadata", "unexpected SSE field %q in response", field)
+			}
+		}
+	}
+	if !seen {
+		return failf("multipart metadata", "no b2_get_file_info response was observed")
+	}
+	return nil
+}
+
+func assertSDKEncryption(step string, attrs *b2.Attrs) error {
+	if attrs.ServerSideEncryption == nil || attrs.ServerSideEncryption.Mode != "SSE-C" || attrs.ServerSideEncryption.Algorithm != "AES256" {
+		return failf(step, "blazer returned encryption %v, want SSE-C/AES256", attrs.ServerSideEncryption)
+	}
+	return nil
+}
+
+func assertKeyedRead(calls []wireCall, method, key, digest string) error {
+	seen := false
+	for _, call := range calls {
+		if call.method != method || !strings.HasPrefix(call.path, "/file/") {
+			continue
+		}
+		seen = true
+		if call.headers.Get("X-Bz-Server-Side-Encryption-Customer-Algorithm") != "AES256" ||
+			call.headers.Get("X-Bz-Server-Side-Encryption-Customer-Key") != key ||
+			call.headers.Get("X-Bz-Server-Side-Encryption-Customer-Key-Md5") != digest {
+			return failf("keyed read", "%s omitted a per-request SSE-C header", method)
+		}
+	}
+	if !seen {
+		return failf("keyed read", "no %s download-by-name request was observed", method)
+	}
+	return nil
+}
+
+func assertKeyedCopy(calls []wireCall, key, digest string) error {
+	seen := false
+	for _, call := range calls {
+		if !strings.HasSuffix(call.path, "/b2_copy_file") {
+			continue
+		}
+		seen = true
+		for _, field := range []string{"sourceServerSideEncryption", "destinationServerSideEncryption"} {
+			sse, _ := call.request[field].(map[string]any)
+			if sse["mode"] != "SSE-C" || sse["algorithm"] != "AES256" || sse["customerKey"] != key || sse["customerKeyMd5"] != digest {
+				return failf("keyed copy", "b2_copy_file did not carry the %s SSE-C key", field)
+			}
+		}
+	}
+	if !seen {
+		return failf("keyed copy", "no b2_copy_file request was observed")
+	}
+	return nil
+}
+
+func assertInvalidSSECInfo(ctx context.Context, bucket *b2.Bucket, audit *wireAudit, key *b2.SSECKey, rawKey []byte, id string) error {
+	plainKey, err := b2.NewSSECKey(rawKey)
+	if err != nil {
+		return failf("invalid info setup", "a valid key without ID was rejected")
+	}
+	atLimitInfo := make(map[string]string, 9)
+	for i := 0; i < 9; i++ {
+		atLimitInfo[fmt.Sprintf("entry_%d", i)] = "value"
+	}
+	atLimitObject := bucket.Object(objectName("ten-info-entries"))
+	before := audit.count()
+	atLimitWriter := atLimitObject.NewWriter(ctx,
+		b2.WithSSECKey(key), b2.WithAttrsOption(&b2.Attrs{Info: atLimitInfo}))
+	if _, err := atLimitWriter.Write([]byte("x")); err != nil {
+		atLimitWriter.Close()
+		return failf("file info limit", "nine caller entries plus key ID failed to write: %v", err)
+	}
+	if err := atLimitWriter.Close(); err != nil {
+		return failf("file info limit", "nine caller entries plus key ID failed to close: %v", err)
+	}
+	if audit.count() == before {
+		return failf("file info limit", "the accepted 10-entry upload sent no B2 request")
+	}
+	atLimitAttrs, err := atLimitObject.Attrs(ctx, key)
+	if err != nil {
+		return classify("file info limit metadata", err)
+	}
+	if len(atLimitAttrs.Info) != 10 || atLimitAttrs.Info["sse_c_key_id"] != id {
+		return failf("file info limit", "stored %d file-info entries and key ID %q, want 10 entries including the caller key ID", len(atLimitAttrs.Info), atLimitAttrs.Info["sse_c_key_id"])
+	}
+	overLimitInfo := make(map[string]string, 10)
+	for i := 0; i < 10; i++ {
+		overLimitInfo[fmt.Sprintf("entry_%d", i)] = "value"
+	}
+	for _, test := range []struct {
+		name string
+		key  *b2.SSECKey
+		info map[string]string
+		data []byte
+		want string
+	}{
+		{"lowercase-conflict", key, map[string]string{"sse_c_key_id": "other"}, []byte("x"), "conflicts"},
+		{"uppercase-conflict", key, map[string]string{"SSE_C_KEY_ID": "other"}, []byte("x"), "conflicts"},
+		{"mixedcase-conflict", key, map[string]string{"Sse_C_Key_Id": "other"}, []byte("x"), "conflicts"},
+		{"id-without-key-id", plainKey, map[string]string{"sse_c_key_id": id}, []byte("x"), "requires a caller-supplied key ID"},
+		{"eleven-info-entries-simple", key, overLimitInfo, []byte("x"), "10-entry file info limit"},
+		{"eleven-info-entries", key, overLimitInfo, payloadOf(5_000_001), "10-entry file info limit"},
+	} {
+		before := audit.count()
+		writer := bucket.Object(objectName("invalid-"+test.name)).NewWriter(ctx,
+			b2.WithSSECKey(test.key), b2.WithAttrsOption(&b2.Attrs{Info: test.info}))
+		writer.ChunkSize = 5_000_000
+		_, writeErr := writer.Write(test.data)
+		closeErr := writer.Close()
+		gotErr := writeErr
+		if gotErr == nil {
+			gotErr = closeErr
+		}
+		if gotErr == nil || !strings.Contains(gotErr.Error(), test.want) {
+			return failf("invalid info", "%s error = %v, want %s rejection", test.name, gotErr, test.want)
+		}
+		if got := audit.count(); got != before {
+			return failf("invalid info", "%s sent %d B2 requests before rejection", test.name, got-before)
+		}
+	}
+	return nil
+}
+
+func assertUnsafeResumeRejected(ctx context.Context, baseURL string, bucket *b2.Bucket, audit *wireAudit, key *b2.SSECKey, keyValue, digest, id string) error {
+	for _, test := range []struct {
+		name string
+		info map[string]string
+		key  *b2.SSECKey
+		want string
+	}{
+		{"missing-id", nil, key, "identifier"},
+		{"different-id", map[string]string{"sse_c_key_id": "another-id"}, key, "identifier"},
+		{"unkeyed", map[string]string{"sse_c_key_id": id}, nil, "SSE-C key"},
+	} {
+		name := objectName("resume-" + test.name)
+		if err := startUnfinishedSSEC(ctx, baseURL, bucket.ID(), name, test.info, keyValue, digest); err != nil {
+			return classify("resume setup", err)
+		}
+		before := audit.count()
+		var opts []b2.WriterOption
+		if test.key != nil {
+			opts = append(opts, b2.WithSSECKey(test.key))
+		}
+		writer := bucket.Object(name).NewWriter(ctx, opts...)
+		writer.Resume = true
+		writer.ChunkSize = 5_000_000
+		_, writeErr := writer.Write(payloadOf(5_000_001))
+		closeErr := writer.Close()
+		gotErr := writeErr
+		if gotErr == nil {
+			gotErr = closeErr
+		}
+		if gotErr == nil || !strings.Contains(gotErr.Error(), test.want) {
+			return failf("resume", "%s: error = %v, want %s rejection", test.name, gotErr, test.want)
+		}
+		for _, call := range audit.since(before) {
+			if strings.HasSuffix(call.path, "/b2_start_large_file") || strings.HasSuffix(call.path, "/b2_upload_part") {
+				return failf("resume", "%s sent an upload request after rejecting the unsafe resume", test.name)
+			}
+		}
+	}
+	return nil
+}
+
+func startUnfinishedSSEC(ctx context.Context, baseURL, bucketID, name string, info map[string]string, key, digest string) error {
+	authReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/b2api/v4/b2_authorize_account", nil)
+	if err != nil {
+		return err
+	}
+	authReq.SetBasicAuth("test-key-id", "test-key")
+	authResp, err := http.DefaultClient.Do(authReq)
+	if err != nil {
+		return err
+	}
+	var auth struct {
+		AuthorizationToken string `json:"authorizationToken"`
+	}
+	err = json.NewDecoder(authResp.Body).Decode(&auth)
+	authResp.Body.Close()
+	if err != nil || authResp.StatusCode != http.StatusOK || auth.AuthorizationToken == "" {
+		return fmt.Errorf("fixture authorization failed with status %d", authResp.StatusCode)
+	}
+	body, err := json.Marshal(map[string]any{
+		"bucketId": bucketID, "fileName": name, "contentType": "application/octet-stream", "fileInfo": info,
+		"serverSideEncryption": map[string]string{"mode": "SSE-C", "algorithm": "AES256", "customerKey": key, "customerKeyMd5": digest},
+	})
+	if err != nil {
+		return err
+	}
+	startReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/b2api/v4/b2_start_large_file", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	startReq.Header.Set("Authorization", auth.AuthorizationToken)
+	startReq.Header.Set("Content-Type", "application/json")
+	startResp, err := http.DefaultClient.Do(startReq)
+	if err != nil {
+		return err
+	}
+	startResp.Body.Close()
+	if startResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fixture b2_start_large_file returned status %d", startResp.StatusCode)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

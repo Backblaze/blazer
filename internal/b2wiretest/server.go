@@ -275,7 +275,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 func (s *Server) builtin(call string) (Response, bool) {
 	switch call {
 	case "b2_authorize_account":
-		return Response{Status: http.StatusOK, Body: fmt.Sprintf(`{"accountId":"a","authorizationToken":"test-token","applicationKeyExpirationTimestamp":0,"apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"apiUrl":"%[1]s","capabilities":[],"downloadUrl":"%[1]s","storageApi":"storage","recommendedPartSize":100000000,"s3ApiUrl":"%[1]s","allowed":{"buckets":null,"capabilities":[],"namePrefix":null}}}}`, s.URL())}, true
+		return Response{Status: http.StatusOK, Body: fmt.Sprintf(`{"accountId":"a","authorizationToken":"test-token","applicationKeyExpirationTimestamp":0,"apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"apiUrl":"%[1]s","downloadUrl":"%[1]s","storageApi":"storage","recommendedPartSize":100000000,"s3ApiUrl":"%[1]s","allowed":{"buckets":null,"capabilities":[],"namePrefix":null}}}}`, s.URL())}, true
 	case "b2_get_upload_url":
 		return Response{Status: http.StatusOK, Body: fmt.Sprintf(`{"uploadUrl":%q,"authorizationToken":"upload-token"}`, s.URL()+"/upload_file")}, true
 	case "b2_get_upload_part_url":

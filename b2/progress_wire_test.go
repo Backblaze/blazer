@@ -17,6 +17,7 @@ package b2
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
@@ -305,5 +307,168 @@ func TestProgressNewClientWire(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Consuming the request body does not mean B2 accepted the upload.
+func TestProgressRejectedSimpleUploadWire(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	srv.StrictReplySequence("upload_file", b2wiretest.Response{
+		Status: http.StatusBadRequest,
+		Body:   `{"status":400,"code":"bad_request","message":"rejected after body"}`,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var samples []progressSample
+	writer := bucket.Object("progress-rejected").NewWriter(ctx, WithProgress(func(complete, total int64) {
+		samples = append(samples, progressSample{complete, total})
+	}))
+	if n, err := writer.ReadFrom(bytes.NewReader([]byte("abc"))); n != 3 || err != nil {
+		t.Fatalf("ReadFrom = %d, %v; want 3, nil", n, err)
+	}
+	err := writer.Close()
+	if status, code, message := base.MsgCode(err); status != 400 || code != "bad_request" || message != "rejected after body" {
+		t.Fatalf("Close = %v; want scripted 400/bad_request/rejected after body", err)
+	}
+	requests := srv.Calls("upload_file")
+	if len(requests) != 1 {
+		t.Fatalf("upload requests = %d, want 1", len(requests))
+	}
+	assertProgressUploadBody(t, requests[0], []byte("abc"))
+	assertProgressSamples(t, samples, 3, 3, false)
+}
+
+func TestProgressExhaustedMultipartUploadWire(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	srv.StrictReplySequence("b2_start_large_file", b2wiretest.Response{
+		Body: `{"fileId":"progress-large","fileName":"progress-exhausted","action":"start","fileInfo":{},"contentType":"application/octet-stream","uploadTimestamp":1}`,
+	})
+	const partSize = 5_000_000 // B2's minimum non-final part size.
+	part := bytes.Repeat([]byte("a"), partSize)
+	responses := []b2wiretest.Response{
+		{Body: fmt.Sprintf(`{"fileId":"progress-large","partNumber":1,"contentLength":5000000,"contentSha1":"%x","uploadTimestamp":1}`, sha1.Sum(part))},
+		{Body: fmt.Sprintf(`{"fileId":"progress-large","partNumber":2,"contentLength":5000000,"contentSha1":"%x","uploadTimestamp":1}`, sha1.Sum(part))},
+	}
+	for range 6 { // Initial attempt plus the existing five reuploads.
+		responses = append(responses, b2wiretest.Response{
+			Status: http.StatusInternalServerError,
+			Body:   `{"status":500,"code":"internal_error","message":"part rejected after body"}`,
+		})
+	}
+	srv.StrictReplySequence("upload_part", responses...)
+	srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"progress-large","fileName":"progress-exhausted","action":"upload"}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	payload := append(append(append([]byte(nil), part...), part...), []byte("end")...)
+	var samples []progressSample
+	writer := bucket.Object("progress-exhausted").NewWriter(ctx, WithProgress(func(complete, total int64) {
+		samples = append(samples, progressSample{complete, total})
+	}))
+	writer.ChunkSize = partSize
+	writer.ConcurrentUploads = 1 // Make the final part the only failing part.
+	if n, err := writer.ReadFrom(bytes.NewReader(payload)); n != 10_000_003 || err != nil {
+		t.Fatalf("ReadFrom = %d, %v; want 10000003, nil", n, err)
+	}
+	err := writer.Close()
+	if status, code, message := base.MsgCode(err); status != 500 || code != "internal_error" || message != "part rejected after body" {
+		t.Fatalf("Close = %v; want scripted 500/internal_error/part rejected after body", err)
+	}
+	requests := srv.Calls("upload_part")
+	if len(requests) != 8 {
+		t.Fatalf("part requests = %d, want 2 successful parts and 6 failed attempts", len(requests))
+	}
+	for i, request := range requests {
+		wantPart, wantBody := "3", []byte("end")
+		if i < 2 {
+			wantPart, wantBody = strconv.Itoa(i+1), part
+		}
+		if got := request.Header.Get("X-Bz-Part-Number"); got != wantPart {
+			t.Fatalf("request %d part = %q, want %q", i, got, wantPart)
+		}
+		assertProgressUploadBody(t, request, wantBody)
+	}
+	if got := len(srv.Calls("b2_finish_large_file")); got != 0 {
+		t.Fatalf("finish requests = %d, want 0 after a failed part", got)
+	}
+	// Re-reading the final three bytes six times must not count them six times.
+	assertProgressSamples(t, samples, 10_000_003, 10_000_003, false)
+}
+
+func assertProgressUploadBody(t *testing.T, request b2wiretest.Request, payload []byte) {
+	t.Helper()
+	want := append(append([]byte(nil), payload...), []byte(fmt.Sprintf("%x", sha1.Sum(payload)))...)
+	if request.Header.Get("X-Bz-Content-Sha1") != "hex_digits_at_end" || !bytes.Equal(request.Body, want) {
+		t.Fatalf("upload body or SHA1 trailer differs: got %d bytes, want %d", len(request.Body), len(want))
+	}
+}
+
+func TestProgressRangeAtAndPastEOFWire(t *testing.T) {
+	for _, offset := range []int64{3, 4} {
+		t.Run(fmt.Sprintf("offset=%d", offset), func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			srv.Handle("progress-eof", func(request b2wiretest.Request) b2wiretest.Response {
+				if request.Method == http.MethodHead {
+					return b2wiretest.Response{Header: http.Header{"Content-Length": {"3"}}}
+				}
+				return b2wiretest.RangeDownload("abc", request.Header.Get("Range"))
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var samples []progressSample
+			reader := bucket.Object("progress-eof").NewRangeReader(ctx, offset, 5)
+			reader.Progress = func(complete, total int64) { samples = append(samples, progressSample{complete, total}) }
+			got, readErr := io.ReadAll(reader)
+			closeErr := reader.Close()
+			if len(got) != 0 || readErr != nil || closeErr != nil {
+				t.Fatalf("ReadAll = %q, %v; Close = %v; want empty, nil, nil", got, readErr, closeErr)
+			}
+			assertProgressSamples(t, samples, 0, 0, false)
+			requests := srv.Calls("progress-eof")
+			if len(requests) != 1 || requests[0].Method != http.MethodHead {
+				t.Fatalf("download requests = %+v, want one HEAD and no GET", requests)
+			}
+		})
+	}
+}
+
+func TestProgressZeroAndNegativeRangeLengthWire(t *testing.T) {
+	for _, withProgress := range []bool{false, true} {
+		for _, length := range []int64{0, -1} {
+			t.Run(fmt.Sprintf("progress=%t/length=%d", withProgress, length), func(t *testing.T) {
+				srv, bucket := newSHA1WireBucket(t)
+				srv.Handle("progress-length", func(request b2wiretest.Request) b2wiretest.Response {
+					return b2wiretest.RangeDownload("abc", request.Header.Get("Range"))
+				})
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				reader := bucket.Object("progress-length").NewRangeReader(ctx, 1, length)
+				reader.ChunkSize = 8
+				var samples []progressSample
+				if withProgress {
+					reader.Progress = func(complete, total int64) { samples = append(samples, progressSample{complete, total}) }
+				}
+				got, readErr := io.ReadAll(reader)
+				closeErr := reader.Close()
+				want, total := "", int64(0)
+				if length < 0 {
+					want, total = "bc", -1
+				}
+				if string(got) != want || readErr != nil || closeErr != nil {
+					t.Fatalf("ReadAll = %q, %v; Close = %v; want %q, nil, nil", got, readErr, closeErr, want)
+				}
+				if withProgress {
+					assertProgressSamples(t, samples, int64(len(want)), total, false)
+				}
+				requests := srv.Calls("progress-length")
+				if (length == 0 && len(requests) != 0) || (length < 0 && len(requests) == 0) {
+					t.Fatalf("download requests = %+v; want none for zero length and GETs for negative length", requests)
+				}
+				for _, request := range requests {
+					if request.Method != http.MethodGet {
+						t.Fatalf("open-ended read made a %s request, want only GET", request.Method)
+					}
+				}
+			})
+		}
 	}
 }

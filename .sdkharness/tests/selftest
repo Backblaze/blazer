@@ -38,6 +38,13 @@ for spec in "conformance|CONFORMANCE blazer" "resilience|RESILIENCE blazer"; do
   out="$(run_disp "$level" fx.cnr_bad)"; RC="$(cat "$TMP/rc")"
   case "$out" in *"	FAIL	"*"COULD-NOT-RUN exited 3"*) [ "$RC" = 1 ] && ok "$level: COULD-NOT-RUN with a nonzero exit is a FAIL" || bad "$level: CNR+nonzero exited $RC, want 1";; *) bad "$level: CNR+nonzero not FAIL ($out)";; esac
 done
+fixture "$TMP/t/conformance/notification.verify" "CONFORMANCE blazer notification.verify @simulator: PASS" 0
+out="$(env -i PATH="$PATH" SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=notification.verify "$TMP/t/run-conformance" 2>/dev/null)"; rc=$?
+case "$out" in *"	PASS	"*) [ "$rc" = 0 ] && ok "conformance: notification verification needs no simulator URL" || bad "conformance: offline scenario exited $rc";; *) bad "conformance: offline scenario not PASS ($out)";; esac
+out="$(env -i PATH="$PATH" SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=fx.cnr_ok "$TMP/t/run-conformance" 2>/dev/null)"; rc=$?
+case "$out" in *"	FAIL	"*"simulator URL"*) [ "$rc" = 1 ] && ok "conformance: service scenarios still require a simulator URL" || bad "conformance: no-URL service scenario exited $rc";; *) bad "conformance: service scenario accepted no URL ($out)";; esac
+out="$(env -i PATH="$PATH" SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=notification.verify SDKHARNESS_SIMULATOR_URL=https://example.com "$TMP/t/run-conformance" 2>/dev/null)"; rc=$?
+case "$out" in *"	FAIL	"*"simulator URL"*) [ "$rc" = 1 ] && ok "conformance: notification verification refuses an external simulator URL" || bad "conformance: external URL exited $rc";; *) bad "conformance: external URL was not refused ($out)";; esac
 fixture "$TMP/t/health/golden-path" "HEALTHCHECK blazer: SKIP (x)" 4
 out="$(env -i PATH="$PATH" SDKHARNESS_TEST_LEVEL=health SDKHARNESS_SCENARIO=golden-path SDKHARNESS_SIMULATOR_URL="$LOOP" "$TMP/t/run-health" 2>/dev/null)"; rc=$?
 case "$out" in *"	FAIL	"*"SKIP exited 4"*) [ "$rc" = 1 ] && ok "health: SKIP with a nonzero exit is a FAIL" || bad "health: exit $rc";; *) bad "health: SKIP+nonzero not FAIL ($out)";; esac

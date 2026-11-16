@@ -1,3 +1,0 @@
-kind: Fixed
-body: (*Object).Attrs now reports Status for an unfinished large file from ListUnfinished; it was Unknown because the listing dropped the action.
-time: 2026-11-10T08:51:42.538162-06:00

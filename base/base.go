@@ -28,6 +28,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -42,7 +43,7 @@ import (
 
 const (
 	APIBase          = "https://api.backblazeb2.com"
-	DefaultUserAgent = "blazer/0.9.0"
+	DefaultUserAgent = "blazer/0.10.0"
 )
 
 type b2err struct {
@@ -707,13 +708,14 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 	// A restricted key's scope lives under storageApi.allowed. Master keys
 	// carry an allowed with null buckets and namePrefix, leaving buckets and
 	// pfx empty; the nil check also tolerates an absent allowed.
-	var buckets []string
+	var buckets, capabilities []string
 	var pfx string
 	if allowed := storageAPI.Allowed; allowed != nil {
 		for _, b := range allowed.Buckets {
 			buckets = append(buckets, b.ID)
 		}
 		pfx = allowed.Prefix
+		capabilities = allowed.Capabilities
 	}
 	return &B2{
 		accountID:           b2resp.AccountID,
@@ -725,7 +727,7 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		recommendedPartSize: storageAPI.PartSize,
 		buckets:             buckets,
 		pfx:                 pfx,
-		capabilities:        append([]string(nil), storageAPI.Capabilities...),
+		capabilities:        append([]string(nil), capabilities...),
 		opts:                b2opts,
 	}, nil
 }
@@ -823,6 +825,20 @@ func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2
 	return sse
 }
 
+// decodeReplicationConfiguration keeps hidden settings distinct from absent ones.
+func decodeReplicationConfiguration(cfg *b2types.ReplicationConfigurationResponse) (*b2types.ReplicationConfiguration, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	if !cfg.IsClientAuthorizedToRead {
+		return nil, true
+	}
+	if cfg.Value == nil || (cfg.Value.AsReplicationSource == nil && cfg.Value.AsReplicationDestination == nil) {
+		return nil, false
+	}
+	return cfg.Value, false
+}
+
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
 func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool, replicationConfiguration *b2types.ReplicationConfiguration) (*Bucket, error) {
@@ -879,10 +895,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	bucket.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
-	if cfg := b2resp.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
-		(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
-		bucket.ReplicationConfiguration = cfg.Value
-	}
+	bucket.ReplicationConfiguration, bucket.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(b2resp.ReplicationConfiguration)
 	return bucket, nil
 }
 
@@ -917,8 +930,9 @@ type Bucket struct {
 	DefaultServerSideEncryption *b2types.ServerSideEncryption
 	FileLockEnabled             bool
 	ReplicationConfiguration    *b2types.ReplicationConfiguration
-	// ReplicationConfigurationUnreadable records a list response that withheld
-	// replication settings. Callers must not replace a config they cannot read.
+	// ReplicationConfigurationUnreadable records a bucket response that withheld
+	// replication settings. A partial merge requires readable existing settings;
+	// a complete explicit replacement does not.
 	ReplicationConfigurationUnreadable bool
 }
 
@@ -983,9 +997,9 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		CORSRules:                   b2resp.CORSRules,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
-		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
 	}
 	updated.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
+	updated.ReplicationConfiguration, updated.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(b2resp.ReplicationConfiguration)
 
 	return updated, nil
 }
@@ -1105,13 +1119,7 @@ func (b *B2) listBucketsWithState(ctx context.Context, state authState, bucketID
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
 		}
 		listed.DefaultRetention = decodeDefaultRetention(bucket.FileLockConfig)
-		if cfg := bucket.ReplicationConfiguration; cfg != nil && !cfg.IsClientAuthorizedToRead {
-			listed.ReplicationConfigurationUnreadable = true
-		}
-		if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
-			(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
-			listed.ReplicationConfiguration = cfg.Value
-		}
+		listed.ReplicationConfiguration, listed.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(bucket.ReplicationConfiguration)
 		buckets = append(buckets, listed)
 	}
 	return buckets, nil
@@ -1229,16 +1237,27 @@ func (l FileLock) retentionRequest() *b2types.FileRetention {
 	return &b2types.FileRetention{Mode: &l.Retention.Mode, RetainUntilTimestamp: &l.Retention.RetainUntilTimestamp}
 }
 
+func validateFileLockCount(lock []FileLock) error {
+	if len(lock) > 1 {
+		return fmt.Errorf("b2: at most one FileLock may be given, got %d", len(lock))
+	}
+	return nil
+}
+
 // UploadFile wraps b2_upload_file. At most one FileLock may be given; it sets
-// Object Lock retention and legal hold on the new file.
+// Object Lock retention and legal hold on the new file. Extra FileLock arguments
+// return an error without sending a request.
 func (url *URL) UploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, lock ...FileLock) (*File, error) {
 	return url.UploadFileWithSSEC(ctx, r, size, name, contentType, sha1, info, nil, lock...)
 }
 
 // UploadFileWithSSEC wraps b2_upload_file and sends per-request server-side
 // encryption settings. Callers normally use package b2 instead of this
-// low-level method.
+// low-level method. Like UploadFile, it rejects extra FileLock arguments.
 func (url *URL) UploadFileWithSSEC(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*File, error) {
+	if err := validateFileLockCount(lock); err != nil {
+		return nil, err
+	}
 	state := url.b2.snapshot()
 	headers := map[string]string{
 		"Authorization":     url.token,
@@ -1391,14 +1410,18 @@ func (l *LargeFile) CopyPart(ctx context.Context, sourceFileID string, partNumbe
 }
 
 // StartLargeFile wraps b2_start_large_file. At most one FileLock may be given;
-// it sets Object Lock retention and legal hold on the new file.
+// it sets Object Lock retention and legal hold on the new file. Extra FileLock
+// arguments return an error without sending a request.
 func (b *Bucket) StartLargeFile(ctx context.Context, name, contentType string, info map[string]string, lock ...FileLock) (*LargeFile, error) {
 	return b.StartLargeFileWithSSEC(ctx, name, contentType, info, nil, lock...)
 }
 
 // StartLargeFileWithSSEC wraps b2_start_large_file and carries SSE-C settings
-// in the JSON request body.
+// in the JSON request body. Like StartLargeFile, it rejects extra FileLock arguments.
 func (b *Bucket) StartLargeFileWithSSEC(ctx context.Context, name, contentType string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*LargeFile, error) {
+	if err := validateFileLockCount(lock); err != nil {
+		return nil, err
+	}
 	if err := addServerSideEncryptionHeaders(map[string]string{}, sse); err != nil {
 		return nil, err
 	}
@@ -1812,6 +1835,8 @@ func (b *Bucket) GetDownloadAuthorization(ctx context.Context, prefix string, va
 // FileReader is an io.ReadCloser that downloads a file from B2.
 type FileReader struct {
 	io.ReadCloser
+	// ContentLength is the response length, saturated at the platform's maximum
+	// int. It does not limit the bytes returned by Read.
 	ContentLength int
 	ContentType   string
 	SHA1          string
@@ -1963,6 +1988,15 @@ func (b *Bucket) downloadFile(ctx context.Context, state authState, uri, b2Metho
 	return newFileReader(resp)
 }
 
+// sizedReadCloser retains the wire length for internal consumers while the
+// exported FileReader.ContentLength remains a native-int compatibility field.
+type sizedReadCloser struct {
+	io.ReadCloser
+	size int64
+}
+
+func (r sizedReadCloser) Size() int64 { return r.size }
+
 func newFileReader(resp *http.Response) (*FileReader, error) {
 	return newFileReaderWithMaxLength(resp, int64(^uint(0)>>1))
 }
@@ -1972,12 +2006,12 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		defer resp.Body.Close()
 		return nil, mkErr(resp)
 	}
-	contentLength, err := strconv.Atoi(resp.Header.Get("Content-Length"))
+	contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
 	if err != nil {
 		_ = resp.Body.Close()
 		return nil, err
 	}
-	if contentLength < 0 || int64(contentLength) > maxInt {
+	if contentLength < 0 {
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("invalid download content length %d", contentLength)
 	}
@@ -2002,12 +2036,19 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 	if sha1 == "none" && info["Large_file_sha1"] != "" {
 		sha1 = info["Large_file_sha1"]
 	}
+	// Saturate ContentLength to the platform's int range so the conversion
+	// cannot truncate; the body itself is never limited. The math.MaxInt guard
+	// is the upper bound (maxInt is a test seam for the 32-bit path).
+	length := min(contentLength, maxInt)
+	if length > math.MaxInt {
+		length = math.MaxInt
+	}
 	return &FileReader{
-		ReadCloser:    resp.Body,
+		ReadCloser:    sizedReadCloser{resp.Body, contentLength},
 		SHA1:          sha1,
 		ID:            resp.Header.Get("X-Bz-File-Id"),
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: contentLength,
+		ContentLength: int(length),
 		Info:          info,
 	}, nil
 }

@@ -78,14 +78,14 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 		c.opts.accountInfo = &InMemoryAccountInfo{}
 	}
 	c.backend.(*beRoot).accountInfo = c.opts.accountInfo
-	// Probe default writer options before authorization: SSE-C keys are strictly
-	// request-scoped and must not be retained by a Client.
-	probe := &Writer{}
+	// Validate defaults without invoking callbacks: SSE-C keys are request-scoped.
 	for _, option := range c.opts.writerOpts {
-		option(probe)
-	}
-	if probe.ssecRequested || (probe.encryption != nil && probe.encryption.ssec != nil) {
-		return nil, errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
+		if option == nil {
+			return nil, errors.New("b2: writer option is nil")
+		}
+		if err := option.validateDefault(); err != nil {
+			return nil, err
+		}
 	}
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
 		return nil, err
@@ -109,6 +109,14 @@ type clientOptions struct {
 
 // WithAccountInfo uses the given session store. By default NewClient uses an
 // InMemoryAccountInfo; NewAccountInfoFile opts in to persistence.
+// The store must satisfy AccountInfo's concurrent-call and optional Err contract.
+// A cache miss (ok=false with nil Err or an error matching ErrInvalidAccountInfo)
+// triggers reauthorization. The sentinel does not invalidate ok=true data;
+// otherwise complete sessions for the requested key may still be reused.
+// Other read errors and errors observed after Set or Clear are returned.
+// Err reflects the most recent operation from any caller; when a store is shared
+// across clients, another call can overwrite an error or expose it to a different
+// client before it is checked. Use separate stores for per-client error isolation.
 func WithAccountInfo(ai AccountInfo) ClientOption {
 	return func(o *clientOptions) {
 		if o.accountInfoSet {
@@ -289,11 +297,13 @@ type BucketAttrs struct {
 	// Object Lock: https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-native-api.
 	FileLockEnabled bool
 
-	// The configuration to create a Replication Rule. See Cloud Replication Rules. At least one of the asReplicationSource or asReplicationDestination
-	// parameters is required, but they can also both be present.
-	// NOTE: The first time that you configure Cloud Replication, complete the following tasks to ensure that you have the correct permission:
-	// 1. Verify your email address.
-	// 2. Have a payment history on file or make a payment.
+	// ReplicationConfig configures bucket replication. NewBucket uses the service
+	// default when nil; Update leaves replication unchanged when nil.
+	// Creation and updates reject empty configurations. Replication changes require
+	// writeBucketReplications and normal bucket-update permissions. An Update that
+	// preserves an unspecified role also requires readBucketReplications; provide
+	// both roles explicitly to replace a configuration that cannot be read.
+	// B2 requires a verified email and payment history before first configuration.
 	ReplicationConfig           *ReplicationConfiguration
 	replicationConfigUnreadable bool
 }
@@ -344,12 +354,27 @@ type RetentionPeriod struct {
 	Unit     string
 }
 
+// ReplicationConfiguration describes a bucket's source and destination roles.
+// Both roles may be present. Creation and replication updates require a non-empty
+// configuration. In an Update, an unspecified role is preserved and requires a
+// readable existing configuration. Providing both roles replaces them without a
+// merge. A nil BucketAttrs.ReplicationConfig leaves even unreadable settings alone.
+// Clearing replication is not supported by this high-level representation.
 type ReplicationConfiguration struct {
-	AsReplicationSource      AsReplicationSource
+	// AsReplicationSource is unspecified when its key ID is empty and it has no rules.
+	AsReplicationSource AsReplicationSource
+	// AsReplicationDestination specifies the destination key mapping. When nil
+	// in a source-only Update, the known destination mapping is preserved.
 	AsReplicationDestination *AsReplicationDestination
 }
 
+// AsReplicationDestination maps source application keys to destination keys.
+// An explicit destination in Bucket.Update replaces the existing mapping.
 type AsReplicationDestination struct {
+	// SourceToDestinationKeyMapping uses source application-key IDs as keys and
+	// destination application-key IDs as values. Nil and empty maps omit the
+	// mapping field in the current wire encoding and are left to B2 to validate.
+	// Neither form is a supported way to clear the destination role.
 	SourceToDestinationKeyMapping map[string]string
 }
 
@@ -737,6 +762,8 @@ func (o *Object) URL() string {
 // overwritten are not deleted, but are "hidden".
 //
 // Callers must close the writer when finished and check the error status.
+// Default options and then opts are applied synchronously to the initialized
+// writer before NewWriter returns.
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	ctx, cancel := context.WithCancelCause(ctx)
 	w := &Writer{
@@ -747,20 +774,21 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 		progressTotal: -1,
 	}
 	for _, f := range o.b.c.opts.writerOpts {
-		f(w)
+		f.apply(w)
 	}
 	// Conflict flags describe explicit options on this writer, not inherited
 	// defaults. Keep the default encryption unless an option below replaces it.
 	w.ssecRequested = false
 	w.sseb2Requested = false
 	for _, f := range opts {
-		f(w)
+		f.apply(w)
 	}
 	return w
 }
 
 // NewRangeReader returns a reader for the given object, reading up to length
-// bytes. If length is negative, the rest of the object is read. With a Progress
+// bytes. A zero length returns no bytes and makes no download request. If length
+// is negative, the rest of the object is read. With a Progress
 // callback, a finite range reports the available byte count when a HEAD
 // request can determine it; otherwise the progress total is -1.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys ...*SSECKey) *Reader {
@@ -845,13 +873,19 @@ func BypassGovernance() DeleteOption {
 }
 
 // Delete removes the given object, if it is a regular file or hide marker.
+// A nil DeleteOption returns an error before any request is sent.
+// For the v0.9.0 method-type migration, see
+// https://github.com/Backblaze/blazer/blob/main/docs/delete-options.md.
 func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
-	if err := o.ensure(ctx); err != nil {
-		return err
-	}
 	options := &deleteOptions{}
 	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("b2: nil delete option")
+		}
 		opt(options)
+	}
+	if err := o.ensure(ctx); err != nil {
+		return err
 	}
 	status := o.f.status()
 	if status == "upload" || status == "hide" || status == "copy" {

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +240,48 @@ func TestSetupReplicationSourceKeyConflict(t *testing.T) {
 	}
 	if root.keyCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
 		t.Fatalf("conflicting key caused changes: key calls=%d source updates=%d destination updates=%d", root.keyCalls, len(srcBackend.updates), len(dstBackend.updates))
+	}
+}
+
+func TestSetupReplicationRejectsDisabledRule(t *testing.T) {
+	for _, mappingPresent := range []bool{true, false} {
+		t.Run(fmt.Sprintf("destination_mapping_present=%t", mappingPresent), func(t *testing.T) {
+			sourceConfig := &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{
+				SourceApplicationKeyID: "source-key",
+				ReplicationRules:       []ReplicationRules{{ReplicationRuleName: "rule", DestinationBucketID: "dst-id", FileNamePrefix: "logs/", IncludeExistingFiles: true, IsEnabled: false, Priority: 17}},
+			}}
+			var destinationConfig *ReplicationConfiguration
+			if mappingPresent {
+				destinationConfig = &ReplicationConfiguration{AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: map[string]string{"source-key": "destination-key"}}}
+			}
+			root, srcBackend, dstBackend, src, dst := replicationTestPair(t, sourceConfig, destinationConfig)
+			err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key",
+				WithRuleName("rule"), WithFileNamePrefix("logs/"), WithIncludeExistingFiles(true), WithRulePriority(17))
+			const want = `setup replication: rule name "rule" is already in use with different options`
+			if err == nil || err.Error() != want {
+				t.Fatalf("SetupReplication() = %v, want %q", err, want)
+			}
+			if root.keyCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+				t.Fatalf("disabled rule changed state: key calls=%d source updates=%d destination updates=%d", root.keyCalls, len(srcBackend.updates), len(dstBackend.updates))
+			}
+		})
+	}
+}
+
+func TestSetupReplicationRejectsTooLargePriority(t *testing.T) {
+	if strconv.IntSize == 32 {
+		t.Skip("2147483648 cannot be represented by the int accepted by WithRulePriority on 32-bit targets")
+	}
+	priority := int64(2147483648)
+	root, srcBackend, dstBackend, src, dst := replicationTestPair(t, nil, nil)
+	root.listCalls = 0
+	err := SetupReplication(context.Background(), src, dst, "source-key", "destination-key", WithRulePriority(int(priority)))
+	const want = "setup replication: priority must be between 1 and 2147483647"
+	if err == nil || err.Error() != want {
+		t.Fatalf("SetupReplication() = %v, want %q", err, want)
+	}
+	if root.keyCalls != 0 || root.listCalls != 0 || srcBackend.attrsCalls != 0 || dstBackend.attrsCalls != 0 || len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+		t.Fatalf("invalid priority made backend calls: keys=%d lists=%d source attrs=%d updates=%d destination attrs=%d updates=%d", root.keyCalls, root.listCalls, srcBackend.attrsCalls, len(srcBackend.updates), dstBackend.attrsCalls, len(dstBackend.updates))
 	}
 }
 
@@ -522,6 +565,27 @@ func TestSetupReplicationRejectsEmptyKeyIDs(t *testing.T) {
 		if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
 			t.Fatal("empty key ID caused an update")
 		}
+	}
+}
+
+func TestReplicationStatusIncludesDisabledRules(t *testing.T) {
+	enabled := ReplicationRules{ReplicationRuleName: "enabled", DestinationBucketID: "dst-id", FileNamePrefix: "logs/", IncludeExistingFiles: true, IsEnabled: true, Priority: 17}
+	disabled := ReplicationRules{ReplicationRuleName: "disabled", DestinationBucketID: "other-dst", FileNamePrefix: "archive/", IncludeExistingFiles: false, IsEnabled: false, Priority: 22}
+	config := &ReplicationConfiguration{AsReplicationSource: AsReplicationSource{
+		SourceApplicationKeyID: "source-key",
+		ReplicationRules:       []ReplicationRules{enabled, disabled},
+	}}
+	_, srcBackend, dstBackend, src, _ := replicationTestPair(t, config, nil)
+	got, err := ReplicationStatus(context.Background(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ReplicationRuleStatus{{ReplicationRules: enabled}, {ReplicationRules: disabled}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReplicationStatus() = %+v, want %+v", got, want)
+	}
+	if len(srcBackend.updates) != 0 || len(dstBackend.updates) != 0 {
+		t.Fatal("ReplicationStatus changed a bucket configuration")
 	}
 }
 

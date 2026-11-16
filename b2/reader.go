@@ -51,6 +51,9 @@ type Reader struct {
 	// Progress receives cumulative downloaded bytes. It runs on one owner
 	// goroutine, never under a transfer lock; values are monotonic non-decreasing
 	// and end with a final call at the bytes downloaded before Close returns.
+	// Updates may be coalesced, so an intermediate value is not guaranteed.
+	// Neither reaching total nor receiving a terminal callback indicates success;
+	// always check read errors.
 	// For a finite range, total is the actual available byte count (not the
 	// requested upper bound) when a HEAD request can determine it; otherwise
 	// total is -1. Set Progress before the first Read. Calling Close from this
@@ -186,7 +189,7 @@ func (r *Reader) thread() {
 				r.sha1 = sha1
 			}
 			r.rmux.Unlock()
-			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize), progressSize: int64(rsize), progress: r.reporter}
+			mr := &meteredReader{r: noopResetter{fr}, size: int(rsize), progressSize: rsize, progress: r.reporter}
 			mr.reported.Store(reported)
 			r.smux.Lock()
 			r.smap[chunkID] = mr
@@ -197,7 +200,7 @@ func (r *Reader) thread() {
 			r.smux.Lock()
 			r.smap[chunkID] = nil
 			r.smux.Unlock()
-			if i < int64(rsize) || err == io.ErrUnexpectedEOF {
+			if i < rsize || err == io.ErrUnexpectedEOF {
 				// Probably the network connection was closed early.  Retry.
 				attempts++
 				if attempts >= maxShortReadAttempts {
@@ -262,7 +265,7 @@ func (r *Reader) initFunc() {
 		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true, r.ssec); err == nil {
 			size, _, _, _ := fr.stats()
 			if err := fr.Close(); err == nil {
-				available := int64(size) - r.offset
+				available := size - r.offset
 				if available < 0 {
 					available = 0
 				}

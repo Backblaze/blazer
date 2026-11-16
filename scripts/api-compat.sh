@@ -44,7 +44,13 @@ for package in b2 b2/sync base; do
   printf '\n./%s:\n' "$package" >>"$report"
   "$apidiff" "$tmp/$key-base.api" "$tmp/$key-head.api" >>"$report" 2>&1
   # apidiff exits zero even when it reports incompatible changes.
-  "$apidiff" -incompatible "$tmp/$key-base.api" "$tmp/$key-head.api" >"$tmp/incompatible" 2>>"$report"
+  "$apidiff" -incompatible "$tmp/$key-base.api" "$tmp/$key-head.api" >"$tmp/raw-incompatible" 2>>"$report"
+  # A release commit bumps the DefaultUserAgent version string by design (see
+  # RELEASE.md). apidiff flags the const value change as incompatible, but the
+  # string is telemetry callers must not pin to, so it is not a real break and
+  # would otherwise block every release PR. See #375.
+  grep -vxE '(- )?DefaultUserAgent: value changed from "blazer/[^"]*" to "blazer/[^"]*"' \
+    "$tmp/raw-incompatible" >"$tmp/incompatible" || true
   if [ -s "$tmp/incompatible" ]; then incompatible=1; fi
 done
 

@@ -50,6 +50,9 @@ func TestReaderChunkSizeOneAndDefaults(t *testing.T) {
 			}
 			var ranges []string
 			for _, req := range srv.Calls("one-byte") {
+				if req.Method != http.MethodGet {
+					t.Fatalf("callback-free read made a %s request, want only GET", req.Method)
+				}
 				ranges = append(ranges, req.Header.Get("Range"))
 			}
 			if !reflect.DeepEqual(ranges, tc.want) {

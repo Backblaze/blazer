@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+# CONFORMANCE blazer x large.compose -- uploaded and server-side-copied parts.
+# Oracles: numbered copied ranges become ordered large-file parts; overlapping
+# ranges are permitted; known totals over 10 TB fail before start; a failing
+# part cancels the unfinished file; File.AsLargeFile().CopyPart does not panic.
+# https://www.backblaze.com/apidocs/b2-copy-part
+# https://github.com/Backblaze/blazer/releases/tag/v0.10.0
+# Uses the harness serve.mjs simulator at CONFORMANCE_SIMULATOR_URL, not x/b2sim.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+
+SLUG=blazer
+CAP=large.compose
+TARGET=simulator
+
+say() { printf 'CONFORMANCE %s %s @%s: %s\n' "$SLUG" "$CAP" "$1" "$2"; }
+
+# A detail never carries a response body, a multi-line diagnostic or a
+# credential: one line, printable, capped.
+tidy_detail() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -cd '[:print:]' | cut -c1-200; }
+
+. "$(dirname "$0")/../lib/contract.sh"
+if ! sdkharness_leaf_guard CONFORMANCE_TARGET CONFORMANCE_SIMULATOR_URL; then
+  say simulator "FAIL ($SDKHARNESS_GUARD_REASON)"
+  exit 1
+fi
+sdkharness_go_offline_env
+
+if ! command -v go >/dev/null 2>&1; then
+  say "$TARGET" "COULD-NOT-RUN (missing-runtime -- no Go toolchain on PATH)"
+  exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/sdkharness-conf-blazer.XXXXXX")" || {
+  say "$TARGET" "FAIL (setup -- could not create a scratch directory)"
+  exit 1
+}
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+# The Go program is carried at the end of this file as an INERT heredoc, so
+# `bash -n` parses this check as the shell script it is rather than choking on
+# Go syntax.
+awk '/^__EOF_GO__$/ { inprog = 0 } inprog { print } /^: <</ { inprog = 1 }' "$0" > "$work/main.go"
+cat > "$work/go.mod" <<EOF
+module sdkharness-conformance-blazer
+
+go 1.18
+
+require github.com/Backblaze/blazer v0.10.0
+
+replace github.com/Backblaze/blazer => $REPO_ROOT
+EOF
+
+
+# Build and run are deliberately separate, and only a missing or unusable Go
+# toolchain is an ABSENT RUNTIME (amber). A module that does not compile, a
+# failing `go mod tidy` and a missing dependency are all a defect in blazer or
+# in this check (red): hiding them as amber would turn a regression into
+# harmless evidence. sdkharness_go_build (lib/contract.sh) draws that line.
+cp "$(dirname "$0")/../lib/loopback_guard.go.txt" "$work/loopback_guard.go"
+sdkharness_go_build "$work" check
+case "$?" in
+  0) ;;
+  10) say "$TARGET" "COULD-NOT-RUN (missing-runtime -- $SDKHARNESS_BUILD_REASON)"; exit 0 ;;
+  *) say "$TARGET" "FAIL (build -- blazer or this check did not compile offline: $(tidy_detail "$SDKHARNESS_BUILD_OUT"))"; exit 1 ;;
+esac
+
+run_out="$("$work/check" 2>&1)"
+run_rc=$?
+
+printf '%s\n' "$run_out" | grep -E '^NOTE ' || true
+line="$(printf '%s\n' "$run_out" | grep -E "^CONFORMANCE $SLUG $CAP @" | tail -1)"
+if [ -z "$line" ]; then
+  say "$TARGET" "FAIL (harness -- the check binary produced no result line: $(tidy_detail "$run_out"))"
+  exit 1
+fi
+printf '%s\n' "$line"
+exit "$run_rc"
+
+: <<'__EOF_GO__'
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
+	"github.com/Backblaze/blazer/base"
+)
+
+// Observe real requests without changing responses or retaining credentials.
+type requests struct {
+	starts, uploads, copies, finishes, cancels atomic.Int64
+}
+
+func (r *requests) RoundTrip(req *http.Request) (*http.Response, error) {
+	switch {
+	case strings.HasSuffix(req.URL.Path, "/b2_start_large_file"):
+		r.starts.Add(1)
+	case req.Header.Get("X-Bz-Part-Number") != "":
+		r.uploads.Add(1)
+	case strings.HasSuffix(req.URL.Path, "/b2_copy_part"):
+		r.copies.Add(1)
+	case strings.HasSuffix(req.URL.Path, "/b2_finish_large_file"):
+		r.finishes.Add(1)
+	case strings.HasSuffix(req.URL.Path, "/b2_cancel_large_file"):
+		r.cancels.Add(1)
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func runCheck(ctx context.Context) (err error) {
+	endpoint := os.Getenv("CONFORMANCE_SIMULATOR_URL")
+	wire := &requests{}
+	client, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.APIBase(endpoint), b2.Transport(wire))
+	if err != nil {
+		return fmt.Errorf("authorize: %w", err)
+	}
+	bucket, err := client.NewBucket(ctx, fmt.Sprintf("sdkharness-compose-%d", time.Now().UnixNano()), &b2.BucketAttrs{Type: b2.Private})
+	if err != nil {
+		return fmt.Errorf("create bucket: %w", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		cleanupErr := cleanupBucket(cleanupCtx, bucket)
+		err = errors.Join(err, cleanupErr)
+		if cleanupErr == nil {
+			fmt.Println("NOTE blazer large.compose: cleanup removed all versions, unfinished uploads and the bucket")
+		}
+	}()
+
+	const partSize = 5_000_000
+	uploaded := bytes.Repeat([]byte("u"), partSize)
+	sourceBytes := make([]byte, partSize+3)
+	for i := range sourceBytes {
+		sourceBytes[i] = byte(i % 251)
+	}
+	source := bucket.Object("st/source.bin")
+	writer := source.NewWriter(ctx)
+	_, writeErr := writer.Write(sourceBytes)
+	if err := errors.Join(writeErr, writer.Close()); err != nil {
+		return fmt.Errorf("upload copy source: %w", err)
+	}
+
+	// Distinct uploaded bytes precede two overlapping copies from one source.
+	object, err := bucket.Compose(ctx, "st/mixed.bin", []b2.ComposePart{
+		b2.PartFromReader(bytes.NewReader(uploaded), partSize),
+		b2.PartFromCopy(source.ID(), "bytes=0-4999999"),
+		b2.PartFromCopy(source.ID(), "bytes=4999998-5000002"),
+	})
+	if err != nil {
+		return fmt.Errorf("compose mixed overlapping parts: %w", err)
+	}
+	if object == nil || wire.starts.Load() != 1 || wire.uploads.Load() != 1 || wire.copies.Load() != 2 || wire.finishes.Load() != 1 {
+		return fmt.Errorf("mixed Compose objectPresent=%t starts=%d uploads=%d copies=%d finishes=%d, want true/1/1/2/1", object != nil, wire.starts.Load(), wire.uploads.Load(), wire.copies.Load(), wire.finishes.Load())
+	}
+	want := append(append([]byte(nil), uploaded...), sourceBytes[:partSize]...)
+	want = append(want, sourceBytes[4_999_998:5_000_003]...)
+	if err := checkContent(ctx, bucket, object.Name(), want); err != nil {
+		return err
+	}
+	fmt.Println("NOTE blazer large.compose: mixed ordered bytes=10000005 uploadedParts=1 copiedParts=2 overlapBytes=2 matched")
+
+	// 2000 five-GB ranges plus one byte is 10,000,000,000,001 bytes.
+	// Only sizes are declared: no huge payload is allocated or transferred.
+	// If pre-validation is broken, the first range is clipped by the simulator
+	// to the small source and Compose stops at its copied-size check.
+	tooLarge := make([]b2.ComposePart, 2001)
+	for i := 0; i < 2000; i++ {
+		tooLarge[i] = b2.PartFromCopy(source.ID(), "bytes=0-4999999999")
+	}
+	tooLarge[2000] = b2.PartFromCopy(source.ID(), "bytes=0-0")
+	starts := wire.starts.Load()
+	object, err = bucket.Compose(ctx, "st/too-large.bin", tooLarge)
+	if calls := wire.starts.Load() - starts; calls != 0 {
+		return fmt.Errorf("over-10-TB pre-validation sent %d b2_start_large_file request(s), want 0", calls)
+	}
+	if object != nil || err == nil || !strings.Contains(err.Error(), "known total over the 10 TB (10,000,000,000,000 bytes)") {
+		return fmt.Errorf("over-10-TB rejection objectPresent=%t error=%v, want the known-total limit error", object != nil, err)
+	}
+	fmt.Println("NOTE blazer large.compose: knownTotal=10000000000001 rejected startRequests=0")
+
+	// Exactly 2000 five-GB ranges must pass known-total validation. The small
+	// source then stops the first copy at the size check, without moving 10 TB.
+	starts = wire.starts.Load()
+	object, err = bucket.Compose(ctx, "st/at-limit.bin", tooLarge[:2000])
+	if err != nil && strings.Contains(err.Error(), "known total over the 10 TB (10,000,000,000,000 bytes)") {
+		return fmt.Errorf("at-10-TB known total was rejected: %w", err)
+	}
+	if calls := wire.starts.Load() - starts; calls != 1 {
+		return fmt.Errorf("at-10-TB pre-validation sent %d b2_start_large_file request(s), want 1", calls)
+	}
+	if object != nil || err == nil || err.Error() != "b2: Compose part 1 copied 5000003 of 5000000000 requested bytes" {
+		return fmt.Errorf("at-10-TB objectPresent=%t error=%v, want the first copied-size mismatch after start", object != nil, err)
+	}
+	if err := checkAbsent(ctx, bucket, "st/at-limit.bin"); err != nil {
+		return err
+	}
+	fmt.Println("NOTE blazer large.compose: knownTotal=10000000000000 pre-validation=accepted startRequests=1 copiedSizeMismatch=expected")
+
+	// The copied ranges total exactly 10 TB; the declared uploaded byte alone
+	// takes this mixed case over the limit. Keep the copied-only fixture intact.
+	uploadedTooLarge := append([]b2.ComposePart(nil), tooLarge...)
+	uploadedTooLarge[2000] = b2.PartFromReader(bytes.NewReader([]byte("!")), 1)
+	starts = wire.starts.Load()
+	object, err = bucket.Compose(ctx, "st/uploaded-too-large.bin", uploadedTooLarge)
+	if calls := wire.starts.Load() - starts; calls != 0 {
+		return fmt.Errorf("uploaded-size over-10-TB pre-validation sent %d b2_start_large_file request(s), want 0", calls)
+	}
+	if object != nil || err == nil || !strings.Contains(err.Error(), "known total over the 10 TB (10,000,000,000,000 bytes)") {
+		return fmt.Errorf("uploaded-size over-10-TB rejection objectPresent=%t error=%v, want the known-total limit error", object != nil, err)
+	}
+	fmt.Println("NOTE blazer large.compose: mixedKnownTotal=10000000000001 declaredUploadBytes=1 rejected startRequests=0")
+
+	// The first uploaded part is acknowledged before the second reader fails.
+	injected := errors.New("injected part reader failure")
+	starts, uploads := wire.starts.Load(), wire.uploads.Load()
+	cancels, finishes := wire.cancels.Load(), wire.finishes.Load()
+	object, err = bucket.Compose(ctx, "st/failed.bin", []b2.ComposePart{
+		b2.PartFromReader(bytes.NewReader(uploaded), partSize),
+		b2.PartFromReader(failingPart{injected}, 1),
+	})
+	if object != nil || !errors.Is(err, injected) {
+		return fmt.Errorf("failing part objectPresent=%t error=%v, want the injected failure", object != nil, err)
+	}
+	if wire.starts.Load()-starts != 1 || wire.uploads.Load()-uploads != 1 || wire.cancels.Load()-cancels != 1 || wire.finishes.Load() != finishes {
+		return fmt.Errorf("failing part must start once, upload one part, cancel once and never finish")
+	}
+	if err := checkAbsent(ctx, bucket, "st/failed.bin"); err != nil {
+		return err
+	}
+	fmt.Println("NOTE blazer large.compose: failing part preserved its error cancelRequests=1 unfinished=0 finished=0")
+
+	account, err := base.AuthorizeAccount(ctx, "test-key-id", "test-key", base.SetAPIBase(endpoint), base.Transport(wire))
+	if err != nil {
+		return fmt.Errorf("authorize base client: %w", err)
+	}
+	buckets, err := account.ListBuckets(ctx, bucket.Name())
+	if err != nil {
+		return err
+	}
+	if len(buckets) != 1 || buckets[0].ID != bucket.ID() {
+		return fmt.Errorf("base ListBuckets did not return the scenario bucket")
+	}
+	const name = "st/as-large-file.bin"
+	started, err := buckets[0].StartLargeFile(ctx, name, "application/octet-stream", nil)
+	if err != nil {
+		return err
+	}
+	large := buckets[0].File(started.ID, name).AsLargeFile()
+	for i, part := range []struct {
+		byteRange string
+		want      []byte
+	}{
+		{"bytes=0-4999999", sourceBytes[:partSize]},
+		{"bytes=4999998-5000002", sourceBytes[4_999_998:5_000_003]},
+	} {
+		copied, err := large.CopyPart(ctx, source.ID(), i+1, part.byteRange, nil)
+		if err != nil {
+			return fmt.Errorf("AsLargeFile.CopyPart: %w", err)
+		}
+		if copied == nil || copied.Number != i+1 || copied.Size != int64(len(part.want)) || copied.SHA1 != fmt.Sprintf("%x", sha1.Sum(part.want)) {
+			return fmt.Errorf("AsLargeFile.CopyPart returned incorrect part number, size or hash")
+		}
+	}
+	finished, err := large.FinishLargeFile(ctx)
+	if err != nil {
+		return err
+	}
+	if finished.ID != started.ID || finished.Size != 5_000_005 {
+		return fmt.Errorf("AsLargeFile finish sameID=%t size=%d, want true/5000005", finished.ID == started.ID, finished.Size)
+	}
+	want = append(append([]byte(nil), sourceBytes[:partSize]...), sourceBytes[4_999_998:5_000_003]...)
+	if err := checkContent(ctx, bucket, name, want); err != nil {
+		return err
+	}
+	fmt.Println("NOTE blazer large.compose: File.AsLargeFile.CopyPart completed without panic; finished bytes=5000005 matched")
+	return nil
+}
+
+type failingPart struct{ err error }
+
+func (r failingPart) Read([]byte) (int, error) { return 0, r.err }
+
+func checkContent(ctx context.Context, bucket *b2.Bucket, name string, want []byte) error {
+	reader := bucket.Object(name).NewReader(ctx)
+	got, readErr := io.ReadAll(reader)
+	if err := errors.Join(readErr, reader.Close()); err != nil {
+		return fmt.Errorf("download %s: %w", name, err)
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("download %s: got %d bytes, want %d matching bytes", name, len(got), len(want))
+	}
+	return nil
+}
+
+func checkAbsent(ctx context.Context, bucket *b2.Bucket, name string) error {
+	iter := bucket.List(ctx, b2.ListUnfinished())
+	for iter.Next() {
+		if iter.Object().Name() == name {
+			return fmt.Errorf("failing Compose left an unfinished destination")
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	if _, err := bucket.Object(name).Attrs(ctx); !b2.IsNotExist(err) {
+		return fmt.Errorf("failing Compose finished destination: Attrs error=%v, want IsNotExist", err)
+	}
+	return nil
+}
+
+func cleanupBucket(ctx context.Context, bucket *b2.Bucket) error {
+	var result error
+	// Collect before deleting so pagination does not race our own cleanup.
+	for _, unfinished := range []bool{true, false} {
+		option := b2.ListHidden()
+		if unfinished {
+			option = b2.ListUnfinished()
+		}
+		iter := bucket.List(ctx, option)
+		var objects []*b2.Object
+		for iter.Next() {
+			objects = append(objects, iter.Object())
+		}
+		result = errors.Join(result, iter.Err())
+		for _, object := range objects {
+			if unfinished {
+				result = errors.Join(result, object.Cancel(ctx))
+			} else {
+				result = errors.Join(result, object.Delete(ctx))
+			}
+		}
+	}
+	return errors.Join(result, bucket.Delete(ctx))
+}
+
+func main() {
+	defer func() {
+		if value := recover(); value != nil {
+			fmt.Printf("CONFORMANCE blazer large.compose @simulator: FAIL (panic -- %v)\n", value)
+			os.Exit(1)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if err := runCheck(ctx); err != nil {
+		fmt.Printf("CONFORMANCE blazer large.compose @simulator: FAIL (compose -- %s)\n", strings.Join(strings.Fields(err.Error()), " "))
+		os.Exit(1)
+	}
+	fmt.Println("CONFORMANCE blazer large.compose @simulator: PASS")
+}
+__EOF_GO__

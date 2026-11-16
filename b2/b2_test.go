@@ -708,10 +708,12 @@ type testFileReader struct {
 	n string
 }
 
-func (t *testFileReader) Read(p []byte) (int, error)                      { return t.b.Read(p) }
-func (t *testFileReader) Close() error                                    { return nil }
-func (t *testFileReader) stats() (int, string, string, map[string]string) { return t.s, "", "", nil }
-func (t *testFileReader) id() string                                      { return t.n }
+func (t *testFileReader) Read(p []byte) (int, error) { return t.b.Read(p) }
+func (t *testFileReader) Close() error               { return nil }
+func (t *testFileReader) stats() (int64, string, string, map[string]string) {
+	return int64(t.s), "", "", nil
+}
+func (t *testFileReader) id() string { return t.n }
 
 type zReader struct{}
 

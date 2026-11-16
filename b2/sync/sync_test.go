@@ -54,13 +54,16 @@ func TestShouldTransfer(t *testing.T) {
 		{"missing none", CompareNone, local, nil, true},
 		{"missing sha1", CompareSHA1, local, nil, true},
 		{"modtime equal to millisecond", CompareModTime, local, &baseDest, false},
-		{"modtime size differs", CompareModTime, local, &b2.Attrs{Size: 13, LastModified: baseDest.LastModified}, true},
+		{"modtime size differs", CompareModTime, local, &b2.Attrs{Size: 13, LastModified: baseDest.LastModified}, false},
 		{"modtime differs by millisecond", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Millisecond)}, true},
 		{"newer cloud file still yields to local source", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Hour)}, true},
+		{"older cloud file still yields to local source", CompareModTime, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(-time.Hour)}, true},
 		{"size equal", CompareSize, local, &baseDest, false},
+		{"size equal with different mtime", CompareSize, local, &b2.Attrs{Size: 12, LastModified: baseDest.LastModified.Add(time.Second)}, false},
 		{"size differs", CompareSize, local, &b2.Attrs{Size: 13}, true},
 		{"none existing", CompareNone, local, &b2.Attrs{Size: 13}, false},
 		{"sha1 equal", CompareSHA1, local, &baseDest, false},
+		{"sha1 equal with different size and mtime", CompareSHA1, local, &b2.Attrs{Size: 13, LastModified: baseDest.LastModified.Add(time.Second), SHA1: local.sha1}, false},
 		{"sha1 differs", CompareSHA1, local, &b2.Attrs{Size: 12, SHA1: "different"}, true},
 		{"sha1 differs at equal size and mtime", CompareSHA1,
 			localFile{size: 12, modTime: time.UnixMilli(1_700_000_000_000), sha1: "1111111111111111111111111111111111111111"},
@@ -1015,11 +1018,11 @@ func TestUploadFileRejectsStaleWalkSHA1(t *testing.T) {
 func TestSyncCancelsMultipartCleanupContext(t *testing.T) {
 	transport := &cancelContextTransport{}
 	bucket, wire := newSyncWire(t,
-		b2.DefaultWriterOptions(func(writer *b2.Writer) {
+		b2.DefaultWriterOptions(b2.WriterOptionFunc(func(writer *b2.Writer) {
 			// The test wire deliberately accepts this small part size.
 			writer.ChunkSize = 3
 			writer.ConcurrentUploads = 1
-		}),
+		})),
 		b2.Transport(transport),
 	)
 	wire.mu.Lock()
@@ -1045,10 +1048,10 @@ func TestSyncCancelsMultipartCleanupContext(t *testing.T) {
 }
 
 func TestUploadFileRejectsChangeDuringStream(t *testing.T) {
-	bucket, wire := newSyncWire(t, b2.DefaultWriterOptions(func(writer *b2.Writer) {
+	bucket, wire := newSyncWire(t, b2.DefaultWriterOptions(b2.WriterOptionFunc(func(writer *b2.Writer) {
 		writer.ChunkSize = 5_000_000
 		writer.ConcurrentUploads = 1
-	}))
+	})))
 	root := t.TempDir()
 	path := filepath.Join(root, "large.bin")
 	file, err := os.Create(path)
