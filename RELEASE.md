@@ -71,14 +71,19 @@ ssh-keygen -t ed25519 -C 'your-email@example.com' -f ~/.ssh/blazer-release
 ssh-keygen -lf ~/.ssh/blazer-release.pub
 ```
 
-Open a PR adding the **public** key to `MAINTAINERS`, for example:
+Before the first signed release, a maintainer must [add the public key to their GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account)
+with key type **Signing key**, then open a separate enrollment PR adding that same **public** key to
+`MAINTAINERS`, for example:
 
 ```text
 your-email@example.com namespaces="git" ssh-ed25519 <base64-field-from-the-public-key>
 ```
 
 A human code owner must independently confirm the fingerprint with the maintainer before approving.
-The allowlist initially has no keys and fails closed until that enrollment PR is merged. To rotate or
+Key enrollment is a maintainer action, outside this release-tooling change. The allowlist ships empty
+and fails closed until that enrollment PR is merged; GitHub registration alone does not authorize a
+release in this workflow. This does not affect PR CI: release verification runs only on tag pushes,
+and its automated tests use ephemeral keys in isolated repositories. To rotate or
 revoke a key, update the allowlist through the same review process; CI always uses the current `main`
 allowlist, never one supplied by the release tag. Do not enroll a disposable test key.
 
