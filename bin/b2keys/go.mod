@@ -5,6 +5,6 @@ go 1.26.10
 replace github.com/Backblaze/blazer => ../..
 
 require (
-	github.com/Backblaze/blazer v0.10.0
+	github.com/Backblaze/blazer v0.10.1
 	github.com/google/subcommands v1.2.0
 )
