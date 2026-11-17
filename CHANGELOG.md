@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased entries live in [`.changes/unreleased/`](.changes/unreleased/) until the next release. Add one with `changie new` (see [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries)).
 
+## [0.10.1] - 2026-11-17
+
+This is a documentation and test-infrastructure maintenance release. No new SDK APIs or library runtime fixes are introduced; library source is unchanged from v0.10.0 apart from the standard release-version metadata.
+
+### Changed
+
+- Repository-owned conformance checks now cover debug-log redaction, replication setup, sync, session reuse, server-side copies, Object Lock argument validation, composition, and offline notification verification. Existing SSE-C and download-by-ID checks have broader coverage. The catalog grows from 34 to 42 conformance scenarios; these verify APIs already shipped in v0.10.0.
+- A new repository-owned download-range response validation scenario increases the resilience catalog from 15 to 16 checks. This tests the existing range-reader contract; it does not change download behavior (#406).
+- The integration and Object Lock test suites honor `B2_ENDPOINT` on every client constructor, including low-level authorizations and scoped-key clients. `TestUnknownCA` uses `B2_ENDPOINT_TLS`, or an HTTPS `B2_ENDPOINT`, and skips with a reason when only plain HTTP is available. With the variables unset the existing integration-test endpoints are unchanged; this is test configuration only (#297).
+- Key-expiration wire tests now use JSON `null` for absent expiration timestamps and check both zero-time and set expiration results. This strengthens coverage of the existing `Expires` contract without changing key expiration behavior (#392).
+
+### Fixed
+
+- The v0.10.0 upgrade guide now identifies all three source changes that can cause compile errors. It includes before/after examples for the required replication-configuration argument to `(*base.B2).CreateBucket`; pass `nil` to retain the previous behavior (#392).
+- Corrected repository-owned SDK harness contract-test counts after parallel scenario additions (#408).
+
+[0.10.1]: https://github.com/Backblaze/blazer/compare/v0.10.0...v0.10.1
+
 ## [0.10.0] - 2026-11-11
 
 See the [upgrade guide](https://github.com/Backblaze/blazer/blob/v0.10.0/docs/upgrading.md) for migration guidance on the 12 breaking changes.
