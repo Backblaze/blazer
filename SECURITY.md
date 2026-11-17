@@ -5,13 +5,13 @@ Security-response owner: Backblaze Security. Repository security-review owners: 
 
 ## Supported Versions
 
-The latest minor release line (currently `0.9.x`) is supported. Earlier releases are not patched in
+The latest minor release line (currently `0.10.x`) is supported. Earlier releases are not patched in
 place; upgrade to the newest `v0.x` tag to receive fixes. Once 1.0 ships, only the latest minor release
 receives security patches. See [`RELEASE.md`](RELEASE.md).
 
 | Version | Supported |
 |---|---|
-| Latest minor (`0.9.x`) | Yes |
+| Latest minor (`0.10.x`) | Yes |
 | Older releases | No |
 
 ## Reporting a Vulnerability

@@ -5,13 +5,14 @@ The changelog is assembled from `.changes/unreleased` fragments with [changie](h
 
 ## What a release commit contains
 
-Every release since v0.7.0 (for example v0.9.0, `4ebbb6d`) changed exactly these, in one commit:
+Release commits update these files; the supported security line changes when the minor version changes:
 
 | File | Change | Done by |
 | --- | --- | --- |
 | `CHANGELOG.md` | New `## [X.Y.Z] - YYYY-MM-DD` section and its compare link | `changie batch` + `changie merge` |
 | `base/base.go` | `DefaultUserAgent = "blazer/X.Y.Z"` (sent on every request) | `changie merge` (replacement in `.changie.yaml`) |
 | `bin/b2keys/go.mod` | `require github.com/Backblaze/blazer vX.Y.Z` | `changie merge` (replacement in `.changie.yaml`) |
+| `SECURITY.md` | Supported minor release line in the text and table | Manually when the supported minor line changes |
 
 Past releases were pushed straight to `main`. From now on the release commit goes through a PR like any
 other change, so CI and a code owner see it before it is tagged.
@@ -69,8 +70,8 @@ the tag is pushed (step 7). The gate prints only advisory ids, never summaries.
    go run github.com/miniscruff/changie@v1.24.0 merge
    ```
 
-4. Check the diff touches exactly the three files above plus `.changes/`. Edit `.changes/vX.Y.Z.md` for
-   readability if needed and run `merge` again. Run `make ci`.
+4. Check the diff covers the files above as needed plus `.changes/`, and explain any other release-process
+   changes in the PR. Edit `.changes/vX.Y.Z.md` for readability if needed and run `merge` again. Run `make ci`.
 5. Commit as `Version X.Y.Z` and open a PR with the changelog section and the `make release-check` output as
    its body; leave out any advisory ids until they are published. A code owner approves.
 6. After it merges (`main` requires linear history, so squash or rebase), tag the release PR's merge
