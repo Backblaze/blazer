@@ -1,0 +1,5 @@
+# Release signing-key allowlist in OpenSSH allowed_signers format.
+# Enroll public keys through a code-owner-reviewed PR; never add private keys.
+# Format: maintainer@example.com namespaces="git" ssh-ed25519 BASE64_PUBLIC_KEY
+# No keys are enrolled yet. Releases fail closed until enrollment is reviewed.
+# Generation, fingerprint verification, enrollment and rotation: RELEASE.md.

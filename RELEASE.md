@@ -57,6 +57,66 @@ A draft advisory fixed by the pending release stays private through tagging. Lis
 and the code owner approving the release PR confirms the fix is in it. Publish the advisory right after
 the tag is pushed (step 7). The gate prints only advisory ids, never summaries.
 
+## Release tag signing
+
+Release tags must be annotated and SSH-signed by a key enrolled in [`MAINTAINERS`](MAINTAINERS),
+an OpenSSH `allowed_signers` file. Unsigned tags, lightweight tags and unenrolled keys fail the
+release workflow. SSH signing requires Git 2.34+ and OpenSSH with `ssh-keygen -Y` support.
+OpenPGP and X.509 signatures are not enrolled by this workflow.
+
+Generate a dedicated signing key locally (choose a strong passphrase; never upload the private key):
+
+```bash
+ssh-keygen -t ed25519 -C 'your-email@example.com' -f ~/.ssh/blazer-release
+ssh-keygen -lf ~/.ssh/blazer-release.pub
+```
+
+Open a PR adding the **public** key to `MAINTAINERS`, for example:
+
+```text
+your-email@example.com namespaces="git" ssh-ed25519 <base64-field-from-the-public-key>
+```
+
+A human code owner must independently confirm the fingerprint with the maintainer before approving.
+The allowlist initially has no keys and fails closed until that enrollment PR is merged. To rotate or
+revoke a key, update the allowlist through the same review process; CI always uses the current `main`
+allowlist, never one supplied by the release tag. Do not enroll a disposable test key.
+
+Configure signing in your checkout and load the passphrase-protected key into your SSH agent:
+
+```bash
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/blazer-release.pub
+git config gpg.ssh.allowedSignersFile "$(pwd)/MAINTAINERS"
+ssh-add ~/.ssh/blazer-release
+```
+
+The tag workflow validates the exact tag object from the push, verifies its signature with
+`git verify-tag`, requires the release commit to be on `main`, and checks that its versioned notes
+exist and `DefaultUserAgent` matches the tag. It repeats verification immediately before publishing.
+`gh release create --verify-tag` checks tag existence, not its signature; it does not replace this gate.
+
+Key enrollment and release-workflow changes are security-sensitive and require code-owner review.
+Repository administrators should restrict creation of `v*` tags to releasers and prohibit tag updates
+and deletion with a tag ruleset. The workflow gates GitHub Release publication; it cannot undo a pushed
+Go module tag or prevent a privileged actor from bypassing Actions. Verify locally before pushing.
+
+## Local health check
+
+Before tagging, run the repository-owned golden path against a fresh loopback simulator with an
+existing scratch bucket. Start/provision it as described in the [harness README](.sdkharness/README.md),
+then run from the Blazer checkout:
+
+```bash
+SDKHARNESS_TEST_LEVEL=health SDKHARNESS_SCENARIO=golden-path \
+SDKHARNESS_SIMULATOR_URL="http://127.0.0.1:<port>" B2_BUCKET_NAME=sdkharness-healthcheck \
+  .sdkharness/tests/run-health
+```
+
+Require `SDKHARNESS_RESULT` with level `health`, scenario `golden-path` and verdict `PASS`.
+`FAIL` or `SKIP` is not a successful health check. The dispatcher uses fixed simulator credentials,
+rejects non-loopback endpoints and clears ambient B2 credentials; this is not a live-account check.
+
 ## Steps
 
 1. Make sure `main` is green and every PR meant for the release has merged. Run `make release-check`;
@@ -71,7 +131,10 @@ the tag is pushed (step 7). The gate prints only advisory ids, never summaries.
    ```
 
 4. Check the diff covers the files above as needed plus `.changes/`, and explain any other release-process
-   changes in the PR. Edit `.changes/vX.Y.Z.md` for readability if needed and run `merge` again. Run `make ci`.
+   changes in the PR. Edit `.changes/vX.Y.Z.md` for readability if needed and run `merge` again.
+   Confirm `DefaultUserAgent = "blazer/X.Y.Z"` and the `bin/b2keys/go.mod` requirement match the release;
+   `.changie.yaml` already updates both. The tag workflow rejects a stale User-Agent instead of
+   modifying a published tag. Run `make ci` and the local health check above.
 5. Commit as `Version X.Y.Z` and open a PR with the changelog section and the `make release-check` output as
    its body; leave out any advisory ids until they are published. A code owner approves.
 6. After it merges (`main` requires linear history, so squash or rebase), tag the release PR's merge
@@ -81,15 +144,17 @@ the tag is pushed (step 7). The gate prints only advisory ids, never summaries.
    git switch main && git pull --ff-only
    sha=$(gh pr view <release-pr-number> --json mergeCommit --jq .mergeCommit.oid)
    git log -1 --oneline "$sha"   # must be the "Version X.Y.Z" commit
-   git tag -a vX.Y.Z "$sha" -m "vX.Y.Z"
+   git tag -s vX.Y.Z "$sha" -m "vX.Y.Z"
+   git fetch origin main
+   scripts/verify-release-tag.sh vX.Y.Z "$(git rev-parse refs/tags/vX.Y.Z)"
    git push origin vX.Y.Z
    ```
 
-7. Create the GitHub release from the tag (none exist for past versions; start with this one):
-
-   ```bash
-   gh release create vX.Y.Z --title vX.Y.Z --notes-file .changes/vX.Y.Z.md
-   ```
+7. The [Release workflow](.github/workflows/release.yml) runs on the tag push. Its read-only
+   `verify-tag` job must pass before the separate `publish` job creates the GitHub Release with the
+   body from the tagged `.changes/vX.Y.Z.md`. No manual `gh release create` is needed. Check that both
+   jobs succeed and the Release body matches those notes. If verification fails, resolve the cause;
+   never move or replace the published tag. A rerun never edits an existing Release.
 
    Then publish each advisory listed in `RELEASE_FIXES_ADVISORIES`, naming vX.Y.Z as the patched version.
 

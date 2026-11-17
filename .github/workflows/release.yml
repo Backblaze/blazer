@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify-tag:
+    if: ${{ github.repository == 'Backblaze/blazer' && !github.event.deleted }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Read policy and executable checks from reviewed main, not the incoming tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify enrolled signature and release metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          TAG_OBJECT: ${{ github.event.after }}
+        run: scripts/verify-release-tag.sh "$RELEASE_TAG" "$TAG_OBJECT"
+
+  publish:
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reverify and publish the tagged release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          TAG_OBJECT: ${{ github.event.after }}
+        run: |
+          # Refuse a moved tag or a signer revoked since the verification job.
+          scripts/verify-release-tag.sh "$RELEASE_TAG" "$TAG_OBJECT"
+          git show "refs/tags/$RELEASE_TAG:.changes/$RELEASE_TAG.md" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
