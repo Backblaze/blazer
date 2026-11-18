@@ -182,8 +182,14 @@ var readerCloseCancelCalls = []readerCall{
 		done := make(chan any, 1)
 		before := chunkWaitersParked()
 		go func() { done <- recoverRead(r) }()
-		awaitCond(func() bool { return newChunkWaiterParked(before) })
-		_ = r.Close()
+		if !awaitCond(func() bool { return newChunkWaiterParked(before) }) {
+			// The race was never set up: Close would not meet a waiting Read.
+			closeWithin(r, 3*time.Second)
+			return "the Read never parked waiting for a chunk, so Close did not race it"
+		}
+		if !closeWithin(r, 3*time.Second) {
+			return "Close did not return"
+		}
 		select {
 		case p := <-done:
 			return p
@@ -198,13 +204,30 @@ func TestRegression_CloseOrCancelAroundReadDoesNotCrash(t *testing.T) {
 	bucket := blockingDownload(t)
 	for _, call := range readerCloseCancelCalls {
 		t.Run(call.name, func(t *testing.T) {
-			ctx := newTestCtx(t)
 			for i := 0; i < 80; i++ {
-				if p := call.run(bucket, ctx); p != nil {
+				// A fresh context per iteration: an earlier iteration cannot
+				// consume the deadline of the one being set up.
+				if p := call.run(bucket, newTestCtx(t)); p != nil {
 					t.Fatalf("iteration %d: %v", i, p)
 				}
 			}
 		})
+	}
+}
+
+// closeWithin runs r.Close and reports whether it returned within d, so a
+// Close that blocks fails the test instead of hanging the suite.
+func closeWithin(r *Reader, d time.Duration) bool {
+	closed := make(chan struct{})
+	go func() {
+		_ = r.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		return true
+	case <-time.After(d):
+		return false
 	}
 }
 
@@ -252,27 +275,6 @@ func awaitCond(cond func() bool) bool {
 		time.Sleep(100 * time.Microsecond) // poll interval, not a timing assumption
 	}
 	return true
-}
-
-// The goroutine that waits for a chunk must not stay blocked after Close.
-func TestRegression_NoChunkWaiterLeftBlockedAfterClose(t *testing.T) {
-	bucket := blockingDownload(t)
-	ctx := newTestCtx(t)
-	before := goroutinesIn("(*Reader).curChunk")
-	for i := 0; i < 20; i++ {
-		r := newSlowReader(bucket, ctx)
-		done := make(chan any, 1)
-		parked := chunkWaitersParked()
-		go func() { done <- recoverRead(r) }()
-		awaitCond(func() bool { return newChunkWaiterParked(parked) })
-		_ = r.Close()
-		<-done
-	}
-	var now int
-	if awaitCond(func() bool { now = goroutinesIn("(*Reader).curChunk"); return now <= before }) {
-		return
-	}
-	t.Errorf("%d chunk-waiter goroutine(s) still blocked after 20 closed readers (before: %d)", now-before, before)
 }
 
 func newTestCtx(t *testing.T) context.Context {

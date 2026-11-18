@@ -50,6 +50,13 @@ target is expected to fail until every defect is fixed. When a fix lands, move t
 suite (a file without the tag, for example `regression_test.go`, renamed `TestRegression_...`), or move
 the check's name from `KNOWN_DEFECTS` to `PASSING` in the docs script, in the same change as the fix.
 
+`make known-defects` runs `go test -v`, so each test is listed with PASS, FAIL or SKIP: a test that passes
+is ready to move even while another test in its package still fails. A few defects exist only where `int`
+is 32 bits; their tests SKIP on a 64-bit platform, and `make known-defects-32bit` runs them with
+`GOARCH=386` (on a Linux amd64 host). The goroutine-leak test
+`TestKnownDefect_NoChunkWaiterLeftBlockedAfterClose` is probabilistic: a failure proves the defect, a pass
+does not prove it fixed.
+
 ## Repo-owned SDK harness contract
 
 `.sdkharness/tests.tsv` lists one row per scenario: level (`conformance`, `resilience`, `health`), scenario

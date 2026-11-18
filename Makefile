@@ -5,7 +5,7 @@ CHANGIE_VERSION := v1.24.0
 CHANGIE := go run github.com/miniscruff/changie@$(CHANGIE_VERSION)
 BASE_REF ?= origin/main
 
-.PHONY: known-defects release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test api-compat
+.PHONY: known-defects known-defects-32bit release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test api-compat
 
 ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check scripts-test
 
@@ -66,12 +66,19 @@ api-compat:
 # Runs the known-defect tests: tests of correct behaviour that fail today because of an open defect. They are
 # excluded from `make ci` and `make test` (build tag knowndefect; docs checks via --known-defects). This target
 # is expected to fail until every defect is fixed; when one is fixed, move its test into the regular suite.
+# The Go runs use -v so that every test is listed with its PASS, FAIL or SKIP result: a fixed test stays
+# visible (and ready to move) even while another test in the same package still fails.
 known-defects:
 	@rc=0; \
-	go test -tags knowndefect -run '^TestKnownDefect_' -count=1 ./... || rc=1; \
-	(cd bin/b2keys && go test -tags knowndefect -run '^TestKnownDefect_' -count=1 ./...) || rc=1; \
+	go test -v -tags knowndefect -run '^TestKnownDefect_' -count=1 ./... || rc=1; \
+	(cd bin/b2keys && go test -v -tags knowndefect -run '^TestKnownDefect_' -count=1 ./...) || rc=1; \
 	scripts/docs-consistency_test.sh --known-defects || rc=1; \
 	exit $$rc
+
+# Runs the known-defect tests that only fail where int is 32 bits (they SKIP in `make known-defects` on a
+# 64-bit platform). GOARCH=386 binaries run natively on a Linux amd64 host; they cannot run on macOS or arm64.
+known-defects-32bit:
+	GOARCH=386 go test -v -tags knowndefect -run '^TestKnownDefect_(ChunkOffsetMultipliedIn64Bit|BucketIndexReducedBeforeIntConversion)$$' -count=1 ./b2 ./x/window
 
 # Holds a release while solvable security or quality findings are open (see RELEASE.md).
 release-check:

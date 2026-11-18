@@ -27,13 +27,12 @@ package b2
 // TestKnownDefect_X to TestRegression_X.
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
@@ -128,27 +127,75 @@ func TestKnownDefect_OverwriteDuringReadDoesNotMixVersions(t *testing.T) {
 	}
 }
 
-// The
-// download chunk offset must be computed in 64-bit arithmetic. int64(a*b)
-// multiplies in int first, which overflows on 32-bit platforms for objects
-// over about 2 GiB.
+// The download chunk offset must be computed in 64-bit arithmetic:
+// int64(chunkID*csize) multiplies in int first, which overflows on 32-bit
+// platforms for objects over about 2 GiB. The defect exists only where int is
+// 32 bits, so the test skips elsewhere; run it with
+//
+//	make known-defects-32bit
+//
+// It does not download anything: the reader is positioned at chunk 3 of
+// 1 GiB chunks and the fake server answers the ranged request with 416, so
+// only the requested Range header is observed (3 * 1 GiB = 3221225472).
 func TestKnownDefect_ChunkOffsetMultipliedIn64Bit(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "reader.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
+	if strconv.IntSize != 32 {
+		t.Skipf("int is %d bits; the defect only exists on 32-bit platforms (make known-defects-32bit)", strconv.IntSize)
 	}
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) != 1 {
-			return true
-		}
-		if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "int64" {
-			return true
-		}
-		if bin, ok := call.Args[0].(*ast.BinaryExpr); ok && bin.Op == token.MUL {
-			t.Errorf("reader.go:%d multiplies in int before widening to int64 (overflows on 32-bit); convert each operand to int64 first", fset.Position(call.Pos()).Line)
-		}
-		return true
+	srv, bucket := newSHA1WireBucket(t)
+	srv.Handle("big", func(r b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.Response{Status: http.StatusRequestedRangeNotSatisfiable, Body: `{"status":416,"code":"range_not_satisfiable","message":"past the end"}`}
 	})
+	reader := bucket.Object("big").NewReader(newTestCtx(t))
+	reader.ChunkSize = 1 << 30
+	reader.ConcurrentDownloads = 1
+	reader.chwid, reader.chrid = 3, 3
+	defer reader.Close()
+	if _, err := reader.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("Read past the end returned %v, want io.EOF", err)
+	}
+	calls := srv.Calls("big")
+	if len(calls) != 1 {
+		t.Fatalf("download requests = %d, want 1", len(calls))
+	}
+	const want = "bytes=3221225472-4294967295"
+	if got := calls[0].Header.Get("Range"); got != want {
+		t.Errorf("Range of the chunk-3 request = %q, want %q (chunk offset overflowed int)", got, want)
+	}
+}
+
+// The goroutine that waits for a chunk must not stay blocked after Close.
+// When the download worker sees the cancelled context before it takes its
+// first buffer, it returns without waking the goroutine that (*Reader).curChunk
+// parked in the condition wait, and that goroutine stays blocked. Moved here
+// from the regular suite because it fails intermittently on the current code
+// (roughly once per few thousand closed readers, so a pass proves nothing).
+func TestKnownDefect_NoChunkWaiterLeftBlockedAfterClose(t *testing.T) {
+	const readers = 1000
+	bucket := blockingDownload(t)
+	before := goroutinesIn("(*Reader).curChunk")
+	for i := 0; i < readers; i++ {
+		r := newSlowReader(bucket, newTestCtx(t))
+		done := make(chan any, 1)
+		parked := chunkWaitersParked()
+		go func() { done <- recoverRead(r) }()
+		if !awaitCond(func() bool { return newChunkWaiterParked(parked) }) {
+			closeWithin(r, 3*time.Second)
+			t.Fatalf("reader %d: the Read never parked waiting for a chunk", i)
+		}
+		if !closeWithin(r, 3*time.Second) {
+			t.Fatalf("reader %d: Close did not return", i)
+		}
+		select {
+		case p := <-done:
+			if p != nil {
+				t.Fatalf("reader %d: Read panicked: %v", i, p)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("reader %d: Read did not return after Close", i)
+		}
+	}
+	var now int
+	if !awaitCond(func() bool { now = goroutinesIn("(*Reader).curChunk"); return now <= before }) {
+		t.Errorf("%d chunk-waiter goroutine(s) still blocked after %d closed readers (before: %d)", now-before, readers, before)
+	}
 }

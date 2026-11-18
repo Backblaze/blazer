@@ -31,11 +31,33 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
+
+// requireScriptedError fails the test unless err (or an error it wraps) is the
+// B2 error that the test scripted: same HTTP status, code and message. An
+// unrelated error, a transport failure or a nil error does not satisfy it, so
+// a known-defect test cannot pass for the wrong reason.
+func requireScriptedError(t *testing.T, err error, status int, code, message string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("got a nil error, want the scripted %d %s (%q)", status, code, message)
+	}
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if gotStatus, gotCode, gotMessage := base.MsgCode(e); gotStatus != 0 {
+			if gotStatus != status || gotCode != code || gotMessage != message {
+				t.Fatalf("error carries %d %s (%q), want the scripted %d %s (%q)", gotStatus, gotCode, gotMessage, status, code, message)
+			}
+			return
+		}
+	}
+	t.Fatalf("error %v does not carry the scripted B2 error %d %s (%q)", err, status, code, message)
+}
 
 // bucketListedWith returns a client and the bucket "n" as listed by the server
 // (so its cached attributes come from listJSON), with b2_update_bucket scripted
@@ -143,14 +165,19 @@ func TestKnownDefect_NewBucketDoesNotIgnoreDefaultRetention(t *testing.T) {
 	if err != nil {
 		return // rejecting the unsupported request is acceptable
 	}
+	want := map[string]any{"mode": "governance", "period": map[string]any{"duration": float64(7), "unit": "days"}}
+	var seen []any
 	for _, call := range []string{"b2_create_bucket", "b2_update_bucket"} {
 		for _, r := range srv.Calls(call) {
-			if _, ok := r.JSON["defaultRetention"]; ok {
-				return
+			if got, ok := r.JSON["defaultRetention"]; ok {
+				if reflect.DeepEqual(got, want) {
+					return
+				}
+				seen = append(seen, got)
 			}
 		}
 	}
-	t.Error("NewBucket returned nil error but no request carried the requested defaultRetention")
+	t.Errorf("NewBucket returned nil error but no request carried defaultRetention=%v (carried: %v)", want, seen)
 }
 
 // Reveal must report a listing error, not "not found".
@@ -166,6 +193,14 @@ func TestKnownDefect_RevealReportsListingError(t *testing.T) {
 	if IsNotExist(err) {
 		t.Errorf("a refused listing was reported as not-found: %v", err)
 	}
+	// The error must be the scripted listing refusal, and the listing must
+	// really have been attempted (once, for the requested object).
+	calls := srv.Calls("b2_list_file_versions")
+	if len(calls) != 1 {
+		t.Fatalf("b2_list_file_versions calls = %d, want 1", len(calls))
+	}
+	b2wiretest.AssertJSON(t, calls[0], "prefix", "obj")
+	requireScriptedError(t, err, http.StatusForbidden, "access_denied", "no listFiles capability")
 }
 
 // Listing unfinished uploads with a name prefix must only return
@@ -191,10 +226,18 @@ func TestKnownDefect_ListUnfinishedHonoursPrefix(t *testing.T) {
 	if err := iter.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range got {
-		if !strings.HasPrefix(n, "logs/") {
-			t.Errorf("ListUnfinished with ListPrefix(\"logs/\") returned %q", n)
-		}
+	// The fixture holds logs/a, logs/c, other/b and tmp/d; exactly the two
+	// matching uploads must come back (the fake server lists in fixture
+	// order, so the order is fixed), and the prefix must reach the wire.
+	if want := []string{"logs/a", "logs/c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ListUnfinished with ListPrefix(\"logs/\") returned %q, want %q", got, want)
+	}
+	calls := srv.Calls("b2_list_unfinished_large_files")
+	if len(calls) == 0 {
+		t.Fatal("no b2_list_unfinished_large_files request was sent")
+	}
+	for _, c := range calls {
+		b2wiretest.AssertJSON(t, c, "namePrefix", "logs/")
 	}
 }
 
@@ -241,42 +284,55 @@ func TestKnownDefect_NonIdempotentCallsAreNotResentAfter504(t *testing.T) {
 	for _, tc := range []struct {
 		name, call string
 		ok         b2wiretest.Response
-		run        func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket)
+		run        func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error
 	}{
 		{"create key", "b2_create_key",
 			b2wiretest.Response{Body: `{"accountId":"a","applicationKey":"s","applicationKeyId":"kid","bucketId":null,"capabilities":["listFiles"],"expirationTimestamp":null,"keyName":"k","namePrefix":null,"options":[]}`},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) {
-				_, _ = bucket.c.CreateKey(newTestCtx(t), "k", Capabilities("listFiles"))
+			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
+				_, err := bucket.c.CreateKey(newTestCtx(t), "k", Capabilities("listFiles"))
+				return err
 			}},
 		{"create bucket", "b2_create_bucket", b2wiretest.Response{Body: updateBucketJSON},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) {
+			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
 				srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
-				_, _ = bucket.c.NewBucket(newTestCtx(t), "fresh", &BucketAttrs{Type: Private})
+				_, err := bucket.c.NewBucket(newTestCtx(t), "fresh", &BucketAttrs{Type: Private})
+				return err
 			}},
 		{"start large file", "b2_start_large_file", b2wiretest.Response{Body: `{"fileId":"lid","fileName":"o"}`},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) {
+			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
 				srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"lid","fileName":"o","action":"upload"}`)
 				w := bucket.Object("o").NewWriter(newTestCtx(t))
 				w.ChunkSize = 10
-				_, _ = w.Write(make([]byte, 25))
-				_ = w.Close()
+				_, werr := w.Write(make([]byte, 25))
+				cerr := w.Close()
+				if werr != nil {
+					return werr
+				}
+				return cerr
 			}},
 		{"finish large file", "b2_finish_large_file", b2wiretest.Response{Body: `{"fileId":"lid","fileName":"o","action":"upload"}`},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) {
+			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
 				srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"lid","fileName":"o"}`)
 				w := bucket.Object("o").NewWriter(newTestCtx(t))
 				w.ChunkSize = 10
-				_, _ = w.Write(make([]byte, 25))
-				_ = w.Close()
+				_, werr := w.Write(make([]byte, 25))
+				cerr := w.Close()
+				if werr != nil {
+					return werr
+				}
+				return cerr
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := bucketListedWith(t, updateBucketJSON)
 			srv.ReplySequence(tc.call, gateway, tc.ok)
-			tc.run(t, srv, bucket)
+			err := tc.run(t, srv, bucket)
 			if got := len(srv.Calls(tc.call)); got != 1 {
 				t.Errorf("%s sent %d times after a 504 reply, want 1", tc.call, got)
 			}
+			// The caller must also learn that the operation failed: the
+			// scripted 504 is the only reply the single request got.
+			requireScriptedError(t, err, http.StatusGatewayTimeout, "gateway_timeout", "timeout")
 		})
 	}
 }

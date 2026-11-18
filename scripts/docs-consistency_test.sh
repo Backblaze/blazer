@@ -9,7 +9,9 @@
 #   CHECK_NAME ...   run the named checks, whatever their status
 #
 # When a docs defect is fixed, move its name from KNOWN_DEFECTS to PASSING below.
-# Outside a full checkout (missing CHANGELOG.md, docs/, README.md) the script prints SKIP and exits 0.
+# A missing required file is a failure: deleting a doc must not silently turn every check off. A partial
+# source export (no docs/, README.md, ...) may opt in to skipping with DOCS_CONSISTENCY_ALLOW_PARTIAL=1; the
+# script then prints SKIP and exits 0. scripts/docs-consistency-missing_test.sh covers both modes.
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -18,8 +20,13 @@ fail=0
 
 for f in CHANGELOG.md README.md docs/upgrading.md examples/simple/simple.go bin/b2keys/b2keys.go base/base.go; do
   if [ ! -f "$f" ]; then
-    echo "SKIP docs-consistency: $f not found (not a full checkout)"
-    exit 0
+    if [ "${DOCS_CONSISTENCY_ALLOW_PARTIAL:-}" = 1 ]; then
+      echo "SKIP docs-consistency: $f not found (DOCS_CONSISTENCY_ALLOW_PARTIAL=1, partial checkout)"
+      exit 0
+    fi
+    echo "FAIL docs-consistency: required file $f not found" \
+      "(set DOCS_CONSISTENCY_ALLOW_PARTIAL=1 to skip in a partial checkout)"
+    exit 1
   fi
 done
 
@@ -59,7 +66,9 @@ readme_download() { # the download example must not truncate an existing file be
   snippet=$(awk '/^func downloadFile/{f=1} f{print} f&&/^}/{exit}' README.md)
   create_line=$(grep -n 'os.Create(dst)' <<<"$snippet" | head -1 | cut -d: -f1)
   [ -z "$create_line" ] && return 0
-  guard_line=$(grep -nE 'Attrs\(|IsNotExist|CreateTemp|Stat\(' <<<"$snippet" | head -1 | cut -d: -f1)
+  # Only a remote lookup (Attrs, b2.IsNotExist) or a temp-file replacement counts: a local os.Stat(dst) says
+  # nothing about whether the remote object exists.
+  guard_line=$(grep -nE '\.Attrs\(|b2\.IsNotExist\(|CreateTemp' <<<"$snippet" | head -1 | cut -d: -f1)
   [ -n "$guard_line" ] && [ "$guard_line" -lt "$create_line" ]
 }
 
@@ -76,7 +85,27 @@ upgrade_breaking_claim() { # the guide's claim that every item matches a Breakin
 }
 
 example_exit_status() { # the example exits non-zero on failure and uses the key tool's legacy variable names
-  grep -q 'os.Exit(' examples/simple/simple.go || { echo "     examples/simple/simple.go never calls os.Exit (always exits 0)"; return 1; }
+  example_fails_nonzero && example_variables_match
+}
+
+# Runs the built example through a failing invocation (every HTTPS request goes to a closed local proxy, so no
+# traffic leaves the machine) and requires a non-zero exit status, not merely an os.Exit call somewhere.
+example_fails_nonzero() {
+  local dir rc
+  dir=$(mktemp -d) || return 1
+  if ! go build -o "$dir/simple" ./examples/simple; then
+    echo "     (setup: go build ./examples/simple failed)"
+    rm -rf "$dir"
+    return 1
+  fi
+  HTTPS_PROXY=http://127.0.0.1:1 NO_PROXY= B2_APPLICATION_KEY_ID=id B2_APPLICATION_KEY=key \
+    "$dir/simple" /nonexistent b2://bucket/dst >/dev/null 2>&1
+  rc=$?
+  rm -rf "$dir"
+  [ "$rc" -ne 0 ] || { echo "     examples/simple exited $rc after its client setup failed, want non-zero"; return 1; }
+}
+
+example_variables_match() {
   local a b
   a=$(grep -oE 'B2_(ACCOUNT_KEY|SECRET_KEY)' examples/simple/simple.go | sort -u)
   b=$(grep -oE 'B2_(ACCOUNT_KEY|SECRET_KEY)' bin/b2keys/b2keys.go | sort -u)
