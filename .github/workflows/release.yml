@@ -29,7 +29,7 @@ jobs:
         id: verify
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-          PUSH_COMMIT: ${{ github.event.after }}
+          PUSH_COMMIT: ${{ github.sha }}
         run: |
           tag_object=$(git rev-parse "refs/tags/$RELEASE_TAG")
           scripts/verify-release-tag.sh "$RELEASE_TAG" "$tag_object" "$PUSH_COMMIT"
@@ -53,7 +53,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
           TAG_OBJECT: ${{ needs.verify-tag.outputs.tag-object }}
-          PUSH_COMMIT: ${{ github.event.after }}
+          PUSH_COMMIT: ${{ github.sha }}
         run: |
           # Refuse a moved tag or a signer revoked since the verification job.
           scripts/verify-release-tag.sh "$RELEASE_TAG" "$TAG_OBJECT" "$PUSH_COMMIT"
