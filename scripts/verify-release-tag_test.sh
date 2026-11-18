@@ -48,6 +48,19 @@ retag() {
 }
 
 check 'enrolled signed release tag' pass ''
+# A push event supplies the tagged commit, not the annotated tag object.
+if "$here/verify-release-tag.sh" v1.2.3 "$tag_object" "$release_commit" >"$tmp/output" 2>&1; then
+  echo 'ok   push event commit matches signed tag'
+else
+  echo 'FAIL push event commit matches signed tag'; cat "$tmp/output"; fail=1
+fi
+if "$here/verify-release-tag.sh" v1.2.3 "$tag_object" "$(git hash-object --stdin </dev/null)" >"$tmp/output" 2>&1; then
+  echo 'FAIL mismatched push event commit accepted'; fail=1
+elif grep -Fq 'tagged commit differs from the triggering push' "$tmp/output"; then
+  echo 'ok   mismatched push event commit rejected'
+else
+  echo 'FAIL mismatched push event commit rejected for wrong reason'; cat "$tmp/output"; fail=1
+fi
 retag -a
 check 'unsigned annotated tag rejected' fail 'no signature found'
 git tag -d v1.2.3 >/dev/null
