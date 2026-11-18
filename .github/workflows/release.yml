@@ -19,7 +19,7 @@ jobs:
     outputs:
       tag-object: ${{ steps.verify.outputs.tag-object }}
     steps:
-      # Read policy and executable checks from reviewed main, not the incoming tag.
+      # Fetch verifier and policy from main; the workflow itself comes from the tag.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main

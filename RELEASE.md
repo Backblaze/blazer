@@ -64,6 +64,13 @@ an OpenSSH `allowed_signers` file. Unsigned tags, lightweight tags and unenrolle
 release workflow. SSH signing requires Git 2.34+ and OpenSSH with `ssh-keygen -Y` support.
 OpenPGP and X.509 signatures are not enrolled by this workflow.
 
+Before enabling releases, repository administrators must configure an active tag ruleset for `v*`
+that restricts creation to trusted releasers and prohibits tag updates and deletion. The
+workflow definition comes from the tagged commit, before any checkout step runs. Anyone allowed to
+create a release tag can therefore select a modified workflow that skips verification. Checking out
+`main` supplies the verifier and allowlist; it does not replace the workflow definition. Tag creation
+permission is a release trust boundary, so the ruleset is a prerequisite for relying on this gate.
+
 Generate a dedicated signing key locally (choose a strong passphrase; never upload the private key):
 
 ```bash
@@ -84,7 +91,7 @@ Key enrollment is a maintainer action, outside this release-tooling change. The 
 and fails closed until that enrollment PR is merged; GitHub registration alone does not authorize a
 release in this workflow. This does not affect PR CI: release verification runs only on tag pushes,
 and its automated tests use ephemeral keys in isolated repositories. To rotate or
-revoke a key, update the allowlist through the same review process; CI always uses the current `main`
+revoke a key, update the allowlist through the same review process; the verifier uses the current `main`
 allowlist, never one supplied by the release tag. Do not enroll a disposable test key.
 
 Configure signing in your checkout and load the passphrase-protected key into your SSH agent:
@@ -96,15 +103,16 @@ git config gpg.ssh.allowedSignersFile "$(pwd)/MAINTAINERS"
 ssh-add ~/.ssh/blazer-release
 ```
 
-The tag workflow validates the exact tag object from the push, verifies its signature with
-`git verify-tag`, requires the release commit to be on `main`, and checks that its versioned notes
-exist and `DefaultUserAgent` matches the tag. It repeats verification immediately before publishing.
+The verification job validates the fetched tag object and requires its commit to match the triggering
+push's commit. It verifies the signature with `git verify-tag`, requires the release commit to be on
+`main`, and checks that its versioned notes exist and `DefaultUserAgent` matches the tag. The publish
+job repeats verification against the same tag object immediately before publishing.
 `gh release create --verify-tag` checks tag existence, not its signature; it does not replace this gate.
 
 Key enrollment and release-workflow changes are security-sensitive and require code-owner review.
-Repository administrators should restrict creation of `v*` tags to releasers and prohibit tag updates
-and deletion with a tag ruleset. The workflow gates GitHub Release publication; it cannot undo a pushed
-Go module tag or prevent a privileged actor from bypassing Actions. Verify locally before pushing.
+The required tag ruleset above limits who can select the workflow being run. The workflow gates GitHub
+Release publication; it cannot undo a pushed Go module tag or prevent a privileged actor from bypassing
+Actions. Verify locally before pushing.
 
 ## Local health check
 
