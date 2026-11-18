@@ -29,7 +29,9 @@ package b2
 import (
 	"io"
 	"net/http"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -198,4 +200,10 @@ func TestKnownDefect_NoChunkWaiterLeftBlockedAfterClose(t *testing.T) {
 	if !awaitCond(func() bool { now = goroutinesIn("(*Reader).curChunk"); return now <= before }) {
 		t.Errorf("%d chunk-waiter goroutine(s) still blocked after %d closed readers (before: %d)", now-before, readers, before)
 	}
+}
+
+func goroutinesIn(fn string) int {
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	return strings.Count(string(buf), fn)
 }

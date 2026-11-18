@@ -231,12 +231,6 @@ func closeWithin(r *Reader, d time.Duration) bool {
 	}
 }
 
-func goroutinesIn(fn string) int {
-	buf := make([]byte, 1<<22)
-	buf = buf[:runtime.Stack(buf, true)]
-	return strings.Count(string(buf), fn)
-}
-
 // chunkWaitersParked returns the ids of goroutines that are parked in the
 // condition wait inside (*Reader).curChunk, that is, a Read that is really
 // waiting for a chunk (not one that has only just been started).
