@@ -28,6 +28,12 @@ git tag -s v1.2.3 -m v1.2.3
 tag_object=$(git rev-parse refs/tags/v1.2.3)
 
 fail=0
+# GitHub documents github.sha as the tip commit for a push event.
+if [ "$(grep -Fc 'PUSH_COMMIT: ${{ github.sha }}' "$here/../.github/workflows/release.yml")" = 2 ]; then
+  echo 'ok   both jobs use the documented push commit context'
+else
+  echo 'FAIL both jobs must use github.sha for the push commit'; fail=1
+fi
 check() { # name, expected status, expected diagnostic
   local name=$1 expected=$2 diagnostic=$3 rc=0
   "$here/verify-release-tag.sh" v1.2.3 "$tag_object" >"$tmp/output" 2>&1 || rc=$?
