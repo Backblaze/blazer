@@ -28,6 +28,13 @@ git tag -s v1.2.3 -m v1.2.3
 tag_object=$(git rev-parse refs/tags/v1.2.3)
 
 fail=0
+guide="$here/../RELEASE.md"
+if grep -Fq 'administrators must configure an active tag ruleset for `v*`' "$guide" &&
+   grep -Fq 'workflow definition comes from the tagged commit' "$guide"; then
+  echo 'ok   release guide requires tag protection and states the workflow trust boundary'
+else
+  echo 'FAIL release guide must require tag protection and state the workflow trust boundary'; fail=1
+fi
 # GitHub documents github.sha as the tip commit for a push event.
 if [ "$(grep -Fc 'PUSH_COMMIT: ${{ github.sha }}' "$here/../.github/workflows/release.yml")" = 2 ]; then
   echo 'ok   both jobs use the documented push commit context'
@@ -53,7 +60,52 @@ retag() {
   tag_object=$(git rev-parse refs/tags/v1.2.3)
 }
 
+# Check job ordering, then execute the workflow's literal publish block with real
+# Git/SSH verification and a local gh recorder. actionlint validates the YAML.
+awk '/^  publish:$/ {job=1; next} job && /^  [a-zA-Z]/ {exit} job {print}' \
+  "$here/../.github/workflows/release.yml" > "$tmp/publish-job"
+if grep -Fxq '    needs: verify-tag' "$tmp/publish-job"; then
+  echo 'ok   publish depends on tag verification'
+else
+  echo 'FAIL publish must depend on tag verification'; fail=1
+fi
+awk '/^        run: \|$/ {body=1; next} body && /^          / {sub(/^          /, ""); print; next} body {exit}' \
+  "$tmp/publish-job" > "$tmp/publish.sh"
+mkdir -p scripts "$tmp/bin"
+cp "$here/verify-release-tag.sh" scripts/
+cat > "$tmp/bin/gh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" != 8 ] || [ "$1" != release ] || [ "$2" != create ] ||
+   [ "$3" != "$RELEASE_TAG" ] || [ "$4" != --verify-tag ] ||
+   [ "$5" != --title ] || [ "$6" != "$RELEASE_TAG" ] || [ "$7" != --notes-file ]; then
+  echo 'unexpected release invocation' >&2
+  exit 1
+fi
+cp "$8" "$PUBLISHED_NOTES"
+SH
+chmod +x "$tmp/bin/gh"
+printf '## Release notes\n\nFixture release.\n' > "$tmp/expected-notes"
+check_publish() { # name, expected status, expected diagnostic
+  local name=$1 expected=$2 diagnostic=$3 rc=0
+  rm -f "$tmp/published-notes"
+  PATH="$tmp/bin:$PATH" RELEASE_TAG=v1.2.3 TAG_OBJECT="$tag_object" \
+    PUSH_COMMIT="$release_commit" RUNNER_TEMP="$tmp" PUBLISHED_NOTES="$tmp/published-notes" \
+    bash -e "$tmp/publish.sh" >"$tmp/output" 2>&1 || rc=$?
+  if { [ "$expected" = pass ] && [ "$rc" = 0 ] && cmp -s "$tmp/expected-notes" "$tmp/published-notes"; } ||
+     { [ "$expected" = fail ] && [ "$rc" != 0 ] && [ ! -e "$tmp/published-notes" ] && grep -Fq "$diagnostic" "$tmp/output"; }; then
+    printf 'ok   %s (publish exit %s)\n' "$name" "$rc"
+  else
+    printf 'FAIL %s: expected %s (%s), got exit %s\n' "$name" "$expected" "$diagnostic" "$rc"
+    cat "$tmp/output"
+    fail=1
+  fi
+}
+
 check 'enrolled signed release tag' pass ''
+printf 'Uncommitted notes must not be published.\n' > .changes/v1.2.3.md
+check_publish 'publish creates release from tagged notes' pass ''
+git checkout -q -- .changes/v1.2.3.md
 # A push event supplies the tagged commit, not the annotated tag object.
 if "$here/verify-release-tag.sh" v1.2.3 "$tag_object" "$release_commit" >"$tmp/output" 2>&1; then
   echo 'ok   push event commit matches signed tag'
@@ -69,6 +121,7 @@ else
 fi
 retag -a
 check 'unsigned annotated tag rejected' fail 'no signature found'
+check_publish 'publish rejects unsigned tag before creating release' fail 'no signature found'
 git tag -d v1.2.3 >/dev/null
 git tag v1.2.3
 tag_object=$(git rev-parse refs/tags/v1.2.3)
