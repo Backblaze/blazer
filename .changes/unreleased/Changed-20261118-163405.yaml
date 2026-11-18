@@ -1,3 +1,3 @@
 kind: Changed
-body: Release publication now requires an annotated SSH-signed tag verified against the reviewed maintainer allowlist. After verification, a tag workflow automatically publishes the GitHub Release from its versioned release notes (#426).
+body: Release publication now requires an annotated SSH-signed tag verified against the reviewed maintainer allowlist. After verification, a tag workflow automatically publishes the GitHub Release from its versioned release notes (#425).
 time: 2026-11-18T16:34:05.147072-06:00
