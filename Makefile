@@ -5,7 +5,7 @@ CHANGIE_VERSION := v1.24.0
 CHANGIE := go run github.com/miniscruff/changie@$(CHANGIE_VERSION)
 BASE_REF ?= origin/main
 
-.PHONY: release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test api-compat
+.PHONY: known-defects release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile changelog-check changelog-new scripts-test api-compat
 
 ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check scripts-test
 
@@ -62,6 +62,16 @@ scripts-test:
 
 api-compat:
 	BASE_REF="$(BASE_REF)" scripts/api-compat.sh
+
+# Runs the known-defect tests: tests of correct behaviour that fail today because of an open defect. They are
+# excluded from `make ci` and `make test` (build tag knowndefect; docs checks via --known-defects). This target
+# is expected to fail until every defect is fixed; when one is fixed, move its test into the regular suite.
+known-defects:
+	@rc=0; \
+	go test -tags knowndefect -run '^TestKnownDefect_' -count=1 ./... || rc=1; \
+	(cd bin/b2keys && go test -tags knowndefect -run '^TestKnownDefect_' -count=1 ./...) || rc=1; \
+	scripts/docs-consistency_test.sh --known-defects || rc=1; \
+	exit $$rc
 
 # Holds a release while solvable security or quality findings are open (see RELEASE.md).
 release-check:

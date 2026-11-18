@@ -35,6 +35,21 @@ For every behavior a PR adds or fixes:
 Tests must also fail for the right reason. An unrelated error, such as an aborted request or a test
 server that returns an empty `200`, must not satisfy an assertion meant for a specific failure.
 
+## Known-defect tests
+
+A known-defect test asserts the correct behavior of code that is still wrong, so it fails today. It is
+kept out of the default run so `make ci` stays green, and it stays runnable on demand:
+
+```sh
+make known-defects
+```
+
+Go tests live in files with the `//go:build knowndefect` tag (`known_defect_*_test.go`, named
+`TestKnownDefect_...`); the docs checks run with `scripts/docs-consistency_test.sh --known-defects`. The
+target is expected to fail until every defect is fixed. When a fix lands, move the test into the regular
+suite (a file without the tag, for example `regression_test.go`, renamed `TestRegression_...`), or move
+the check's name from `KNOWN_DEFECTS` to `PASSING` in the docs script, in the same change as the fix.
+
 ## Repo-owned SDK harness contract
 
 `.sdkharness/tests.tsv` lists one row per scenario: level (`conformance`, `resilience`, `health`), scenario
