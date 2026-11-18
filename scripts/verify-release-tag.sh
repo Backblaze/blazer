@@ -2,8 +2,8 @@
 # Verify the pushed tag against reviewed main, never a tag-supplied trust list.
 set -euo pipefail
 
-if [ "$#" != 2 ] || [[ ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo 'usage: verify-release-tag.sh vX.Y.Z expected-tag-object' >&2
+if { [ "$#" != 2 ] && [ "$#" != 3 ]; } || [[ ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo 'usage: verify-release-tag.sh vX.Y.Z expected-tag-object [expected-push-commit]' >&2
   exit 1
 fi
 tag=$1
@@ -14,6 +14,10 @@ if [ "$(git rev-parse "$ref")" != "$2" ]; then
 fi
 if [ "$(git cat-file -t "$ref")" != tag ]; then
   echo 'annotated tag required' >&2
+  exit 1
+fi
+if [ "$#" = 3 ] && [ "$(git rev-parse "$ref^{commit}")" != "$3" ]; then
+  echo 'tagged commit differs from the triggering push' >&2
   exit 1
 fi
 
