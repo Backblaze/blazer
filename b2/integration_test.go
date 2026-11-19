@@ -109,7 +109,8 @@ func TestReaderFromLive(t *testing.T) {
 			writers: 12,
 		},
 		{
-			// with offset, seeks back to start after turning it into a ReaderAt
+			// Honor the source offset: io.ReaderFrom consumes the remaining
+			// 200 bytes from position 50, not all 250 bytes from the start.
 			size: 250,
 			pos:  50,
 		},
@@ -125,8 +126,9 @@ func TestReaderFromLive(t *testing.T) {
 		if err != nil {
 			t.Errorf("ReadFrom(): %v", err)
 		}
-		if n != e.size {
-			t.Errorf("ReadFrom(): got %d bytes, wanted %d bytes", n, e.size)
+		want := e.size - e.pos
+		if n != want {
+			t.Errorf("ReadFrom(): got %d bytes, wanted %d bytes", n, want)
 		}
 		if err := w.Close(); err != nil {
 			t.Errorf("w.Close(): %v", err)
