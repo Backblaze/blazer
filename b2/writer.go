@@ -710,6 +710,7 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 	blog.V(2).Info("streaming without buffer")
 	size, err := rs.Seek(0, io.SeekEnd)
 	if err != nil {
+		w.setErr(err)
 		return 0, err
 	}
 	w.progressTotal = size
