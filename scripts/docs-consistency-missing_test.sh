@@ -4,6 +4,7 @@
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
+export DOCS_CONSISTENCY_SDK_DIR=$(cd "$here/.." && pwd)
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts"
@@ -41,12 +42,16 @@ client, err := b2.NewClient(ctx, id, key)
 func printObjects() {
 	fmt.Println(iterator.Object().Name())
 }
-func downloadFile() {
-	_, err := obj.Attrs(ctx)
-	if err != nil { return err }
-	f, err := os.Create(dst)
+func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, dst string) error {
+	obj := bucket.Object(src)
+	if _, err := obj.Attrs(ctx); err != nil { return err }
 	r := obj.NewReader(ctx)
-	_, err = io.Copy(f, r)
+	r.ConcurrentDownloads = downloads
+	defer r.Close()
+	f, err := os.Create(dst)
+	if err != nil { return err }
+	if _, err := io.Copy(f, r); err != nil { _ = f.Close(); return err }
+	return f.Close()
 }
 EOF
 cp "$tmp/README.md" "$tmp/readme-complete"
@@ -85,9 +90,12 @@ else
 fi
 
 cat >"$tmp/README.md" <<'EOF'
-func downloadFile() {
-	r := obj.NewReader(ctx)
-	_, err := io.Copy(f, r)
+func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, dst string) error {
+	r := bucket.Object(src).NewReader(ctx)
+	defer r.Close()
+	var f bytes.Buffer
+	_, err := io.Copy(&f, r)
+	return err
 }
 EOF
 out=$("$tmp/scripts/docs-consistency_test.sh" readme-download 2>&1)
@@ -99,12 +107,17 @@ else
 fi
 
 cat >"$tmp/README.md" <<'EOF'
-func downloadFile() {
-	f, err := os.CreateTemp(dir, "download-*")
-	r := obj.NewReader(ctx)
+func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, dst string) error {
+	f, err := os.CreateTemp(filepath.Dir(dst), "download-*")
+	if err != nil { return err }
+	defer os.Remove(f.Name())
+	r := bucket.Object(src).NewReader(ctx)
+	r.ConcurrentDownloads = downloads
 	defer r.Close()
-	_, err = io.Copy(f, r)
-	if err := f.Close(); err != nil { return err }
+	_, copyErr := io.Copy(f, r)
+	closeErr := f.Close()
+	if copyErr != nil { return copyErr }
+	if closeErr != nil { return closeErr }
 	return os.Rename(f.Name(), dst)
 }
 EOF
@@ -115,4 +128,26 @@ if [ "$?" -ne 0 ]; then
 else
   echo "ok   readme-download accepts temporary-file replacement"
 fi
+# Keep the real data-flow contract: the downloaded temp file must reach dst.
+cp "$tmp/README.md" "$tmp/readme-atomic"
+for rename in 'os.Rename("unrelated", "other")' 'os.Rename(other.Name(), dst)'; do
+  if [ "$rename" = 'os.Rename(other.Name(), dst)' ]; then
+    sed '/return os.Rename/i\
+	other, err := os.CreateTemp(filepath.Dir(dst), "empty-*")\
+	if err != nil { return err }\
+	if err := other.Close(); err != nil { return err }
+' "$tmp/readme-atomic" >"$tmp/README.md"
+  else
+    cp "$tmp/readme-atomic" "$tmp/README.md"
+  fi
+  sed "s@return os.Rename(f.Name(), dst)@return $rename@" "$tmp/README.md" >"$tmp/readme-broken"
+  mv "$tmp/readme-broken" "$tmp/README.md"
+  out=$("$tmp/scripts/docs-consistency_test.sh" readme-download 2>&1)
+  if [ "$?" -eq 0 ]; then
+    echo "FAIL: readme-download accepted $rename: $out"
+    fail=1
+  else
+    echo "ok   readme-download rejects $rename"
+  fi
+done
 exit $fail

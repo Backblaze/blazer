@@ -64,28 +64,73 @@ readme_examples() { # README examples print the object name and do not shadow th
   ! grep -q 'fmt.Println(iterator.Object())' README.md && ! grep -qE '^\s*b2, err := b2\.NewClient' README.md
 }
 
-readme_download() { # the download example must not truncate an existing file before it knows the object exists
-  local snippet create_line guard_line
+readme_download() { # execute the actual example, rather than inferring data flow from source spelling
+  local snippet dir rc
   snippet=$(awk '/^func downloadFile/{f=1} f{print} f&&/^}/{exit}' README.md)
-  [ -n "$snippet" ] && grep -q '\.NewReader(' <<<"$snippet" && grep -q 'io.Copy(' <<<"$snippet" || return 1
-  create_line=$(grep -n 'os.Create(dst)' <<<"$snippet" | head -1 | cut -d: -f1)
-  if [ -z "$create_line" ]; then
-    # An atomic replacement is the alternative to a remote preflight. Require
-    # the destination to be replaced only after copying and closing the temp file.
-    local temp_line temp_var copy_line close_line rename_line
-    temp_line=$(grep -n 'os.CreateTemp(' <<<"$snippet" | head -1 | cut -d: -f1)
-    temp_var=$(sed -nE 's/^[[:space:]]*([[:alpha:]_][[:alnum:]_]*)[[:space:]]*,.*os[.]CreateTemp[(].*/\1/p' <<<"$snippet" | head -1)
-    copy_line=$(grep -n 'io.Copy(' <<<"$snippet" | head -1 | cut -d: -f1)
-    close_line=$(awk -v name="$temp_var" -v after="$copy_line" 'NR > after && index($0, name ".Close()") && $0 !~ /^[[:space:]]*defer[[:space:]]/ {print NR; exit}' <<<"$snippet")
-    rename_line=$(grep -n 'os.Rename(' <<<"$snippet" | head -1 | cut -d: -f1)
-    [ -n "$temp_line" ] && [ -n "$temp_var" ] && [ -n "$copy_line" ] && [ -n "$close_line" ] && [ -n "$rename_line" ] && \
-      [ "$temp_line" -lt "$copy_line" ] && [ "$copy_line" -lt "$close_line" ] && [ "$close_line" -lt "$rename_line" ]
-    return $?
-  fi
-  # Only a remote lookup (Attrs, b2.IsNotExist) or a temp-file replacement counts: a local os.Stat(dst) says
-  # nothing about whether the remote object exists.
-  guard_line=$(grep -nE '\.Attrs\(|b2\.IsNotExist\(' <<<"$snippet" | head -1 | cut -d: -f1)
-  [ -n "$guard_line" ] && [ "$guard_line" -lt "$create_line" ]
+  [ -n "$snippet" ] || { echo "     downloadFile example missing"; return 1; }
+  dir=$(mktemp -d) || return 1
+  cat >"$dir/readme_test.go" <<'GO'
+package main
+
+import (
+    "bytes"
+    "context"
+    "fmt"
+    "io"
+    "os"
+    "path/filepath"
+    "testing"
+    "time"
+
+    "github.com/Backblaze/blazer/b2"
+    "github.com/Backblaze/blazer/x/b2sim"
+)
+
+func TestReadmeDownload(t *testing.T) {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    client, err := b2.NewClient(ctx, "test-id", "test-key", b2.Transport(b2sim.New()))
+    if err != nil { t.Fatal(err) }
+    bucket, err := client.NewBucket(ctx, "readme-check", nil)
+    if err != nil { t.Fatal(err) }
+    dir := t.TempDir()
+    cwd, err := os.Getwd()
+    if err != nil { t.Fatal(err) }
+    if err := os.Chdir(dir); err != nil { t.Fatal(err) }
+    defer os.Chdir(cwd)
+    dst := filepath.Join(dir, "destination")
+    const original = "existing local data"
+    if err := os.WriteFile(dst, []byte(original), 0600); err != nil { t.Fatal(err) }
+    if err := downloadFile(ctx, bucket, 1, "missing", dst); err == nil {
+        t.Error("missing-object download returned nil")
+    }
+    got, err := os.ReadFile(dst)
+    if err != nil || string(got) != original {
+        t.Fatalf("failed download changed destination: got %q, err=%v; want %q", got, err, original)
+    }
+    if err := os.Remove(dst); err != nil { t.Fatal(err) }
+    const payload = "downloaded fixture\n"
+    if err := putReadmeFixture(ctx, bucket, payload); err != nil { t.Fatal(err) }
+    if err := downloadFile(ctx, bucket, 1, "present", dst); err != nil { t.Fatal(err) }
+    got, err = os.ReadFile(dst)
+    if err != nil || string(got) != payload {
+        t.Fatalf("successful download: got %q, err=%v; want %q", got, err, payload)
+    }
+}
+
+func putReadmeFixture(ctx context.Context, bucket *b2.Bucket, payload string) error {
+    w := bucket.Object("present").NewWriter(ctx)
+    _, copyErr := io.Copy(w, bytes.NewBufferString(payload))
+    closeErr := w.Close()
+    if copyErr != nil { return fmt.Errorf("fixture upload: %w", copyErr) }
+    return closeErr
+}
+GO
+  printf '\n%s\n' "$snippet" >>"$dir/readme_test.go"
+  (cd "${DOCS_CONSISTENCY_SDK_DIR:-$here/..}" && GOWORK=off GOPROXY=off go test -count=1 -timeout=20s "$dir/readme_test.go")
+  rc=$?
+  rm -rf "$dir"
+  return "$rc"
 }
 
 upgrade_sync_before() { # sync is new in 0.10.0, so the upgrade guide cannot show a "before" for it
