@@ -17,7 +17,6 @@ package b2
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"os"
 	"testing"
@@ -49,14 +48,11 @@ func TestFindingB08_PipeSourceDoesNotProduceEmptyObject(t *testing.T) {
 	n, copyErr := io.Copy(writer, source)
 	closeErr := writer.Close()
 	t.Logf("io.Copy = (%d, %v); Close = %v", n, copyErr, closeErr)
+	if copyErr != nil || n != int64(len(payload)) {
+		t.Errorf("io.Copy = (%d, %v); want (%d, nil)", n, copyErr, len(payload))
+	}
 	if closeErr != nil {
-		if copyErr == nil || !errors.Is(closeErr, copyErr) {
-			t.Fatalf("Close = %v; want the source error from io.Copy = %v", closeErr, copyErr)
-		}
-		if uploads := srv.Calls("upload_file"); len(uploads) != 0 {
-			t.Fatalf("failed copy made %d uploads; want none", len(uploads))
-		}
-		return
+		t.Fatalf("Close = %v; want nil after copying the pipe", closeErr)
 	}
 	uploads := srv.Calls("upload_file")
 	if len(uploads) != 1 {
