@@ -39,7 +39,11 @@ func TestFindingC37_VerifyBeforeReadDoesNotPanic(t *testing.T) {
 			} else {
 				reader = bucket.Object("object").NewReader(context.Background())
 			}
-			defer reader.Close()
+			defer func() {
+				if err := reader.Close(); err != nil {
+					t.Errorf("Close = %v, want nil", err)
+				}
+			}()
 			defer func() {
 				if p := recover(); p != nil {
 					t.Errorf("Verify panicked: %v", p)
