@@ -33,4 +33,39 @@ if [ "$rc" -ne 0 ] || ! grep -q '^SKIP' <<<"$out"; then
 else
   echo "ok   DOCS_CONSISTENCY_ALLOW_PARTIAL=1 skips on a partial checkout"
 fi
+# The checks must establish that examples exist before checking their contents.
+mkdir -p "$tmp/docs"
+: >"$tmp/docs/upgrading.md"
+cat >"$tmp/README.md" <<'EOF'
+client, err := b2.NewClient(ctx, id, key)
+func printObjects() {
+	fmt.Println(iterator.Object().Name())
+}
+func downloadFile() {
+	_, err := obj.Attrs(ctx)
+	if err != nil { return err }
+	f, err := os.Create(dst)
+	r := obj.NewReader(ctx)
+	_, err = io.Copy(f, r)
+}
+EOF
+cp "$tmp/README.md" "$tmp/readme-complete"
+for check in readme-examples readme-download; do
+  cp "$tmp/readme-complete" "$tmp/README.md"
+  out=$("$tmp/scripts/docs-consistency_test.sh" "$check" 2>&1)
+  if [ "$?" -ne 0 ]; then
+    echo "FAIL: $check rejected the complete corrected example: $out"
+    fail=1
+  else
+    echo "ok   $check accepts complete corrected examples"
+  fi
+  : >"$tmp/README.md"
+  out=$("$tmp/scripts/docs-consistency_test.sh" "$check" 2>&1)
+  if [ "$?" -eq 0 ]; then
+    echo "FAIL: $check accepted a README with all examples deleted: $out"
+    fail=1
+  else
+    echo "ok   $check rejects deleted examples"
+  fi
+done
 exit $fail

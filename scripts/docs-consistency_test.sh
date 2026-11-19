@@ -58,12 +58,15 @@ changelog_base_functions() { # new public base functions appear in the 0.10.0 "A
 }
 
 readme_examples() { # README examples print the object name and do not shadow the package name
+  grep -q 'b2.NewClient(' README.md && grep -q '^func printObjects(' README.md && \
+    grep -q 'iterator.Object()' README.md || return 1
   ! grep -q 'fmt.Println(iterator.Object())' README.md && ! grep -qE '^\s*b2, err := b2\.NewClient' README.md
 }
 
 readme_download() { # the download example must not truncate an existing file before it knows the object exists
   local snippet create_line guard_line
   snippet=$(awk '/^func downloadFile/{f=1} f{print} f&&/^}/{exit}' README.md)
+  [ -n "$snippet" ] && grep -q '\.NewReader(' <<<"$snippet" && grep -q 'io.Copy(' <<<"$snippet" || return 1
   create_line=$(grep -n 'os.Create(dst)' <<<"$snippet" | head -1 | cut -d: -f1)
   [ -z "$create_line" ] && return 0
   # Only a remote lookup (Attrs, b2.IsNotExist) or a temp-file replacement counts: a local os.Stat(dst) says

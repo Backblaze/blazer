@@ -163,7 +163,13 @@ func TestKnownDefect_NewBucketDoesNotIgnoreDefaultRetention(t *testing.T) {
 		DefaultRetention: &Retention{Mode: "governance", Period: &RetentionPeriod{Duration: 7, Unit: "days"}},
 	})
 	if err != nil {
-		return // rejecting the unsupported request is acceptable
+		if !unsupportedRetentionError(err) {
+			t.Fatalf("NewBucket returned an unrelated error instead of rejecting unsupported default retention: %v", err)
+		}
+		if len(srv.Calls("b2_create_bucket")) != 0 || len(srv.Calls("b2_update_bucket")) != 0 {
+			t.Fatal("NewBucket rejected unsupported default retention after sending a bucket write")
+		}
+		return
 	}
 	want := map[string]any{"mode": "governance", "period": map[string]any{"duration": float64(7), "unit": "days"}}
 	var seen []any
@@ -247,8 +253,8 @@ func TestKnownDefect_ListKeysContinuesPastEmptyPageWithCursor(t *testing.T) {
 	srv, bucket := bucketListedWith(t, updateBucketJSON)
 	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[],"nextApplicationKeyId":"next-id"}`)
 	keys, next, err := bucket.c.ListKeys(newTestCtx(t), 10, "")
-	if errors.Is(err, io.EOF) || next != "next-id" {
-		t.Errorf("ListKeys = (%d keys, next=%q, err=%v), want the cursor %q and no EOF", len(keys), next, err, "next-id")
+	if len(keys) != 0 || !validEmptyKeyPage(next, err) {
+		t.Errorf("ListKeys = (%d keys, next=%q, err=%v), want no keys, the cursor %q and nil error", len(keys), next, err, "next-id")
 	}
 }
 

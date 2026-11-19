@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -276,4 +277,73 @@ func newTestCtx(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+// These predicates are shared with the staged tests so unrelated failures
+// cannot make a known defect look fixed.
+func unsupportedRetentionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return (strings.Contains(m, "default retention") || strings.Contains(m, "defaultretention")) &&
+		(strings.Contains(m, "unsupported") || strings.Contains(m, "not supported"))
+}
+
+func changedVersionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "changed") && (strings.Contains(m, "version") || strings.Contains(m, "file id") || strings.Contains(m, "fileid"))
+}
+
+func validEmptyKeyPage(next string, err error) bool {
+	return next == "next-id" && err == nil
+}
+
+func TestRegression_KnownDefectErrorsAreSpecific(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		check func(error) bool
+		err   error
+		want  bool
+	}{
+		{"retention rejection", unsupportedRetentionError, errors.New("b2: default retention is not supported during creation"), true},
+		{"retention nil", unsupportedRetentionError, nil, false},
+		{"retention transport", unsupportedRetentionError, io.ErrUnexpectedEOF, false},
+		{"retention unrelated", unsupportedRetentionError, errors.New("unscripted endpoint"), false},
+		{"retention lookup", unsupportedRetentionError, errors.New("default retention lookup failed"), false},
+		{"version changed", changedVersionError, errors.New("b2: file version changed during download"), true},
+		{"version nil", changedVersionError, nil, false},
+		{"version checksum", changedVersionError, errors.New("SHA-1 mismatch"), false},
+		{"version transport", changedVersionError, io.ErrUnexpectedEOF, false},
+		{"version cancelled", changedVersionError, context.Canceled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.check(tc.err); got != tc.want {
+				t.Errorf("accepted error %v = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRegression_EmptyKeyPageRequiresSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		next string
+		err  error
+		want bool
+	}{
+		{"cursor", "next-id", nil, true},
+		{"unexpected error with cursor", "next-id", errors.New("unrelated failure"), false},
+		{"EOF with cursor", "next-id", io.EOF, false},
+		{"missing cursor", "", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validEmptyKeyPage(tc.next, tc.err); got != tc.want {
+				t.Errorf("accepted empty page (next=%q, err=%v) = %v, want %v", tc.next, tc.err, got, tc.want)
+			}
+		})
+	}
 }
