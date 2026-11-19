@@ -69,6 +69,9 @@ func (mc methodCounter) record(m method) {
 
 func (mc methodCounter) retrieve() MethodList {
 	ms := mc.w.Reduce()
+	if ms == nil {
+		return nil
+	}
 	return MethodList(ms.([]method))
 }
 
