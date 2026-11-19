@@ -69,9 +69,6 @@ func (mc methodCounter) record(m method) {
 
 func (mc methodCounter) retrieve() MethodList {
 	ms := mc.w.Reduce()
-	if ms == nil {
-		return nil
-	}
 	return MethodList(ms.([]method))
 }
 
@@ -90,9 +87,12 @@ func newMethodCounter(d, res time.Duration) methodCounter {
 		}
 		return a
 	}
+	w := window.New(d, res, r)
+	// Seed a typed empty value without recording an RPC, including for all time.
+	w.Insert([]method(nil))
 	return methodCounter{
 		d: d,
-		w: window.New(d, res, r),
+		w: w,
 	}
 }
 
