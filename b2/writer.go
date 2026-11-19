@@ -778,6 +778,7 @@ func (w *Writer) Close() error {
 	w.done.Do(func() {
 		w.closeWrite.Lock()
 		defer w.closeWrite.Unlock()
+		defer w.cancel(nil)
 		w.closed = true
 		// Error exits must also wait for worker-owned cancellation callbacks.
 		defer w.wg.Wait()
