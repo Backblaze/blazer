@@ -153,7 +153,7 @@ func (r *Reader) thread() {
 			}
 			chunkID := r.chwid
 			r.chwid++
-			offset := int64(chunkID*r.csize) + r.offset
+			offset := int64(chunkID)*int64(r.csize) + r.offset
 			size := int64(r.csize)
 			if r.bounded {
 				if size >= r.length {
