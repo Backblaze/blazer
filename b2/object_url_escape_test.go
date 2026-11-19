@@ -25,13 +25,27 @@ import (
 // token as a query parameter and the name as the path, whatever the name holds.
 // https://www.backblaze.com/apidocs/b2-download-file-by-name
 func TestObjectAuthURLEscapesSpecialCharactersInName(t *testing.T) {
-	for _, name := range []string{"dir/a#b.txt", "dir/a?x=1.txt", "dir/a%zz.txt", "dir/a b%20c.txt"} {
+	for _, tc := range []struct {
+		name, path string
+	}{
+		{"dir/a#b.txt", "/file/n/dir/a%23b.txt"},
+		{"dir/a?x=1.txt", "/file/n/dir/a%3Fx=1.txt"},
+		{"dir/a%zz.txt", "/file/n/dir/a%25zz.txt"},
+		{"dir/a b%20c.txt", "/file/n/dir/a%20b%2520c.txt"},
+	} {
+		name := tc.name
 		t.Run(name, func(t *testing.T) {
 			srv, bucket := liveOnlyBucket(t)
 			srv.Reply("b2_get_download_authorization", http.StatusOK, `{"authorizationToken":"download-token"}`)
+			if got, want := bucket.Object(name).URL(), srv.URL()+tc.path; got != want {
+				t.Errorf("Object.URL = %q, want %q", got, want)
+			}
 			u, err := bucket.Object(name).AuthURL(context.Background(), time.Hour, "")
 			if err != nil {
 				t.Fatalf("AuthURL: %v", err)
+			}
+			if got := u.EscapedPath(); got != tc.path {
+				t.Errorf("escaped path = %q, want %q", got, tc.path)
 			}
 			if u.Fragment != "" {
 				t.Errorf("fragment = %q, want none (the token would never be sent)", u.Fragment)

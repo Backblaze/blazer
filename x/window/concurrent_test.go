@@ -17,6 +17,7 @@ package window
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 // Goroutines that call Insert at the same time must all be counted. A caller
@@ -39,5 +40,21 @@ func TestConcurrentInsertKeepsAll(t *testing.T) {
 		if got := w.Reduce(); got != n {
 			t.Fatalf("round %d: got %v want %d", r, got, n)
 		}
+	}
+}
+
+func TestSweepKeepsCurrentBucketWithClockSkew(t *testing.T) {
+	w := New(time.Minute, time.Second, adder)
+	last := time.Unix(100, 0)
+	w.insertAt(last, 7)
+	// The wall clock advances 1 ns, while the monotonic clock advances 2 ns.
+	// Reconstructing last as now-elapsed incorrectly places it before the
+	// second boundary and expires the bucket holding the seven events.
+	now := last.Add(time.Nanosecond)
+	w.mu.Lock()
+	w.sweep(now, 2*time.Nanosecond)
+	w.mu.Unlock()
+	if got := w.reducedAt(now); got != 7 {
+		t.Fatalf("events after clock skew = %v, want 7", got)
 	}
 }

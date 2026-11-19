@@ -372,6 +372,10 @@ func TestCancelledRefreshLeaderHandsOff(t *testing.T) {
 func TestRefreshAuthorizationFailureReachesWaiters(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	refreshStarted := make(chan struct{}, 16)
 	var refreshCalls int32
 	rt := stalledRefreshTransport(func(req *http.Request) (*http.Response, error) {
@@ -396,22 +400,38 @@ func TestRefreshAuthorizationFailureReachesWaiters(t *testing.T) {
 	root := client.backend.(*beRoot)
 	generation := root.authGeneration()
 	results := make(chan error, 9)
-	go func() { results <- root.reauthorizeIfUnchanged(context.Background(), generation) }()
-	<-refreshStarted // the leader's refresh is in flight and blocked
-	for i := 0; i < 8; i++ {
-		go func() { results <- root.reauthorizeIfUnchanged(context.Background(), generation) }()
+	go func() { results <- root.reauthorizeIfUnchanged(ctx, generation) }()
+	select {
+	case <-refreshStarted:
+	case <-ctx.Done():
+		t.Fatal("leader did not start refresh:", ctx.Err())
 	}
-	time.Sleep(100 * time.Millisecond) // let the waiters reach the in-flight refresh
-	close(release)
-	for i := 0; i < 9; i++ {
-		if err := <-results; err == nil || !strings.Contains(err.Error(), "denied") {
-			t.Fatalf("refresh %d error = %v, want authorization failure", i, err)
+	var waiters []*mappingRefreshWaitContext
+	for i := 0; i < 8; i++ {
+		waiter := &mappingRefreshWaitContext{Context: ctx, waiting: make(chan struct{})}
+		waiters = append(waiters, waiter)
+		go func() { results <- root.reauthorizeIfUnchanged(waiter, generation) }()
+	}
+	for i, waiter := range waiters {
+		select {
+		case <-waiter.waiting:
+		case <-ctx.Done():
+			t.Fatalf("waiter %d did not join the refresh: %v", i, ctx.Err())
 		}
 	}
-	// Waiters must share the leader's failed refresh instead of each sending its
-	// own authorize request. Allow a few late goroutines, but not one per caller.
-	if got := atomic.LoadInt32(&refreshCalls); got > 3 {
-		t.Fatalf("refresh authorize calls = %d for 9 callers, want the failure shared (at most 3)", got)
+	releaseOnce.Do(func() { close(release) })
+	for i := 0; i < 9; i++ {
+		select {
+		case err := <-results:
+			if err == nil || !strings.Contains(err.Error(), "denied") {
+				t.Fatalf("refresh %d error = %v, want authorization failure", i, err)
+			}
+		case <-ctx.Done():
+			t.Fatal("refresh callers did not finish:", ctx.Err())
+		}
+	}
+	if got := atomic.LoadInt32(&refreshCalls); got != 1 {
+		t.Fatalf("refresh authorize calls = %d for 9 callers, want 1 shared failure", got)
 	}
 }
 

@@ -31,6 +31,8 @@ func TestWriterReadFromSeekableReaderUsesCurrentOffset(t *testing.T) {
 		csize int
 	}{
 		{"single request", 100},
+		// A deliberately small chunk forces multipart logic against the fake;
+		// real B2 requires non-final parts to be at least 5,000,000 bytes.
 		{"large file", 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

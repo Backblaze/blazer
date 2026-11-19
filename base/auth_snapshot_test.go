@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -186,10 +187,9 @@ func TestConcurrentUpdateWithKeyedDownloadByID(t *testing.T) {
 	wg.Wait()
 }
 
-// Deterministic torn-snapshot check: hold the write lock while a request starts
-// and replace every field. A snapshot taken under the read lock blocks until
-// the update is complete and then sees only the new state. A snapshot that
-// reads fields without the lock goes out immediately with the old state.
+// Observe snapshot waiting on the write lock before replacing every field.
+// The request must then use the fully updated state, without holding the lock
+// across its network call.
 func TestSnapshotWaitsForInFlightUpdateAndSeesOnlyNewState(t *testing.T) {
 	seen := make(chan *http.Request, 1)
 	transport := authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
@@ -200,19 +200,41 @@ func TestSnapshotWaitsForInFlightUpdateAndSeesOnlyNewState(t *testing.T) {
 	account := &B2{accountID: "old", authToken: "old", apiURI: "https://old.invalid", opts: options}
 
 	account.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			account.mu.Unlock()
+		}
+	}()
 	done := make(chan error, 1)
 	go func() {
 		_, err := account.ListBuckets(context.Background(), "")
 		done <- err
 	}()
-	select {
-	case req := <-seen:
-		account.mu.Unlock()
-		t.Fatalf("request left while an update held the lock: host=%q token=%q", req.URL.Host, req.Header.Get("Authorization"))
-	case <-time.After(100 * time.Millisecond):
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	buf := make([]byte, 1<<20)
+waiting:
+	for {
+		select {
+		case req := <-seen:
+			t.Fatalf("request left while an update held the lock: host=%q token=%q", req.URL.Host, req.Header.Get("Authorization"))
+		case <-deadline.C:
+			t.Fatal("request did not block in snapshot while the update held the lock")
+		default:
+		}
+		stacks := buf[:runtime.Stack(buf, true)]
+		for _, stack := range strings.Split(string(stacks), "\n\n") {
+			if strings.Contains(stack, "TestSnapshotWaitsForInFlightUpdateAndSeesOnlyNewState.func") &&
+				strings.Contains(stack, "(*B2).snapshot(") && strings.Contains(stack, "sync.(*RWMutex).RLock(") {
+				break waiting
+			}
+		}
+		runtime.Gosched()
 	}
 	account.accountID, account.authToken, account.apiURI = "new", "new", "https://new.invalid"
 	account.mu.Unlock()
+	locked = false
 
 	select {
 	case req := <-seen:

@@ -50,6 +50,8 @@ func TestWriterResumeRefusesEachMismatchedLockField(t *testing.T) {
 			srv.Reply("b2_list_parts", http.StatusOK, `{"parts":[],"nextPartNumber":null}`)
 			writer := bucket.Object("resumed").NewWriter(context.Background(), writerObjectLockOptions()...)
 			writer.Resume = true
+			// Force the resume path with a small fake-only chunk; real B2
+			// requires non-final parts to be at least 5,000,000 bytes.
 			writer.ChunkSize = 10
 			_, writeErr := writer.Write([]byte("0123456789012345678901234"))
 			closeErr := writer.Close()

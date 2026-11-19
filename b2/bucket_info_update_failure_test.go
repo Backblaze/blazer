@@ -114,15 +114,9 @@ func TestFailedBucketUpdateRestoresCachedInfo(t *testing.T) {
 	}
 }
 
-// KNOWN BUG, tracked upstream as Backblaze/blazer#108: this test FAILS on main
-// until that issue is fixed, and passing it is the acceptance check for the fix.
-//
-// b2Bucket.updateBucket copies the caller's attributes onto the cached
-// base.Bucket before sending the request and, when the request fails, restores
-// only Info, LifecycleRules, DefaultRetention, FileLockEnabled and
-// ReplicationConfiguration. Type, CORSRules and DefaultServerSideEncryption
-// stay modified, so the next Update re-sends them (a failed "make public" can
-// take effect on a later, unrelated update).
+// Regression for Backblaze/blazer#108: a rejected update must restore Type,
+// CORSRules and DefaultServerSideEncryption alongside the other cached fields,
+// so the next unrelated update cannot apply rejected settings.
 func TestKnownBug108FailedBucketUpdateRestoresTypeCORSAndEncryption(t *testing.T) {
 	oldCORS := []b2types.CORSRule{{
 		Name:              "old-rule",
