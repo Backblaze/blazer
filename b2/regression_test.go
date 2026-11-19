@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -282,17 +283,17 @@ func newTestCtx(t *testing.T) context.Context {
 // These predicates are shared with the staged tests so unrelated failures
 // cannot make a known defect look fixed.
 func unsupportedRetentionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	m := strings.ToLower(err.Error())
-	return (strings.Contains(m, "default retention") || strings.Contains(m, "defaultretention")) &&
-		(strings.Contains(m, "unsupported") || strings.Contains(m, "not supported"))
+	return errors.Is(err, errors.ErrUnsupported)
 }
 
 func changedVersionError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// A contextual wrapper must not turn an unrelated I/O cause into an
+	// identity-change error. No version-change sentinel exists in the SDK yet.
+	for errors.Unwrap(err) != nil {
+		err = errors.Unwrap(err)
 	}
 	m := strings.ToLower(err.Error())
 	return strings.Contains(m, "changed") && (strings.Contains(m, "version") || strings.Contains(m, "file id") || strings.Contains(m, "fileid"))
@@ -309,12 +310,16 @@ func TestRegression_KnownDefectErrorsAreSpecific(t *testing.T) {
 		err   error
 		want  bool
 	}{
-		{"retention rejection", unsupportedRetentionError, errors.New("b2: default retention is not supported during creation"), true},
+		{"retention rejection", unsupportedRetentionError, fmt.Errorf("default retention during creation: %w", errors.ErrUnsupported), true},
+		{"retention sentinel", unsupportedRetentionError, errors.ErrUnsupported, true},
+		{"retention words alone", unsupportedRetentionError, errors.New("b2: default retention is not supported during creation"), false},
+		{"retention wrapped transport", unsupportedRetentionError, fmt.Errorf("b2: default retention not supported: %w", io.ErrUnexpectedEOF), false},
 		{"retention nil", unsupportedRetentionError, nil, false},
 		{"retention transport", unsupportedRetentionError, io.ErrUnexpectedEOF, false},
 		{"retention unrelated", unsupportedRetentionError, errors.New("unscripted endpoint"), false},
 		{"retention lookup", unsupportedRetentionError, errors.New("default retention lookup failed"), false},
 		{"version changed", changedVersionError, errors.New("b2: file version changed during download"), true},
+		{"version wrapped transport", changedVersionError, fmt.Errorf("file version changed: %w", io.ErrUnexpectedEOF), false},
 		{"version nil", changedVersionError, nil, false},
 		{"version checksum", changedVersionError, errors.New("SHA-1 mismatch"), false},
 		{"version transport", changedVersionError, io.ErrUnexpectedEOF, false},

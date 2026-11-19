@@ -68,4 +68,51 @@ for check in readme-examples readme-download; do
     echo "ok   $check rejects deleted examples"
   fi
 done
+
+cat >"$tmp/README.md" <<'EOF'
+client, err := b2.NewClient(ctx, id, key)
+func printObjects() {
+}
+// Unrelated code must not satisfy the listing example's checks:
+fmt.Println(iterator.Object().Name())
+EOF
+out=$("$tmp/scripts/docs-consistency_test.sh" readme-examples 2>&1)
+if [ "$?" -eq 0 ]; then
+  echo "FAIL: readme-examples accepted an empty listing with unrelated markers: $out"
+  fail=1
+else
+  echo "ok   readme-examples rejects an empty listing with unrelated markers"
+fi
+
+cat >"$tmp/README.md" <<'EOF'
+func downloadFile() {
+	r := obj.NewReader(ctx)
+	_, err := io.Copy(f, r)
+}
+EOF
+out=$("$tmp/scripts/docs-consistency_test.sh" readme-download 2>&1)
+if [ "$?" -eq 0 ]; then
+  echo "FAIL: readme-download accepted a download without destination creation: $out"
+  fail=1
+else
+  echo "ok   readme-download rejects missing destination creation"
+fi
+
+cat >"$tmp/README.md" <<'EOF'
+func downloadFile() {
+	f, err := os.CreateTemp(dir, "download-*")
+	r := obj.NewReader(ctx)
+	defer r.Close()
+	_, err = io.Copy(f, r)
+	if err := f.Close(); err != nil { return err }
+	return os.Rename(f.Name(), dst)
+}
+EOF
+out=$("$tmp/scripts/docs-consistency_test.sh" readme-download 2>&1)
+if [ "$?" -ne 0 ]; then
+  echo "FAIL: readme-download rejected a temporary-file replacement: $out"
+  fail=1
+else
+  echo "ok   readme-download accepts temporary-file replacement"
+fi
 exit $fail

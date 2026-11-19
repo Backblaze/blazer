@@ -58,8 +58,9 @@ changelog_base_functions() { # new public base functions appear in the 0.10.0 "A
 }
 
 readme_examples() { # README examples print the object name and do not shadow the package name
-  grep -q 'b2.NewClient(' README.md && grep -q '^func printObjects(' README.md && \
-    grep -q 'iterator.Object()' README.md || return 1
+  local listing
+  listing=$(awk '/^func printObjects\(/{f=1} f{print} f&&/^}/{exit}' README.md)
+  grep -q 'b2.NewClient(' README.md && grep -Fq 'fmt.Println(iterator.Object().Name())' <<<"$listing" || return 1
   ! grep -q 'fmt.Println(iterator.Object())' README.md && ! grep -qE '^\s*b2, err := b2\.NewClient' README.md
 }
 
@@ -68,10 +69,22 @@ readme_download() { # the download example must not truncate an existing file be
   snippet=$(awk '/^func downloadFile/{f=1} f{print} f&&/^}/{exit}' README.md)
   [ -n "$snippet" ] && grep -q '\.NewReader(' <<<"$snippet" && grep -q 'io.Copy(' <<<"$snippet" || return 1
   create_line=$(grep -n 'os.Create(dst)' <<<"$snippet" | head -1 | cut -d: -f1)
-  [ -z "$create_line" ] && return 0
+  if [ -z "$create_line" ]; then
+    # An atomic replacement is the alternative to a remote preflight. Require
+    # the destination to be replaced only after copying and closing the temp file.
+    local temp_line temp_var copy_line close_line rename_line
+    temp_line=$(grep -n 'os.CreateTemp(' <<<"$snippet" | head -1 | cut -d: -f1)
+    temp_var=$(sed -nE 's/^[[:space:]]*([[:alpha:]_][[:alnum:]_]*)[[:space:]]*,.*os[.]CreateTemp[(].*/\1/p' <<<"$snippet" | head -1)
+    copy_line=$(grep -n 'io.Copy(' <<<"$snippet" | head -1 | cut -d: -f1)
+    close_line=$(awk -v name="$temp_var" -v after="$copy_line" 'NR > after && index($0, name ".Close()") && $0 !~ /^[[:space:]]*defer[[:space:]]/ {print NR; exit}' <<<"$snippet")
+    rename_line=$(grep -n 'os.Rename(' <<<"$snippet" | head -1 | cut -d: -f1)
+    [ -n "$temp_line" ] && [ -n "$temp_var" ] && [ -n "$copy_line" ] && [ -n "$close_line" ] && [ -n "$rename_line" ] && \
+      [ "$temp_line" -lt "$copy_line" ] && [ "$copy_line" -lt "$close_line" ] && [ "$close_line" -lt "$rename_line" ]
+    return $?
+  fi
   # Only a remote lookup (Attrs, b2.IsNotExist) or a temp-file replacement counts: a local os.Stat(dst) says
   # nothing about whether the remote object exists.
-  guard_line=$(grep -nE '\.Attrs\(|b2\.IsNotExist\(|CreateTemp' <<<"$snippet" | head -1 | cut -d: -f1)
+  guard_line=$(grep -nE '\.Attrs\(|b2\.IsNotExist\(' <<<"$snippet" | head -1 | cut -d: -f1)
   [ -n "$guard_line" ] && [ "$guard_line" -lt "$create_line" ]
 }
 
