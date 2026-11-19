@@ -21,19 +21,36 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 type failingUploadSource struct {
-	data     []byte
-	err      error
-	sameRead bool
+	data        []byte
+	err         error
+	sameRead    bool
+	beforeError func() error
 }
 
 func (r *failingUploadSource) Read(p []byte) (int, error) {
 	if len(r.data) == 0 {
+		if r.beforeError != nil {
+			if err := r.beforeError(); err != nil {
+				return 0, err
+			}
+		}
 		return 0, r.err
 	}
-	n := copy(p, r.data)
+	data := r.data
+	if r.sameRead && len(data) > 1 {
+		data = data[:len(data)-1]
+	}
+	if r.sameRead && len(r.data) == 1 && r.beforeError != nil {
+		if err := r.beforeError(); err != nil {
+			return 0, err
+		}
+	}
+	n := copy(p, data)
 	r.data = r.data[n:]
 	if r.sameRead && len(r.data) == 0 {
 		return n, r.err
@@ -65,6 +82,25 @@ func TestFindingC5_PartialSourceIsNotCommittedByClose(t *testing.T) {
 			want := errors.New("source failed halfway")
 			payload := []byte("partial-data")
 			source := &failingUploadSource{data: payload, err: want, sameRead: tc.sameRead}
+			if tc.chunk == 3 {
+				partsRead := make(chan struct{}, 3)
+				srv.Handle("upload_part", func(b2wiretest.Request) b2wiretest.Response {
+					partsRead <- struct{}{}
+					return b2wiretest.Response{Body: `{}`}
+				})
+				// Let the helper receive dispatched bodies before cancellation; the
+				// last part remains buffered when the source reports its error.
+				source.beforeError = func() error {
+					for range 3 {
+						select {
+						case <-partsRead:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					}
+					return nil
+				}
+			}
 			n, copyErr := io.Copy(writer, source)
 			// Reproduce the README's old cleanup pattern without cancelling first.
 			closeErr := writer.Close()
