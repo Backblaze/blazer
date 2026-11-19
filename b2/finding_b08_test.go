@@ -137,6 +137,39 @@ func TestWriterWriteAfterClose(t *testing.T) {
 	}
 }
 
+func TestWriterReadFromAfterClose(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		buffered bool
+	}{
+		{name: "seekable"},
+		{name: "buffered", buffered: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			writer := bucket.Object("closed-reader").NewWriter(context.Background())
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before := len(srv.Requests())
+			input := bytes.NewReader([]byte("x"))
+			var source io.Reader = input
+			if tc.buffered {
+				source = struct{ io.Reader }{input}
+			}
+			if n, err := writer.ReadFrom(source); n != 0 || !errors.Is(err, ErrClosed) {
+				t.Errorf("ReadFrom after Close = (%d, %v), want (0, ErrClosed)", n, err)
+			}
+			if input.Len() != 1 {
+				t.Errorf("input remaining = %d, want 1", input.Len())
+			}
+			if got := len(srv.Requests()); got != before {
+				t.Errorf("requests after ReadFrom = %d, want %d", got, before)
+			}
+		})
+	}
+}
+
 func TestReadFromPositionedFile(t *testing.T) {
 	srv, bucket := newSHA1WireBucket(t)
 	srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"large-id"}`)
@@ -158,6 +191,7 @@ func TestReadFromPositionedFile(t *testing.T) {
 	}
 	writer := bucket.Object("positioned").NewWriter(context.Background())
 	// Seven bytes remain: less than this chunk, while the full file is larger.
+	// This subminimum chunk size is only suitable for the recording server.
 	writer.ChunkSize = 10
 	n, err := io.Copy(writer, f)
 	if err != nil {
@@ -233,6 +267,7 @@ func TestReadFromPositionedFileMultipart(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := bucket.Object("object").NewWriter(context.Background())
+	// The recording server accepts small parts to exercise multipart locally.
 	w.ChunkSize = 3
 	w.ConcurrentUploads = 1
 	if n, err := io.Copy(w, f); err != nil || n != 7 {
