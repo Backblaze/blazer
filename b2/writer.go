@@ -654,8 +654,9 @@ func (w *Writer) sendChunk() error {
 }
 
 // ReadFrom reads all of r into w, returning the first error or no error if r
-// returns io.EOF.  If r is also an io.Seeker, ReadFrom will stream r directly
-// over the wire instead of buffering it locally.  This reduces memory usage.
+// returns io.EOF. If r supports seeking, ReadFrom streams r directly over the
+// wire instead of buffering it locally, reducing memory usage. If seeking fails,
+// as it does for OS pipes, ReadFrom uses the ordinary buffered path.
 //
 // Do not issue multiple calls to ReadFrom, or mix ReadFrom and Write.  If you
 // have multiple readers you want to concatenate into the same B2 object, use
@@ -679,6 +680,12 @@ func (w *Writer) sendChunk() error {
 // With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
 // its remaining length supplies the progress total.
 func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
+	w.closeWrite.RLock()
+	closed := w.closed
+	w.closeWrite.RUnlock()
+	if closed {
+		return 0, ErrClosed
+	}
 	defer func() {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			var cause writerCause
@@ -708,18 +715,31 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		return copyContext(w.ctx, w, rs)
 	}
 	blog.V(2).Info("streaming without buffer")
+	position, err := rs.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return copyContext(w.ctx, w, r)
+	}
 	size, err := rs.Seek(0, io.SeekEnd)
 	if err != nil {
-		return 0, err
+		// Files such as OS pipes implement Seek without supporting it.
+		return copyContext(w.ctx, w, r)
 	}
-	w.progressTotal = size
+	w.progressTotal = size - position
+	if w.progressTotal <= 0 {
+		w.progressTotal = 0
+		if _, err := rs.Seek(position, io.SeekStart); err != nil {
+			w.setErr(err)
+			return 0, err
+		}
+		return copyContext(w.ctx, w, r)
+	}
 	var ra io.ReaderAt
 	if rat, ok := r.(io.ReaderAt); ok {
 		ra = rat
 	} else {
 		ra = enReaderAt(rs)
 	}
-	var offset int64
+	offset := position
 	var wrote int64
 	w.newBuffer = func() (writeBuffer, error) {
 		left := size - offset
@@ -740,9 +760,9 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		return nb, nil
 	}
 	w.init()
-	if size <= int64(w.csize) {
+	if w.progressTotal <= int64(w.csize) {
 		// the magic happens on w.Close()
-		return size, nil
+		return w.progressTotal, nil
 	}
 	for {
 		if err := w.sendChunk(); err != nil {
@@ -764,17 +784,20 @@ func (w *Writer) Close() error {
 	w.done.Do(func() {
 		w.closeWrite.Lock()
 		defer w.closeWrite.Unlock()
+		defer w.cancel(nil)
+		w.closed = true
 		// Error exits must also wait for worker-owned cancellation callbacks.
 		defer w.wg.Wait()
 		if !w.everStarted {
 			w.init()
-			w.setErr(w.simpleWriteFile())
-			return
 		}
 		defer w.o.b.c.removeWriter(w)
 		defer func() {
 			w.wmux.Lock()
 			defer w.wmux.Unlock()
+			if w.w == nil {
+				return
+			}
 			if err := w.w.Close(); err != nil {
 				// this is non-fatal, but alarming
 				blog.V(1).Infof("b2 writer: buffer close failed (%T)", err)
@@ -812,7 +835,6 @@ func (w *Writer) Close() error {
 			return
 		}
 		w.o.f = f
-		w.closed = true
 	})
 	w.reporter.finish()
 	return w.getErr()
