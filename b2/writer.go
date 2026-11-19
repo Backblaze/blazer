@@ -654,8 +654,9 @@ func (w *Writer) sendChunk() error {
 }
 
 // ReadFrom reads all of r into w, returning the first error or no error if r
-// returns io.EOF.  If r is also an io.Seeker, ReadFrom will stream r directly
-// over the wire instead of buffering it locally.  This reduces memory usage.
+// returns io.EOF. If r supports seeking, ReadFrom streams r directly over the
+// wire instead of buffering it locally, reducing memory usage. If seeking fails,
+// as it does for OS pipes, ReadFrom uses the ordinary buffered path.
 //
 // Do not issue multiple calls to ReadFrom, or mix ReadFrom and Write.  If you
 // have multiple readers you want to concatenate into the same B2 object, use
