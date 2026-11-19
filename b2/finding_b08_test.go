@@ -276,6 +276,9 @@ func TestReadFromPositionedFileMultipart(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if starts, finishes, files := len(srv.Calls("b2_start_large_file")), len(srv.Calls("b2_finish_large_file")), len(srv.Calls("upload_file")); starts != 1 || finishes != 1 || files != 0 {
+		t.Errorf("multipart starts = %d, finishes = %d, single uploads = %d; want (1, 1, 0)", starts, finishes, files)
+	}
 	want := map[string]string{"1": "pay", "2": "loa", "3": "d"}
 	parts := srv.Calls("upload_part")
 	if len(parts) != len(want) {
@@ -298,21 +301,67 @@ func TestReadFromPositionedFileMultipart(t *testing.T) {
 }
 
 func TestReadFromPastEndUploadsEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		position int64
+	}{
+		{name: "at end", position: 3},
+		{name: "past end", position: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			source := bytes.NewReader([]byte("abc"))
+			if _, err := source.Seek(tc.position, io.SeekStart); err != nil {
+				t.Fatal(err)
+			}
+			w := bucket.Object("end").NewWriter(context.Background())
+			// Hide WriterTo so io.Copy exercises Writer.ReadFrom's seek path.
+			if n, err := io.Copy(w, struct{ io.ReadSeeker }{source}); err != nil || n != 0 {
+				t.Fatalf("io.Copy = (%d, %v), want (0, nil)", n, err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if pos, err := source.Seek(0, io.SeekCurrent); err != nil || pos != tc.position {
+				t.Errorf("source position = (%d, %v), want (%d, nil)", pos, err, tc.position)
+			}
+			uploads := srv.Calls("upload_file")
+			if len(uploads) != 1 || len(uploads[0].Body) != 0 {
+				t.Fatalf("uploads = %v, want one empty upload", uploads)
+			}
+		})
+	}
+}
+
+type restoreSeekFailure struct {
+	*bytes.Reader
+	err error
+}
+
+func (r restoreSeekFailure) Seek(offset int64, whence int) (int64, error) {
+	if whence == io.SeekStart {
+		return 0, r.err
+	}
+	return r.Reader.Seek(offset, whence)
+}
+
+func TestReadFromRestoreSeekFailure(t *testing.T) {
 	srv, bucket := newSHA1WireBucket(t)
-	source := bytes.NewReader([]byte("abc"))
-	if _, err := source.Seek(4, io.SeekStart); err != nil {
+	input := bytes.NewReader([]byte("abc"))
+	if _, err := input.Seek(0, io.SeekEnd); err != nil {
 		t.Fatal(err)
 	}
-	w := bucket.Object("past-end").NewWriter(context.Background())
-	if n, err := w.ReadFrom(source); err != nil || n != 0 {
-		t.Fatalf("ReadFrom = (%d, %v), want (0, nil)", n, err)
+	want := errors.New("restore seek failed")
+	source := restoreSeekFailure{Reader: input, err: want}
+	w := bucket.Object("restore-error").NewWriter(context.Background())
+	if n, err := io.Copy(w, struct{ io.ReadSeeker }{source}); n != 0 || !errors.Is(err, want) {
+		t.Errorf("io.Copy = (%d, %v), want (0, %v)", n, err, want)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	if err := w.Close(); !errors.Is(err, want) {
+		t.Errorf("Close = %v, want %v", err, want)
 	}
-	uploads := srv.Calls("upload_file")
-	if len(uploads) != 1 || len(uploads[0].Body) != 0 {
-		t.Fatalf("uploads = %v, want one empty upload", uploads)
+	if uploads := srv.Calls("upload_file"); len(uploads) != 0 {
+		t.Errorf("uploads = %d, want none after failed restore", len(uploads))
 	}
 }
 
