@@ -680,6 +680,12 @@ func (w *Writer) sendChunk() error {
 // With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
 // its remaining length supplies the progress total.
 func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
+	w.closeWrite.RLock()
+	closed := w.closed
+	w.closeWrite.RUnlock()
+	if closed {
+		return 0, ErrClosed
+	}
 	defer func() {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			var cause writerCause
