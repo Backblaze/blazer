@@ -60,8 +60,10 @@ func TestWriterResumeRefusesEachMismatchedLockField(t *testing.T) {
 					t.Errorf("%s error = %v, want it to contain %q", op, err, tc.wantMsg)
 				}
 			}
-			if n := len(srv.Calls("upload_part")); n != 0 {
-				t.Errorf("upload_part calls = %d, want 0: a mismatched lock must not resume", n)
+			for _, call := range []string{"b2_list_parts", "b2_start_large_file", "upload_part", "b2_finish_large_file"} {
+				if n := len(srv.Calls(call)); n != 0 {
+					t.Errorf("%s calls = %d, want 0: a mismatched lock must not resume", call, n)
+				}
 			}
 		})
 	}
