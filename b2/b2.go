@@ -769,6 +769,21 @@ func (o *Object) URL() string {
 // Callers must close the writer when finished and check the error status.
 // Default options and then opts are applied synchronously to the initialized
 // writer before NewWriter returns.
+//
+// When copying from an arbitrary source, pass a context created with
+// context.WithCancel to NewWriter. If io.Copy fails, call cancel before Close
+// so a partial upload is not finalized. A source implementing io.WriterTo can
+// bypass Writer.ReadFrom and leave partial data buffered. For example:
+//
+//	uploadCtx, cancel := context.WithCancel(ctx)
+//	defer cancel()
+//	w := obj.NewWriter(uploadCtx)
+//	if _, err := io.Copy(w, src); err != nil {
+//		cancel()
+//		_ = w.Close()
+//		return err
+//	}
+//	return w.Close()
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	ctx, cancel := context.WithCancelCause(ctx)
 	w := &Writer{
