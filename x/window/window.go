@@ -82,7 +82,8 @@ func (w *Window) bucket(now time.Time) int {
 
 // sweep keeps the window valid.  It needs to be called from every method that
 // views or updates the window, and the caller needs to hold the mutex.
-func (w *Window) sweep(now time.Time) {
+// diff is the monotonic duration since the previous sweep when available.
+func (w *Window) sweep(now time.Time, diff time.Duration) {
 	if w.forever {
 		return
 	}
@@ -90,8 +91,6 @@ func (w *Window) sweep(now time.Time) {
 		w.last = now
 	}()
 
-	// This compares now and w.last's monotonic clocks.
-	diff := now.Sub(w.last)
 	if diff < 0 {
 		// time went backwards somehow; zero events and return
 		for i := range w.events {
@@ -99,9 +98,10 @@ func (w *Window) sweep(now time.Time) {
 		}
 		return
 	}
-	last := now.Add(-diff)
-
-	old := int64(last.UnixNano()) / int64(w.res)
+	// Use w.last's own wall time. now.Add(-diff) mixes the monotonic difference
+	// with now's wall clock and can land one bucket early near a boundary, which
+	// then expires the bucket that was just written.
+	old := int64(w.last.UnixNano()) / int64(w.res)
 	new := int64(now.UnixNano()) / int64(w.res)
 	if old == new && diff <= w.res {
 		// We're in the same bucket as the previous sweep, so all buckets are
@@ -127,39 +127,51 @@ func (w *Window) sweep(now time.Time) {
 	}
 }
 
-// Insert adds the given event.
+// Insert adds the given event. It may be called concurrently with Insert or Reduce.
 func (w *Window) Insert(e interface{}) {
-	w.insertAt(time.Now(), e)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.insertLocked(time.Now(), e)
 }
 
 func (w *Window) insertAt(t time.Time, e interface{}) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.insertLocked(t, e)
+}
+
+func (w *Window) insertLocked(t time.Time, e interface{}) {
 
 	if w.forever {
 		w.e = w.reduce(w.e, e)
 		return
 	}
 
-	w.sweep(t)
+	w.sweep(t, t.Sub(w.last))
 	w.events[w.bucket(t)] = w.reduce(w.events[w.bucket(t)], e)
 }
 
 // Reduce runs the window's reducer over the valid values and returns the
-// result.
+// result. It may be called concurrently with Insert or Reduce.
 func (w *Window) Reduce() interface{} {
-	return w.reducedAt(time.Now())
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.reducedLocked(time.Now())
 }
 
 func (w *Window) reducedAt(t time.Time) interface{} {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.reducedLocked(t)
+}
+
+func (w *Window) reducedLocked(t time.Time) interface{} {
 
 	if w.forever {
 		return w.e
 	}
 
-	w.sweep(t)
+	w.sweep(t, t.Sub(w.last))
 	var n interface{}
 	for i := range w.events {
 		n = w.reduce(n, w.events[i])

@@ -198,12 +198,16 @@ func TestWriterSSEB2PerRequestWireAndMetadata(t *testing.T) {
 	if got, _ := start["serverSideEncryption"].(map[string]any); got["mode"] != "SSE-B2" || got["algorithm"] != "AES256" {
 		t.Errorf("start_large_file serverSideEncryption = %#v, want SSE-B2/AES256", got)
 	}
+	if len(w.partEncryption) == 0 {
+		t.Fatal("no upload_part request reached the server, so the header check below would be vacuous")
+	}
 	for _, encryption := range w.partEncryption {
 		if encryption != "" {
 			t.Errorf("upload_part sent SSE-B2 header %q, want none", encryption)
 		}
 	}
 
+	partsBefore := len(w.partEncryption)
 	largeWithoutOption := bucket.Object("large-without-option").NewWriter(ctx)
 	largeWithoutOption.ChunkSize = 1
 	// Payload exceeds ChunkSize to use the large-file path; exactly ChunkSize is a simple upload since #221.
@@ -219,6 +223,9 @@ func TestWriterSSEB2PerRequestWireAndMetadata(t *testing.T) {
 	}
 	if got, _ := start["serverSideEncryption"].(map[string]any); got != nil {
 		t.Errorf("start_large_file without option sent serverSideEncryption %#v", got)
+	}
+	if len(w.partEncryption) <= partsBefore {
+		t.Fatal("no new upload_part request reached the server, so the header check below would be vacuous")
 	}
 	for _, encryption := range w.partEncryption {
 		if encryption != "" {

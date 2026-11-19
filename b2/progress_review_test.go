@@ -219,6 +219,16 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 	if len(samples) == 0 || samples[len(samples)-1] != (progressSample{0, -1}) {
 		t.Fatalf("progress after Close = %+v, want final 0/-1 after cancelled initialization", samples)
 	}
+	if len(samples) != 1 {
+		t.Fatalf("progress calls = %+v, want exactly one terminal callback after Close", samples)
+	}
+	// A second Close must not add another terminal callback.
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 1 {
+		t.Fatalf("progress calls after repeated Close = %d, want 1: %+v", len(samples), samples)
+	}
 }
 
 type pipeProgressBody struct {

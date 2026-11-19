@@ -998,7 +998,9 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		b2:                          b.b2,
 		CORSRules:                   b2resp.CORSRules,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
-		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
+	}
+	if b2resp.FileLockConfig != nil {
+		updated.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	updated.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
 	updated.ReplicationConfiguration, updated.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(b2resp.ReplicationConfiguration)
