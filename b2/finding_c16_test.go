@@ -18,6 +18,8 @@ func (b c16OffsetBucket) downloadFileByName(_ context.Context, _ string, offset,
 	return nil, errors.New("offset captured")
 }
 
+// The old multiplication overflows only with 32-bit int. CI executes this test
+// on linux/386; a 64-bit run alone cannot detect the regression.
 func TestFindingC16_ChunkOffsetMultipliedIn64Bit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	offsets := make(chan int64, 1)
