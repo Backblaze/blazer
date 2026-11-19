@@ -3,6 +3,7 @@ package base
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 type logRoundTrip func(*http.Request) (*http.Response, error)
@@ -133,5 +135,97 @@ func TestAuthResponseLoggingRedactsSecrets(t *testing.T) {
 	command.Env = append(os.Environ(), "B2_LOG_LEVEL=2", "BLAZER_AUTH_LOG_CHILD=1")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("verbose log redaction test failed: %v\n%s", err, output)
+	}
+}
+
+func TestFindingC46_WebhookCustomHeaderValueIsRedactedInLogs(t *testing.T) {
+	if os.Getenv("BLAZER_C46_LOG_CHILD") != "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestFindingC46_WebhookCustomHeaderValueIsRedactedInLogs$")
+		cmd.Env = append(os.Environ(), "B2_LOG_LEVEL=2", "BLAZER_C46_LOG_CHILD=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("webhook log redaction check failed: %v\n%s", err, output)
+		}
+		return
+	}
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	for _, tc := range []struct {
+		name, method, body, marker string
+		secrets                    []string
+		response                   bool
+	}{
+		{
+			name: "request", method: "b2_set_bucket_notification_rules", marker: "c46-request-rule",
+			body:    `{"bucketId":"bucket-id","eventNotificationRules":[{"name":"c46-request-rule","eventTypes":["b2:ObjectCreated:Upload"],"isEnabled":true,"objectNamePrefix":"","targetConfiguration":{"targetType":"webhook","url":"https://example.com/webhook","customHeaders":[{"name":"Authorization","value":"Bearer fake-c46-request-credential"},{"name":"X-Context","value":"fake-c46-unlabeled-credential"}]}}]}`,
+			secrets: []string{"fake-c46-request-credential", "fake-c46-unlabeled-credential"},
+		},
+		{
+			name: "response", method: "b2_get_bucket_notification_rules", marker: "c46-response-rule", response: true,
+			body:    `{"bucketId":"bucket-id","eventNotificationRules":[{"name":"c46-response-rule","eventTypes":["b2:ObjectCreated:Upload"],"isEnabled":true,"objectNamePrefix":"","targetConfiguration":{"targetType":"webhook","url":"https://example.com/notify","customHeaders":[{"name":"Authorization","value":"Bearer fake-c46-response-credential"}]}}]}`,
+			secrets: []string{"fake-c46-response-credential"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output.Reset()
+			verb := http.MethodPost
+			if tc.response {
+				verb = http.MethodGet
+			}
+			req, err := http.NewRequest(verb, "https://example.invalid/b2api/v4/"+tc.method, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("X-Blazer-Method", tc.method)
+			if tc.response {
+				logResponse(&http.Response{Request: req, StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header)}, []byte(tc.body))
+			} else {
+				logRequest(req, []byte(tc.body))
+			}
+			got := output.String()
+			if !strings.Contains(got, tc.method) || !strings.Contains(got, tc.marker) || !strings.Contains(got, `"name":"Authorization"`) {
+				t.Fatalf("notification log or non-secret metadata missing: %s", got)
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(got, secret) {
+					t.Errorf("webhook custom-header value leaked in verbose log: %s", got)
+				}
+			}
+			if !strings.Contains(got, "[redacted]") {
+				t.Errorf("notification log has no redaction marker: %s", got)
+			}
+		})
+	}
+}
+
+func TestRedactWebhookCustomHeaderValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, header string
+	}{
+		{"ordinary", `{"customHeaders":[{"name":"Authorization","value":"fake-c46-value"}],"metadata":{"value":"visible"}}`, "Authorization"},
+		{"escaped", `{"cu\u0073tomHeaders":[{"name":"X-Context","va\u006cue":"fake-c46-escaped"}],"metadata":{"value":"visible"}}`, "X-Context"},
+		{"case insensitive", `{"CUSTOMHEADERS":[{"NAME":"Authorization","VALUE":"fake-c46-uppercase"}],"metadata":{"value":"visible"}}`, "Authorization"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got struct {
+				CustomHeaders []struct{ Name, Value string }
+				Metadata      struct{ Value string }
+			}
+			if err := json.Unmarshal([]byte(redactSensitiveJSON([]byte(tc.body))), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.CustomHeaders) != 1 {
+				t.Fatalf("custom headers = %v, want one header", got.CustomHeaders)
+			}
+			if h := got.CustomHeaders[0]; h.Name != tc.header || h.Value != "[redacted]" {
+				t.Errorf("custom header = %+v, want name %q and redacted value", h, tc.header)
+			}
+			if got.Metadata.Value != "visible" {
+				t.Errorf("unrelated JSON value = %q, want visible", got.Metadata.Value)
+			}
+		})
 	}
 }
