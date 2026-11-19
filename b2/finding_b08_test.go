@@ -93,7 +93,10 @@ func TestWriterWriteAfterClose(t *testing.T) {
 			} else if tc.failClose {
 				srv.Reply("b2_get_upload_url", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"upload unavailable"}`)
 			}
-			writer := bucket.Object("object").NewWriter(context.Background())
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			writer := bucket.Object("object").NewWriter(parent)
+			// The recording server accepts small parts to exercise multipart locally.
 			writer.ChunkSize = 3
 			writer.ConcurrentUploads = 1
 			if tc.payload != "" {
@@ -104,6 +107,18 @@ func TestWriterWriteAfterClose(t *testing.T) {
 			closeErr := writer.Close()
 			if (closeErr != nil) != tc.failClose {
 				t.Fatalf("Close = %v, want error: %t", closeErr, tc.failClose)
+			}
+			if !errors.Is(writer.ctx.Err(), context.Canceled) {
+				t.Errorf("writer context after Close = %v, want canceled", writer.ctx.Err())
+			}
+			if parent.Err() != nil {
+				t.Errorf("parent context after Close = %v, want nil", parent.Err())
+			}
+			if tc.failClose && !errors.Is(context.Cause(writer.ctx), closeErr) {
+				t.Errorf("writer context cause = %v, want Close error %v", context.Cause(writer.ctx), closeErr)
+			}
+			if tc.failClose && !tc.failLarge && !strings.Contains(closeErr.Error(), "upload unavailable") {
+				t.Errorf("Close = %v, want upload unavailable", closeErr)
 			}
 			if tc.failLarge && (!strings.Contains(closeErr.Error(), "finish failed") || len(srv.Calls("b2_finish_large_file")) != 1) {
 				t.Fatalf("large Close = %v, want the finish failure", closeErr)
@@ -124,6 +139,8 @@ func TestWriterWriteAfterClose(t *testing.T) {
 
 func TestReadFromPositionedFile(t *testing.T) {
 	srv, bucket := newSHA1WireBucket(t)
+	srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"large-id"}`)
+	srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"large-id","fileName":"positioned","action":"upload"}`)
 	f, err := os.CreateTemp(t.TempDir(), "source")
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +157,8 @@ func TestReadFromPositionedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	writer := bucket.Object("positioned").NewWriter(context.Background())
+	// Seven bytes remain: less than this chunk, while the full file is larger.
+	writer.ChunkSize = 10
 	n, err := io.Copy(writer, f)
 	if err != nil {
 		t.Fatalf("io.Copy: %v", err)
@@ -154,12 +173,43 @@ func TestReadFromPositionedFile(t *testing.T) {
 	if len(uploads) != 1 {
 		t.Fatalf("uploads = %d, want 1", len(uploads))
 	}
+	if starts, parts := len(srv.Calls("b2_start_large_file")), len(srv.Calls("upload_part")); starts != 0 || parts != 0 {
+		t.Errorf("multipart starts = %d, parts = %d; want neither", starts, parts)
+	}
 	body := uploads[0].Body
 	if uploads[0].Header.Get("X-Bz-Content-Sha1") == "hex_digits_at_end" && len(body) >= 40 {
 		body = body[:len(body)-40]
 	}
 	if string(body) != "payload" {
 		t.Errorf("uploaded = %q, want payload", body)
+	}
+}
+
+type endSeekFailure struct{ *bytes.Reader }
+
+func (r endSeekFailure) Seek(offset int64, whence int) (int64, error) {
+	if whence == io.SeekEnd {
+		return 0, errors.New("end seek unsupported")
+	}
+	return r.Reader.Seek(offset, whence)
+}
+
+func TestReadFromFallsBackWhenEndSeekFails(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	source := endSeekFailure{bytes.NewReader([]byte("HEADER--payload"))}
+	if _, err := source.Seek(8, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	w := bucket.Object("end-seek-failure").NewWriter(context.Background())
+	if n, err := w.ReadFrom(source); err != nil || n != 7 {
+		t.Fatalf("ReadFrom = (%d, %v), want (7, nil)", n, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	uploads := srv.Calls("upload_file")
+	if len(uploads) != 1 || string(uploads[0].Body) != "payload" {
+		t.Fatalf("uploads = %v, want one upload of payload", uploads)
 	}
 }
 
