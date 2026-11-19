@@ -358,6 +358,9 @@ func (r *Reader) status() *ReaderStatus {
 // not read, or if the object was uploaded as a "large file" and thus the SHA1
 // hash was not sent), this returns (nil, false).
 func (r *Reader) Verify() (error, bool) {
+	if r.vrfy == nil {
+		return nil, false
+	}
 	got := fmt.Sprintf("%x", r.vrfy.Sum(nil))
 	if r.sha1 == got {
 		return nil, true
