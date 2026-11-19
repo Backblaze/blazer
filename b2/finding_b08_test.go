@@ -159,6 +159,70 @@ func TestReadFromPositionedFile(t *testing.T) {
 	}
 }
 
+func TestReadFromPositionedFileMultipart(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"large-id"}`)
+	srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"large-id","fileName":"object","action":"upload"}`)
+	f, err := os.CreateTemp(t.TempDir(), "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("HEADER--payload"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(8, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	w := bucket.Object("object").NewWriter(context.Background())
+	w.ChunkSize = 3
+	w.ConcurrentUploads = 1
+	if n, err := io.Copy(w, f); err != nil || n != 7 {
+		t.Fatalf("io.Copy = (%d, %v), want (7, nil)", n, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"1": "pay", "2": "loa", "3": "d"}
+	parts := srv.Calls("upload_part")
+	if len(parts) != len(want) {
+		t.Fatalf("parts = %d, want %d", len(parts), len(want))
+	}
+	for _, part := range parts {
+		number := part.Header.Get("X-Bz-Part-Number")
+		body := part.Body
+		if part.Header.Get("X-Bz-Content-Sha1") == "hex_digits_at_end" && len(body) >= 40 {
+			body = body[:len(body)-40]
+		}
+		if expected, ok := want[number]; !ok || string(body) != expected {
+			t.Errorf("part %s = %q, want %q", number, body, expected)
+		}
+		delete(want, number)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing parts: %v", want)
+	}
+}
+
+func TestReadFromPastEndUploadsEmpty(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	source := bytes.NewReader([]byte("abc"))
+	if _, err := source.Seek(4, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	w := bucket.Object("past-end").NewWriter(context.Background())
+	if n, err := w.ReadFrom(source); err != nil || n != 0 {
+		t.Fatalf("ReadFrom = (%d, %v), want (0, nil)", n, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	uploads := srv.Calls("upload_file")
+	if len(uploads) != 1 || len(uploads[0].Body) != 0 {
+		t.Fatalf("uploads = %v, want one empty upload", uploads)
+	}
+}
+
 func TestEmptyWriterClosesFileBufferAndUnregisters(t *testing.T) {
 	_, bucket := newSHA1WireBucket(t)
 	dir := t.TempDir()
