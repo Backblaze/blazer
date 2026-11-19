@@ -352,3 +352,47 @@ func TestRegression_EmptyKeyPageRequiresSuccess(t *testing.T) {
 		})
 	}
 }
+
+const (
+	knownDefectChunkSize   = 5_000_000
+	knownDefectUploadBytes = 10_000_001 // two minimum-size parts and a one-byte final part
+)
+
+// The retry fixture must itself obey B2's 5,000,000-byte non-final-part minimum:
+// https://www.backblaze.com/apidocs/b2-upload-part
+func TestRegression_KnownDefectMultipartFixtureUsesValidParts(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"fixture-large"}`)
+	srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"fixture-large","fileName":"fixture","action":"upload"}`)
+	w := bucket.Object("fixture").NewWriter(newTestCtx(t))
+	w.ChunkSize = knownDefectChunkSize
+	if _, err := w.Write(make([]byte, knownDefectUploadBytes)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	parts := srv.Calls("upload_part")
+	if len(parts) != 3 {
+		t.Fatalf("part uploads = %d, want 3", len(parts))
+	}
+	want := map[string]int{"1": 5_000_000, "2": 5_000_000, "3": 1}
+	for _, part := range parts {
+		number := part.Header.Get("X-Bz-Part-Number")
+		size, ok := want[number]
+		if !ok {
+			t.Fatalf("unexpected or duplicate part number %q", number)
+		}
+		delete(want, number)
+		body := part.Body
+		if part.Header.Get("X-Bz-Content-Sha1") == "hex_digits_at_end" {
+			if len(body) < 40 {
+				t.Fatalf("part %s has no complete SHA-1 trailer", number)
+			}
+			body = body[:len(body)-40]
+		}
+		if got := len(body); got != size {
+			t.Errorf("part %s bytes = %d, want %d", number, got, size)
+		}
+	}
+}

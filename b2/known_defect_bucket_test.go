@@ -323,8 +323,8 @@ func TestKnownDefect_NonIdempotentCallsAreNotResentAfter504(t *testing.T) {
 			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
 				srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"lid","fileName":"o","action":"upload"}`)
 				w := bucket.Object("o").NewWriter(newTestCtx(t))
-				w.ChunkSize = 10
-				_, werr := w.Write(make([]byte, 25))
+				w.ChunkSize = knownDefectChunkSize
+				_, werr := w.Write(make([]byte, knownDefectUploadBytes))
 				cerr := w.Close()
 				if werr != nil {
 					return werr
@@ -335,8 +335,8 @@ func TestKnownDefect_NonIdempotentCallsAreNotResentAfter504(t *testing.T) {
 			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
 				srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"lid","fileName":"o"}`)
 				w := bucket.Object("o").NewWriter(newTestCtx(t))
-				w.ChunkSize = 10
-				_, werr := w.Write(make([]byte, 25))
+				w.ChunkSize = knownDefectChunkSize
+				_, werr := w.Write(make([]byte, knownDefectUploadBytes))
 				cerr := w.Close()
 				if werr != nil {
 					return werr
