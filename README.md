@@ -115,10 +115,13 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, src, dst string) error {
 	}
 	defer f.Close()
 
+	uploadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	obj := bucket.Object(dst)
-	w := obj.NewWriter(ctx)
+	w := obj.NewWriter(uploadCtx)
 	if _, err := io.Copy(w, f); err != nil {
-		w.Close()
+		cancel() // Prevent Close from committing a partial upload.
+		_ = w.Close()
 		return err
 	}
 	return w.Close()
@@ -141,10 +144,13 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, writers int, src, dst stri
 	}
 	defer f.Close()
 
-	w := bucket.Object(dst).NewWriter(ctx)
+	uploadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	w := bucket.Object(dst).NewWriter(uploadCtx)
 	w.ConcurrentUploads = writers
 	if _, err := io.Copy(w, f); err != nil {
-		w.Close()
+		cancel() // Prevent Close from committing a partial upload.
+		_ = w.Close()
 		return err
 	}
 	return w.Close()

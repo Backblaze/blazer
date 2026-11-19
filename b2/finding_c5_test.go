@@ -87,3 +87,40 @@ func TestFindingC5_PartialSourceIsNotCommittedByClose(t *testing.T) {
 		})
 	}
 }
+
+type failingUploadWriterTo struct {
+	failingUploadSource
+	used bool
+}
+
+func (r *failingUploadWriterTo) WriteTo(w io.Writer) (int64, error) {
+	r.used = true
+	n, err := w.Write(r.data)
+	if err != nil {
+		return int64(n), err
+	}
+	return int64(n), r.err
+}
+
+func TestUploadCopyErrorCancelsWriterTo(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := bucket.Object("writer-to").NewWriter(ctx)
+	want := errors.New("source WriterTo failed")
+	source := &failingUploadWriterTo{failingUploadSource: failingUploadSource{data: []byte("partial"), err: want}}
+	n, copyErr := io.Copy(w, source)
+	if copyErr != nil {
+		cancel() // The README pattern cancels before Close cleans up.
+	}
+	closeErr := w.Close()
+	if !source.used || n != 7 || !errors.Is(copyErr, want) {
+		t.Fatalf("WriterTo used = %t, io.Copy = (%d, %v); want true, 7, source error", source.used, n, copyErr)
+	}
+	if !errors.Is(closeErr, context.Canceled) {
+		t.Errorf("Close = %v, want canceled upload", closeErr)
+	}
+	if uploads := srv.Calls("upload_file"); len(uploads) != 0 {
+		t.Errorf("cancelled copy committed %d uploads", len(uploads))
+	}
+}

@@ -663,6 +663,8 @@ func (w *Writer) sendChunk() error {
 // an io.MultiReader.
 //
 // Note that io.Copy will automatically choose to use ReadFrom.
+// A source read error is recorded on the writer, so Close returns that error
+// rather than committing the partial upload.
 //
 // On every path, ReadFrom returns the Writer's error when it cancels itself;
 // caller cancellation returns context.Canceled or context.DeadlineExceeded,
@@ -687,6 +689,11 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		return 0, ErrClosed
 	}
 	defer func() {
+		// A cancelled copy already prevents finalization; do not start error
+		// cleanup here when cancellation must return without waiting for I/O.
+		if err != nil && w.ctx.Err() == nil {
+			w.setErr(err)
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			var cause writerCause
 			if errors.As(context.Cause(w.ctx), &cause) {
