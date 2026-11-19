@@ -277,19 +277,21 @@ func sensitiveLogField(name string) bool {
 		strings.Contains(name, "authenticate")
 }
 
-func redactSensitiveValue(value interface{}) {
+func redactSensitiveValue(value interface{}, customHeader bool) {
 	switch value := value.(type) {
 	case map[string]interface{}:
 		for key, item := range value {
-			if sensitiveLogField(key) {
+			// Custom header names are arbitrary, so every entry's value may
+			// contain credentials even when its header name looks harmless.
+			if sensitiveLogField(key) || customHeader && strings.EqualFold(key, "value") {
 				value[key] = "[redacted]"
 			} else {
-				redactSensitiveValue(item)
+				redactSensitiveValue(item, strings.EqualFold(key, "customHeaders"))
 			}
 		}
 	case []interface{}:
 		for _, item := range value {
-			redactSensitiveValue(item)
+			redactSensitiveValue(item, customHeader)
 		}
 	}
 }
@@ -299,7 +301,7 @@ func redactSensitiveJSON(data []byte) string {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return "[unparseable JSON omitted]"
 	}
-	redactSensitiveValue(value)
+	redactSensitiveValue(value, false)
 	safe, err := json.Marshal(value)
 	if err != nil {
 		return "[JSON omitted]"
