@@ -128,7 +128,11 @@ func TestReadFromPositionedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	}()
 	if _, err := f.WriteString("HEADER--payload"); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +171,11 @@ func TestReadFromPositionedFileMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	}()
 	if _, err := f.WriteString("HEADER--payload"); err != nil {
 		t.Fatal(err)
 	}
