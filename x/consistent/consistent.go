@@ -90,14 +90,20 @@ func (g *Group) OperateStream(ctx context.Context, name string, f func(io.Reader
 			return err
 		}
 		defer io.Copy(ioutil.Discard, out) // ensure the reader is read
-		w, err := g.NewWriter(ctx, r.Key, name)
+		uploadCtx, cancel := context.WithCancel(ctx)
+		w, err := g.NewWriter(uploadCtx, r.Key, name)
 		if err != nil {
+			cancel()
 			return err
 		}
 		if _, err := io.Copy(w, out); err != nil {
+			cancel() // Prevent Close from publishing a partial upload.
+			_ = w.Close()
 			return err
 		}
-		if err := w.Close(); err != nil {
+		err = w.Close()
+		cancel()
+		if err != nil {
 			if err == errUpdateConflict {
 				continue
 			}
