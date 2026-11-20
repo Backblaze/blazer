@@ -12,19 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build knowndefect
-
 package transport
-
-// Known-defect tests. Each test asserts the correct behaviour and currently
-// fails because of an open defect, so this file is built only with the
-// knowndefect tag and the default "go test" does not run it:
-//
-//	make known-defects
-//
-// When a defect is fixed, move its test into the regular suite (a file without
-// the build tag, for example regression_test.go in this package) and rename
-// TestKnownDefect_X to TestRegression_X.
 
 import (
 	"go/ast"
@@ -34,11 +22,10 @@ import (
 	"testing"
 )
 
-// 6 (static layout check; the runtime crash needs a 32-bit build):
-// on 32-bit platforms, 64-bit values used with sync/atomic functions must sit
+// C36: on 32-bit platforms, 64-bit values used with sync/atomic functions must sit
 // at 8-byte-aligned offsets. This computes the struct layout with the 386 size
-// rules, so it runs on any host and fails on the current layout.
-func TestKnownDefect_AtomicInt64FieldsAreAlignedOn32Bit(t *testing.T) {
+// rules, so it runs on any host.
+func TestRegression_AtomicInt64FieldsAreAlignedOn32Bit(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "transport.go", nil, 0)
 	if err != nil {

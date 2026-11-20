@@ -1,0 +1,3 @@
+kind: Fixed
+body: Prevent AfterNBytes from panicking on 32-bit platforms by aligning its atomic counters.
+time: 2026-11-20T15:38:09.960048-06:00

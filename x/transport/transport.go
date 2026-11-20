@@ -187,9 +187,10 @@ func AfterNBytes(n int, effect func()) FailureOption {
 }
 
 type triggerReaderGroup struct {
+	// Keep both counters first for 64-bit atomic alignment on 32-bit systems.
 	bytes     int64
-	trigger   func()
 	triggered int64
+	trigger   func()
 }
 
 func (rg *triggerReaderGroup) new(rc io.ReadCloser) io.ReadCloser {
