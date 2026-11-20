@@ -1,3 +1,3 @@
 kind: Fixed
-body: Close the consistent group writer without publishing partial data when copying callback output fails.
+body: Close the consistent group writer and cancel unfinished large uploads when copying callback output fails.
 time: 2026-11-20T12:00:00-06:00
