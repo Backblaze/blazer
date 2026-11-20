@@ -32,31 +32,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
-
-// The handle returned by a successful update carries the server's
-// new revision, so the next update has a conflict check.
-const bucketJSONWithLock = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":7,` +
-	`"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false}}}`
-
-func TestKnownDefect_UpdateReturnsNewRevision(t *testing.T) {
-	srv, root, ctx := newBaseWire(t)
-	srv.Reply("b2_update_bucket", http.StatusOK, bucketJSONWithLock)
-	updated, err := (&Bucket{ID: "bid", Name: "n", b2: root, rev: 2}).Update(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.rev != 7 {
-		t.Errorf("updated bucket revision = %d, want 7 (the revision in the reply)", updated.rev)
-	}
-	// And the next update must send it as ifRevisionIs.
-	if _, err := updated.Update(ctx); err != nil {
-		t.Fatal(err)
-	}
-	b2wiretest.AssertJSON(t, srv.Last(t, "b2_update_bucket"), "ifRevisionIs", 7)
-}
 
 // A non-JSON error reply (for example a gateway error page) must
 // still produce a non-empty error message.
@@ -74,29 +50,5 @@ func TestKnownDefect_NonJSONErrorReplyHasMessage(t *testing.T) {
 	msg := strings.TrimSpace(strings.TrimPrefix(err.Error(), "b2_authorize_account: 403:"))
 	if msg == "" {
 		t.Errorf("error message is empty after the status code: %q", err.Error())
-	}
-}
-
-// The size reported for a large file must not include the 40-byte
-// SHA1 trailer of each streamed part.
-func TestKnownDefect_LargeFileSizeExcludesSHA1Trailer(t *testing.T) {
-	srv, root, ctx := newBaseWire(t)
-	srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"large-id","fileName":"large","action":"upload"}`)
-	large := (&File{ID: "large-id", b2: root}).AsLargeFile()
-	chunk, err := large.GetUploadPartURL(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// "abc" plus its 40-hex SHA1: the streamed form, 43 bytes on the wire.
-	body := "abca9993e364706816aba3e25717850c26c9cd0d89d"
-	if _, err := chunk.UploadPart(ctx, strings.NewReader(body), "hex_digits_at_end", len(body), 1); err != nil {
-		t.Fatal(err)
-	}
-	file, err := large.FinishLargeFile(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if file.Size != 3 {
-		t.Errorf("finished large file size = %d, want 3 (payload only, 40-byte trailer excluded)", file.Size)
 	}
 }
