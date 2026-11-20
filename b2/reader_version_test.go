@@ -20,12 +20,134 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
+
+func TestReaderHEADDoesNotReplacePinnedVersion(t *testing.T) {
+	for _, headID := range []string{"", "new-id"} {
+		t.Run(fmt.Sprintf("HEAD ID=%q", headID), func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			srv.Handle("versioned", func(req b2wiretest.Request) b2wiretest.Response {
+				response := b2wiretest.RangeDownload("newbytes", req.Header.Get("Range"))
+				response.Header.Set("X-Bz-File-Id", "new-id")
+				return response
+			})
+			srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+				if req.Method == http.MethodHead {
+					return b2wiretest.Response{Header: http.Header{"Content-Length": {"8"}, "X-Bz-File-Id": {headID}}}
+				}
+				body := "oldbytes"
+				if req.Query.Get("fileId") != "old-id" {
+					body = "newbytes"
+				}
+				response := b2wiretest.RangeDownload(body, req.Header.Get("Range"))
+				response.Header.Set("X-Bz-File-Id", req.Query.Get("fileId"))
+				return response
+			})
+			object := bucket.Object("versioned")
+			object.f = bucket.b.file("old-id", "versioned")
+			reader := object.NewRangeReader(newTestCtx(t), 1, 6)
+			reader.ChunkSize = 3
+			var samples []progressSample
+			reader.Progress = func(n, total int64) { samples = append(samples, progressSample{n, total}) }
+			t.Cleanup(func() { _ = reader.Close() })
+			got, err := io.ReadAll(reader)
+			if err != nil || string(got) != "ldbyte" {
+				t.Fatalf("historical range after HEAD = %q, %v; want ldbyte, nil", got, err)
+			}
+			if n := len(srv.Calls("versioned")); n != 0 {
+				t.Errorf("name downloads = %d, want 0 for the pinned version", n)
+			}
+			for _, req := range srv.Calls("b2_download_file_by_id") {
+				if id := req.Query.Get("fileId"); id != "old-id" {
+					t.Errorf("download ID = %q, want old-id", id)
+				}
+			}
+			assertProgressSamples(t, samples, 6, 6, false)
+		})
+	}
+}
+
+func TestReaderStatusPreservesSparseChunkIDs(t *testing.T) {
+	half := &meteredReader{size: 10}
+	half.read.Store(5)
+	for _, tc := range []struct {
+		name       string
+		mapEntries map[int]*meteredReader
+		want       []float64
+	}{
+		{"first response delayed", map[int]*meteredReader{1: half}, []float64{0, 0.5}},
+		{"middle response delayed", map[int]*meteredReader{0: nil, 2: half}, []float64{1, 0, 0.5}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &Reader{smap: tc.mapEntries}
+			if got := reader.status().Progress; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("sparse chunk progress = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReaderStatusWhileFirstResponseIsBlocked(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	ctx := newTestCtx(t)
+	firstEntered, release := make(chan struct{}), make(chan struct{})
+	releaseFirst := sync.OnceFunc(func() { close(release) })
+	secondRead := make(chan struct{})
+	reportSecond := sync.OnceFunc(func() { close(secondRead) })
+	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+		if req.Method == http.MethodHead {
+			return b2wiretest.Response{Header: http.Header{"Content-Length": {"8"}, "X-Bz-File-Id": {"sparse-id"}}}
+		}
+		if req.Header.Get("Range") == "bytes=0-3" {
+			close(firstEntered)
+			<-release
+		}
+		response := b2wiretest.RangeDownload("abcdefgh", req.Header.Get("Range"))
+		response.Header.Set("X-Bz-File-Id", "sparse-id")
+		return response
+	})
+	object := bucket.Object("sparse-status")
+	object.f = bucket.b.file("sparse-id", "sparse-status")
+	reader := object.NewRangeReader(ctx, 0, 8)
+	reader.ChunkSize, reader.ConcurrentDownloads = 4, 2
+	reader.Progress = func(n, _ int64) {
+		if n >= 4 {
+			reportSecond()
+		}
+	}
+	t.Cleanup(func() { releaseFirst(); _ = reader.Close() })
+	type result struct {
+		body []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() { body, err := io.ReadAll(reader); done <- result{body, err} }()
+	for _, event := range []<-chan struct{}{firstEntered, secondRead} {
+		select {
+		case <-event:
+		case <-ctx.Done():
+			t.Fatal("parallel download did not reach the blocked-first/read-second state")
+		}
+	}
+	if got := reader.status().Progress; !reflect.DeepEqual(got, []float64{0, 1}) {
+		t.Fatalf("out-of-order download status = %v, want [0 1]", got)
+	}
+	releaseFirst()
+	select {
+	case got := <-done:
+		if got.err != nil || string(got.body) != "abcdefgh" {
+			t.Fatalf("download after release = %q, %v; want abcdefgh, nil", got.body, got.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("download did not finish after releasing its first response")
+	}
+}
 
 func TestReaderPinsListedVersion(t *testing.T) {
 	for _, ranged := range []bool{false, true} {
