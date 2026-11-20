@@ -35,7 +35,7 @@ func listingPages(pages [2]string, cursor map[string]string) func(b2wiretest.Req
 }
 
 func TestListDefaultPageSizeUsesB2Default(t *testing.T) {
-	// https://www.backblaze.com/apidocs/b2-list-file-names documents zero as its default of 100.
+	// https://www.backblaze.com/apidocs/b2-list-file-names documents the default as 100.
 	for _, tc := range []struct {
 		name string
 		opts []ListOption
@@ -84,10 +84,49 @@ func TestListDefaultPageSizeUsesB2Default(t *testing.T) {
 				t.Fatalf("listing requests = %d, want 2", len(calls))
 			}
 			for _, call := range calls {
-				b2wiretest.AssertJSON(t, call, "maxFileCount", 0)
+				b2wiretest.AssertJSON(t, call, "maxFileCount", 100)
 			}
 			b2wiretest.AssertNoJSON(t, calls[0], "startFileName")
 			b2wiretest.AssertJSON(t, calls[1], "startFileName", "file-101")
+		})
+	}
+}
+
+func TestListDefaultPageSizeOnWire(t *testing.T) {
+	// https://www.backblaze.com/apidocs/b2-list-file-names
+	// https://www.backblaze.com/apidocs/b2-list-file-versions
+	for _, tc := range []struct {
+		name      string
+		call      string
+		opts      []ListOption
+		wantField bool
+	}{
+		{"names", "b2_list_file_names", nil, true},
+		{"names explicit zero", "b2_list_file_names", []ListOption{ListPageSize(0)}, true},
+		{"versions", "b2_list_file_versions", []ListOption{ListHidden()}, true},
+		{"versions explicit zero", "b2_list_file_versions", []ListOption{ListHidden(), ListPageSize(0)}, true},
+		{"unfinished", "b2_list_unfinished_large_files", []ListOption{ListUnfinished()}, false},
+		{"unfinished explicit zero", "b2_list_unfinished_large_files", []ListOption{ListUnfinished(), ListPageSize(0)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv := b2wiretest.New(t)
+			srv.Reply(tc.call, http.StatusOK, `{"files":[],"nextFileName":null,"nextFileId":null}`)
+			bucket := newListingWireBucket(t, ctx, srv)
+			iter := bucket.List(ctx, tc.opts...)
+			if iter.Next() || iter.Err() != nil {
+				t.Fatalf("empty listing returned an object or error: %v", iter.Err())
+			}
+			calls := srv.Calls(tc.call)
+			if len(calls) != 1 {
+				t.Fatalf("%s requests = %d, want 1", tc.call, len(calls))
+			}
+			if tc.wantField {
+				b2wiretest.AssertJSON(t, calls[0], "maxFileCount", 100)
+			} else {
+				b2wiretest.AssertNoJSON(t, calls[0], "maxFileCount")
+			}
 		})
 	}
 }
