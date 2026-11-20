@@ -485,7 +485,8 @@ func assertSDKEncryption(step string, attrs *b2.Attrs) error {
 func assertKeyedRead(calls []wireCall, method, key, digest string) error {
 	seen := false
 	for _, call := range calls {
-		if call.method != method || !strings.HasPrefix(call.path, "/file/") {
+		isDownload := strings.HasPrefix(call.path, "/file/") || strings.HasSuffix(call.path, "/b2_download_file_by_id")
+		if call.method != method || !isDownload {
 			continue
 		}
 		seen = true
@@ -496,7 +497,7 @@ func assertKeyedRead(calls []wireCall, method, key, digest string) error {
 		}
 	}
 	if !seen {
-		return failf("keyed read", "no %s download-by-name request was observed", method)
+		return failf("keyed read", "no %s download request was observed", method)
 	}
 	return nil
 }
