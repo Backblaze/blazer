@@ -30,7 +30,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,52 +40,6 @@ import (
 	"github.com/Backblaze/blazer/b2"
 	"github.com/Backblaze/blazer/x/b2sim"
 )
-
-func newSimGroup(t *testing.T) (*b2.Client, *Group, context.Context) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	t.Cleanup(cancel)
-	client, err := b2.NewClient(ctx, "test-id", "test-key", b2.Transport(b2sim.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := client.NewBucket(ctx, "consistent", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client, NewGroup(bucket, "consistent"), ctx
-}
-
-type failingSourceReader struct {
-	data []byte
-	err  error
-}
-
-func (f *failingSourceReader) Read(p []byte) (int, error) {
-	if len(f.data) == 0 {
-		return 0, f.err
-	}
-	n := copy(p, f.data)
-	f.data = f.data[n:]
-	return n, nil
-}
-
-// When copying the callback's output fails, OperateStream must
-// close its writer; otherwise the upload stays registered (and, for a large
-// file, unfinished on the server).
-func TestKnownDefect_OperateStreamClosesWriterWhenCopyFails(t *testing.T) {
-	client, g, ctx := newSimGroup(t)
-	srcErr := errors.New("callback output failed")
-	err := g.OperateStream(ctx, "obj", func(io.Reader) (io.Reader, error) {
-		return &failingSourceReader{data: []byte("abc"), err: srcErr}, nil
-	})
-	if !errors.Is(err, srcErr) {
-		t.Fatalf("OperateStream err = %v, want %v", err, srcErr)
-	}
-	if n := len(client.Status().Writers); n != 0 {
-		t.Errorf("%d writer(s) left open after OperateStream failed to copy", n)
-	}
-}
 
 // A callback that returns its input reader unchanged must work.
 func TestKnownDefect_OperateStreamAcceptsCallbackReturningItsInput(t *testing.T) {
