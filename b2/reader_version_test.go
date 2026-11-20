@@ -16,6 +16,8 @@ package b2
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -24,6 +26,146 @@ import (
 
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
+
+func TestReaderPinsListedVersion(t *testing.T) {
+	for _, ranged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ranged progress=%t", ranged), func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			srv.Reply("b2_list_file_versions", http.StatusOK, `{"files":[{"fileId":"old-id","fileName":"versioned","action":"upload","contentLength":8}]}`)
+			serve := func(body, id string, req b2wiretest.Request) b2wiretest.Response {
+				resp := downloadResponse([]byte(body), fmt.Sprintf("%x", sha1.Sum([]byte(body))))(req)
+				if resp.Header == nil {
+					resp.Header = make(http.Header)
+				}
+				resp.Header.Set("X-Bz-File-Id", id)
+				return resp
+			}
+			srv.Handle("versioned", func(req b2wiretest.Request) b2wiretest.Response {
+				return serve("newbytes", "new-id", req)
+			})
+			srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+				if id := req.Query.Get("fileId"); id != "old-id" {
+					t.Errorf("fileId = %q, want old-id", id)
+				}
+				return serve("oldbytes", "old-id", req)
+			})
+			ctx := newTestCtx(t)
+			iter := bucket.List(ctx, ListHidden())
+			if !iter.Next() {
+				t.Fatalf("list historical version: %v", iter.Err())
+			}
+			object := iter.Object()
+			var reader *Reader
+			want := "oldbytes"
+			var samples []progressSample
+			if ranged {
+				reader = object.NewRangeReader(ctx, 1, 6)
+				reader.Progress = func(n, total int64) { samples = append(samples, progressSample{n, total}) }
+				want = "ldbyte"
+			} else {
+				reader = object.NewReader(ctx)
+			}
+			reader.ChunkSize = 3
+			reader.ConcurrentDownloads = 3
+			t.Cleanup(func() { _ = reader.Close() })
+			got, err := io.ReadAll(reader)
+			if err != nil || string(got) != want {
+				t.Fatalf("historical read = %q, %v; want %q, nil", got, err, want)
+			}
+			if n := len(srv.Calls("versioned")); n != 0 {
+				t.Errorf("resolved version downloaded by name %d times, want 0", n)
+			}
+			if ranged {
+				if len(samples) == 0 || samples[len(samples)-1] != (progressSample{6, 6}) {
+					t.Errorf("historical range progress = %v, want final 6/6", samples)
+				}
+			}
+		})
+	}
+}
+
+func TestReaderParallelChunksPinFirstVersion(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	var mu sync.Mutex
+	names := 0
+	srv.Handle("parallel", func(req b2wiretest.Request) b2wiretest.Response {
+		mu.Lock()
+		names++
+		n := names
+		mu.Unlock()
+		body, id := "AAAAAAAA", "idA"
+		if n > 1 {
+			body, id = "BBBBBBBB", "idB"
+		}
+		resp := b2wiretest.RangeDownload(body, req.Header.Get("Range"))
+		resp.Header.Set("X-Bz-File-Id", id)
+		return resp
+	})
+	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+		if got := req.Query.Get("fileId"); got != "idA" {
+			t.Errorf("fileId = %q, want idA", got)
+		}
+		resp := b2wiretest.RangeDownload("AAAAAAAA", req.Header.Get("Range"))
+		resp.Header.Set("X-Bz-File-Id", "idA")
+		return resp
+	})
+	reader := bucket.Object("parallel").NewRangeReader(newTestCtx(t), 0, 8)
+	reader.ChunkSize, reader.ConcurrentDownloads = 4, 3
+	t.Cleanup(func() { _ = reader.Close() })
+	got, err := io.ReadAll(reader)
+	if err != nil || string(got) != "AAAAAAAA" {
+		t.Fatalf("parallel read = %q, %v; want AAAAAAAA, nil", got, err)
+	}
+	if n := len(srv.Calls("parallel")); n != 1 {
+		t.Errorf("name requests = %d, want 1", n)
+	}
+	if n := len(srv.Calls("b2_download_file_by_id")); n != 1 {
+		t.Errorf("ID requests = %d, want 1", n)
+	}
+}
+
+func TestReaderRejectsMissingVersionID(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	srv.Handle("missing-id", func(req b2wiretest.Request) b2wiretest.Response {
+		return b2wiretest.RangeDownload("data", req.Header.Get("Range"))
+	})
+	reader := bucket.Object("missing-id").NewRangeReader(newTestCtx(t), 0, 4)
+	t.Cleanup(func() { _ = reader.Close() })
+	got, err := io.ReadAll(reader)
+	if len(got) != 0 || err == nil || !strings.Contains(err.Error(), "file ID") {
+		t.Fatalf("read without a version ID = %q, %v; want no bytes and a file ID error", got, err)
+	}
+}
+
+func TestReaderPinsBeforeParallelEOFProbes(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	serve := func(req b2wiretest.Request) b2wiretest.Response {
+		resp := b2wiretest.RangeDownload("data", req.Header.Get("Range"))
+		if resp.Header == nil {
+			resp.Header = make(http.Header)
+		}
+		resp.Header.Set("X-Bz-File-Id", "tiny-id")
+		return resp
+	}
+	srv.Handle("tiny", serve)
+	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+		if id := req.Query.Get("fileId"); id != "tiny-id" {
+			t.Errorf("download ID = %q, want tiny-id", id)
+		}
+		return serve(req)
+	})
+	reader := bucket.Object("tiny").NewReader(newTestCtx(t))
+	reader.ChunkSize, reader.ConcurrentDownloads = 4, 8
+	t.Cleanup(func() { _ = reader.Close() })
+	got, err := io.ReadAll(reader)
+	if err != nil || string(got) != "data" {
+		t.Fatalf("read with parallel EOF probes = %q, %v; want data, nil", got, err)
+	}
+	calls := srv.Calls("tiny")
+	if len(calls) != 1 || calls[0].Header.Get("Range") != "bytes=0-3" {
+		t.Errorf("name resolution requests = %+v, want only the first chunk bytes=0-3", calls)
+	}
+}
 
 // Reader status progress is indexed by chunk id; chunk ids start
 // at 0, so the first chunk must not be dropped and an active chunk must not
