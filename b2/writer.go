@@ -62,6 +62,7 @@ type Writer struct {
 	// sent as a single file.  The default is 100M (1e8)  The minimum is
 	// 5M (5e6); values less than this are not an error, but will fail.  The
 	// maximum is 5GB (5e9).
+	// Negative values are rejected before uploading.
 	ChunkSize int
 
 	// UseFileBuffer controls whether to use an in-memory buffer (the default) or
@@ -209,38 +210,42 @@ func (w *Writer) thread() {
 			case <-w.ctx.Done():
 				return
 			}
-			if sha, ok := w.seen[cnk.id]; ok {
-				if sha != cnk.buf.Hash() {
-					w.setErr(errors.New("resumable upload was requested, but chunks don't match"))
-					return
-				}
-				skippedBytes := completedBytes(cnk.buf)
-				cnk.buf.Close()
-				w.reporter.add(skippedBytes)
-				w.completeChunk(cnk.id)
-				blog.V(2).Infof("skipping chunk %d", cnk.id)
-				continue
-			}
 			blog.V(2).Infof("thread %d handling chunk %d", id, cnk.id)
-			r, err := cnk.buf.Reader()
+			fc, err = w.uploadChunk(cnk, fc)
 			if err != nil {
 				w.setErr(err)
 				return
 			}
-			mr := newMeteredReader(r, cnk.buf, w.reporter)
-			w.registerChunk(cnk.id, mr)
-			fc, err = uploadPartWithReupload(w.ctx, w.file, w.o.b.r, fc, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
-			if err != nil {
-				w.setErr(err)
-				w.completeChunk(cnk.id)
-				cnk.buf.Close()
-				return
-			}
-			w.completeChunk(cnk.id)
-			cnk.buf.Close()
 			blog.V(2).Infof("chunk %d handled", cnk.id)
 		}
 	}()
+}
+
+// uploadChunk owns the buffer after the worker receives it, including on a
+// resume mismatch or a failure to open its reader.
+func (w *Writer) uploadChunk(cnk chunk, url beFileChunkInterface) (beFileChunkInterface, error) {
+	defer func() {
+		if err := cnk.buf.Close(); err != nil {
+			blog.V(1).Infof("b2 writer: buffer close failed (%T)", err)
+		}
+	}()
+	if sha, ok := w.seen[cnk.id]; ok {
+		if sha != cnk.buf.Hash() {
+			return url, errors.New("resumable upload was requested, but chunks don't match")
+		}
+		w.reporter.add(completedBytes(cnk.buf))
+		w.completeChunk(cnk.id)
+		blog.V(2).Infof("skipping chunk %d", cnk.id)
+		return url, nil
+	}
+	r, err := cnk.buf.Reader()
+	if err != nil {
+		return url, err
+	}
+	mr := newMeteredReader(r, cnk.buf, w.reporter)
+	w.registerChunk(cnk.id, mr)
+	defer w.completeChunk(cnk.id)
+	return uploadPartWithReupload(w.ctx, w.file, w.o.b.r, url, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
 }
 
 func (w *Writer) init() {
@@ -252,6 +257,10 @@ func (w *Writer) init() {
 		w.smux.Unlock()
 		w.o.b.c.addWriter(w)
 		w.csize = w.ChunkSize
+		if w.csize < 0 {
+			w.setErr(fmt.Errorf("b2: ChunkSize must not be negative: %d", w.csize))
+			return
+		}
 		if w.csize == 0 {
 			w.csize = 1e8
 		}
@@ -769,6 +778,9 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		return nb, nil
 	}
 	w.init()
+	if err := w.getErr(); err != nil {
+		return 0, err
+	}
 	if w.progressTotal <= int64(w.csize) {
 		// the magic happens on w.Close()
 		return w.progressTotal, nil
