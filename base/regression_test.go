@@ -38,9 +38,6 @@ func newBaseWire(t *testing.T) (*b2wiretest.Server, *B2, context.Context) {
 	return srv, root, ctx
 }
 
-const bucketJSONWithLock = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":7,` +
-	`"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false}}}`
-
 // A bucket update reply without the file-lock section must not crash.
 func TestRegression_UpdateBucketReplyWithoutFileLockDoesNotPanic(t *testing.T) {
 	srv, root, ctx := newBaseWire(t)

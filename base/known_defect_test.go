@@ -38,6 +38,9 @@ import (
 
 // The handle returned by a successful update carries the server's
 // new revision, so the next update has a conflict check.
+const bucketJSONWithLock = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":7,` +
+	`"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false}}}`
+
 func TestKnownDefect_UpdateReturnsNewRevision(t *testing.T) {
 	srv, root, ctx := newBaseWire(t)
 	srv.Reply("b2_update_bucket", http.StatusOK, bucketJSONWithLock)
