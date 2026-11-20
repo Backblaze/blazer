@@ -121,12 +121,12 @@ func (c *Client) Status() *StatusInfo {
 		RPCs:    make(map[time.Duration]MethodList),
 	}
 
-	for name, w := range c.sWriters {
-		si.Writers[name] = w.status()
+	for w, base := range c.sWriters {
+		si.Writers[uniqueStatusKey(si.Writers, base)] = w.status()
 	}
 
-	for name, r := range c.sReaders {
-		si.Readers[name] = r.status()
+	for r, base := range c.sReaders {
+		si.Readers[uniqueStatusKey(si.Readers, base)] = r.status()
 	}
 
 	for _, c := range c.sMethods {
@@ -153,15 +153,30 @@ func (si *StatusInfo) table() map[string]map[string]int {
 	return r
 }
 
+// uniqueStatusKey returns base, or base with a numeric suffix, so that
+// concurrent transfers sharing an object name each get a distinct status
+// entry instead of overwriting one another in the status map.
+func uniqueStatusKey[V any](m map[string]V, base string) string {
+	if _, ok := m[base]; !ok {
+		return base
+	}
+	for i := 2; ; i++ {
+		k := fmt.Sprintf("%s#%d", base, i)
+		if _, ok := m[k]; !ok {
+			return k
+		}
+	}
+}
+
 func (c *Client) addWriter(w *Writer) {
 	c.slock.Lock()
 	defer c.slock.Unlock()
 
 	if c.sWriters == nil {
-		c.sWriters = make(map[string]*Writer)
+		c.sWriters = make(map[*Writer]string)
 	}
 
-	c.sWriters[fmt.Sprintf("%s/%s", w.o.b.Name(), w.name)] = w
+	c.sWriters[w] = fmt.Sprintf("%s/%s", w.o.b.Name(), w.name)
 }
 
 func (c *Client) removeWriter(w *Writer) {
@@ -172,7 +187,7 @@ func (c *Client) removeWriter(w *Writer) {
 		return
 	}
 
-	delete(c.sWriters, fmt.Sprintf("%s/%s", w.o.b.Name(), w.name))
+	delete(c.sWriters, w)
 }
 
 func (c *Client) addReader(r *Reader) {
@@ -180,10 +195,10 @@ func (c *Client) addReader(r *Reader) {
 	defer c.slock.Unlock()
 
 	if c.sReaders == nil {
-		c.sReaders = make(map[string]*Reader)
+		c.sReaders = make(map[*Reader]string)
 	}
 
-	c.sReaders[fmt.Sprintf("%s/%s", r.o.b.Name(), r.name)] = r
+	c.sReaders[r] = fmt.Sprintf("%s/%s", r.o.b.Name(), r.name)
 }
 
 func (c *Client) removeReader(r *Reader) {
@@ -194,7 +209,7 @@ func (c *Client) removeReader(r *Reader) {
 		return
 	}
 
-	delete(c.sReaders, fmt.Sprintf("%s/%s", r.o.b.Name(), r.name))
+	delete(c.sReaders, r)
 }
 
 var (
