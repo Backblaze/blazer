@@ -80,6 +80,46 @@ func TestReadWriteLive(t *testing.T) {
 	}
 }
 
+func TestReaderPinsVersionLive(t *testing.T) {
+	bucket, done := startLiveTest(context.Background(), t)
+	defer done()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	const name = "pinned-version"
+	old := bucket.Object(name)
+	write := func(object *Object, body string) {
+		t.Helper()
+		writer := object.NewWriter(ctx)
+		if _, err := io.WriteString(writer, body); err != nil {
+			_ = writer.Close()
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(old, "AAAAAAAA")
+	reader := bucket.Object(name).NewReader(ctx)
+	reader.ChunkSize, reader.ConcurrentDownloads = 4, 1
+	defer func() { _ = reader.Close() }()
+	first := make([]byte, 4)
+	if _, err := io.ReadFull(reader, first); err != nil || string(first) != "AAAA" {
+		t.Fatalf("first chunk = %q, %v; want AAAA, nil", first, err)
+	}
+	write(bucket.Object(name), "BBBBBBBB")
+	rest, err := io.ReadAll(reader)
+	if err != nil || string(rest) != "AAAA" {
+		t.Fatalf("remaining old version = %q, %v; want AAAA, nil", rest, err)
+	}
+	historical := old.NewReader(ctx)
+	historical.ChunkSize, historical.ConcurrentDownloads = 3, 3
+	defer func() { _ = historical.Close() }()
+	got, err := io.ReadAll(historical)
+	if err != nil || string(got) != "AAAAAAAA" {
+		t.Fatalf("historical handle = %q, %v; want AAAAAAAA, nil", got, err)
+	}
+}
+
 func TestReaderFromLive(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)

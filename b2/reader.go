@@ -36,7 +36,8 @@ var errNoMoreContent = errors.New("416: out of content")
 // With the backoff below that is about two minutes of waiting in total.
 const maxShortReadAttempts = 21
 
-// Reader reads files from B2.
+// Reader reads one file version from B2. An already resolved Object keeps its
+// version; otherwise the first download response pins the version for all chunks.
 type Reader struct {
 	// ConcurrentDownloads is the number of simultaneous downloads to pull from
 	// B2.  Values greater than one will cause B2 to make multiple HTTP requests
@@ -74,6 +75,9 @@ type Reader struct {
 	chrid      int   // chunks read
 	chbuf      chan *rchunk
 	init       sync.Once
+	pinReady   chan struct{}
+	fileID     string
+	pinErr     error
 	chunks     map[int]*rchunk
 	vrfy       hash.Hash
 	readOffEnd bool
@@ -131,6 +135,36 @@ func (r *Reader) getErr() error {
 	return r.err
 }
 
+func (r *Reader) downloadChunk(offset, size int64, pin bool) (beFileReaderInterface, error) {
+	// The first allocated chunk resolves by name before other chunks proceed.
+	// Choosing the first caller here instead could pin a speculative EOF probe.
+	if pin {
+		if r.fileID == "" {
+			first, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false, r.ssec)
+			if err == nil {
+				r.fileID = first.id()
+				if r.fileID == "" {
+					_ = first.Close()
+					err = errors.New("b2: download response has no file ID to pin")
+				}
+			}
+			r.pinErr = err
+			close(r.pinReady)
+			return first, err
+		}
+		close(r.pinReady)
+	}
+	select {
+	case <-r.pinReady:
+	case <-r.ctx.Done():
+		return nil, r.ctx.Err()
+	}
+	if r.pinErr != nil {
+		return nil, r.pinErr
+	}
+	return r.o.b.b.downloadFileByID(r.ctx, r.fileID, offset, size, false, r.ssec)
+}
+
 func (r *Reader) thread() {
 	r.wg.Add(1)
 	go func() {
@@ -153,6 +187,10 @@ func (r *Reader) thread() {
 			}
 			chunkID := r.chwid
 			r.chwid++
+			pin := r.pinReady == nil
+			if pin {
+				r.pinReady = make(chan struct{})
+			}
 			offset := int64(chunkID)*int64(r.csize) + r.offset
 			size := int64(r.csize)
 			if r.bounded {
@@ -167,7 +205,8 @@ func (r *Reader) thread() {
 			var attempts int
 			var reported int64
 		redo:
-			fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, offset, size, false, r.ssec)
+			fr, err := r.downloadChunk(offset, size, pin)
+			pin = false
 			if err == errNoMoreContent {
 				// this read generated a 416 so we are entirely past the end of the object
 				r.rmux.Lock()
@@ -257,14 +296,25 @@ func (r *Reader) curChunk() (*rchunk, error) {
 
 func (r *Reader) initFunc() {
 	r.vrfy = sha1.New()
+	if r.o.f != nil {
+		r.fileID = r.o.f.id()
+	}
 	if r.Progress != nil && r.length > 0 {
 		// A range length is only an upper bound: it may extend past EOF.
 		// HEAD uses the same download authorization as GET, and its content
 		// length lets progress report an exact total without listing files.
 		r.progressTotal = -1
-		if fr, err := r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true, r.ssec); err == nil {
+		var fr beFileReaderInterface
+		var err error
+		if r.fileID != "" {
+			fr, err = r.o.b.b.downloadFileByID(r.ctx, r.fileID, 0, 0, true, r.ssec)
+		} else {
+			fr, err = r.o.b.b.downloadFileByName(r.ctx, r.name, 0, 0, true, r.ssec)
+		}
+		if err == nil {
 			size, _, _, _ := fr.stats()
 			if err := fr.Close(); err == nil {
+				r.fileID = fr.id()
 				available := size - r.offset
 				if available < 0 {
 					available = 0
@@ -345,8 +395,8 @@ func (r *Reader) status() *ReaderStatus {
 		Progress: make([]float64, len(r.smap)),
 	}
 
-	for i := 1; i <= len(r.smap); i++ {
-		rs.Progress[i-1] = r.smap[i].done()
+	for i := 0; i < len(r.smap); i++ {
+		rs.Progress[i] = r.smap[i].done()
 	}
 
 	return rs

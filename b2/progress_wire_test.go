@@ -79,7 +79,7 @@ func newProgressWire(t *testing.T) (*progressWire, *Bucket) {
 			w.objects[name] = append([]byte(nil), data...)
 			w.mu.Unlock()
 			_, _ = fmt.Fprintf(rw, `{"fileId":%q,"fileName":%q,"action":"upload","contentLength":%d,"contentSha1":"none","contentType":"application/octet-stream","fileInfo":{},"uploadTimestamp":1}`, "id-"+name, name, len(data))
-		case strings.HasPrefix(r.URL.Path, "/file/n/"):
+		case strings.HasPrefix(r.URL.Path, "/file/n/"), strings.HasSuffix(r.URL.Path, "/b2_download_file_by_id"):
 			w.download(t, rw, r)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -101,6 +101,9 @@ func newProgressWire(t *testing.T) (*progressWire, *Bucket) {
 
 func (w *progressWire) download(t *testing.T, rw http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/file/n/")
+	if strings.HasSuffix(r.URL.Path, "/b2_download_file_by_id") {
+		name = strings.TrimPrefix(r.URL.Query().Get("fileId"), "id-")
+	}
 	w.mu.Lock()
 	data := append([]byte(nil), w.objects[name]...)
 	w.mu.Unlock()
@@ -291,7 +294,7 @@ func TestProgressNewClientWire(t *testing.T) {
 				t.Fatal("downloaded bytes differ")
 			}
 			assertProgressSamples(t, progressSnapshot(&mu, &samples), int64(len(want)), tc.wantTotal, true)
-			requests := wire.requestsFor("/file/n/unknown")
+			requests := append(wire.requestsFor("/file/n/unknown"), wire.requestsFor("/b2api/v4/b2_download_file_by_id")...)
 			if len(requests) == 0 || requests[len(requests)-1].auth != "t" {
 				t.Fatalf("download wire requests = %+v", requests)
 			}
@@ -436,8 +439,20 @@ func TestProgressZeroAndNegativeRangeLengthWire(t *testing.T) {
 		for _, length := range []int64{0, -1} {
 			t.Run(fmt.Sprintf("progress=%t/length=%d", withProgress, length), func(t *testing.T) {
 				srv, bucket := newSHA1WireBucket(t)
-				srv.Handle("progress-length", func(request b2wiretest.Request) b2wiretest.Response {
-					return b2wiretest.RangeDownload("abc", request.Header.Get("Range"))
+				serve := func(request b2wiretest.Request) b2wiretest.Response {
+					response := b2wiretest.RangeDownload("abc", request.Header.Get("Range"))
+					if response.Header == nil {
+						response.Header = make(http.Header)
+					}
+					response.Header.Set("X-Bz-File-Id", "progress-length-id")
+					return response
+				}
+				srv.Handle("progress-length", serve)
+				srv.Handle("b2_download_file_by_id", func(request b2wiretest.Request) b2wiretest.Response {
+					if id := request.Query.Get("fileId"); id != "progress-length-id" {
+						t.Errorf("download ID = %q, want progress-length-id", id)
+					}
+					return serve(request)
 				})
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()

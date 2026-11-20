@@ -106,7 +106,9 @@ func TestLargeFileRangeWithProgressWire(t *testing.T) {
 			srv := b2wiretest.New(t)
 			bucket := newListingWireBucket(t, ctx, srv)
 			srv.StrictReplySequence("big.bin",
-				b2wiretest.Response{Header: http.Header{"Content-Length": {tc.headLength}}},
+				b2wiretest.Response{Header: http.Header{"Content-Length": {tc.headLength}, "X-Bz-File-Id": {"large-file-id"}}},
+			)
+			srv.StrictReplySequence("b2_download_file_by_id",
 				b2wiretest.Response{Status: http.StatusPartialContent, Header: http.Header{
 					"Content-Length": {fmt.Sprint(tc.length)}, "Content-Range": {tc.contentRange},
 				}, Body: tc.body},
@@ -130,9 +132,9 @@ func TestLargeFileRangeWithProgressWire(t *testing.T) {
 				t.Fatalf("range body=%q, want %s", got, tc.body)
 			}
 			assertProgressSamples(t, samples, tc.length, tc.length, false)
-			calls := srv.Calls("big.bin")
-			if len(calls) != 2 || calls[0].Method != http.MethodHead || calls[1].Method != http.MethodGet || calls[1].Header.Get("Range") != tc.byteRange {
-				t.Fatalf("requests=%+v, want HEAD then GET with %s", calls, tc.byteRange)
+			heads, gets := srv.Calls("big.bin"), srv.Calls("b2_download_file_by_id")
+			if len(heads) != 1 || heads[0].Method != http.MethodHead || len(gets) != 1 || gets[0].Method != http.MethodGet || gets[0].Header.Get("Range") != tc.byteRange || gets[0].Query.Get("fileId") != "large-file-id" {
+				t.Fatalf("HEADs=%+v GETs=%+v, want HEAD then pinned GET with %s", heads, gets, tc.byteRange)
 			}
 		})
 	}

@@ -29,8 +29,17 @@ func TestReaderChunkSizeOneAndDefaults(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := newSHA1WireBucket(t)
-			srv.Handle("one-byte", func(req b2wiretest.Request) b2wiretest.Response {
-				return b2wiretest.RangeDownload("abc", req.Header.Get("Range"))
+			serve := func(req b2wiretest.Request) b2wiretest.Response {
+				response := b2wiretest.RangeDownload("abc", req.Header.Get("Range"))
+				response.Header.Set("X-Bz-File-Id", "one-byte-id")
+				return response
+			}
+			srv.Handle("one-byte", serve)
+			srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+				if id := req.Query.Get("fileId"); id != "one-byte-id" {
+					t.Errorf("download ID = %q, want one-byte-id", id)
+				}
+				return serve(req)
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -49,7 +58,7 @@ func TestReaderChunkSizeOneAndDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			var ranges []string
-			for _, req := range srv.Calls("one-byte") {
+			for _, req := range append(srv.Calls("one-byte"), srv.Calls("b2_download_file_by_id")...) {
 				if req.Method != http.MethodGet {
 					t.Fatalf("callback-free read made a %s request, want only GET", req.Method)
 				}

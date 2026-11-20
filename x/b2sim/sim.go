@@ -6,7 +6,7 @@
 // a non-2xx response; they never silently succeed.
 // With valid simulator authorization, b2_hide_file, b2_list_unfinished_large_files
 // (so Writer.Resume), b2_list_parts, b2_copy_file, b2_copy_part (so Copy and
-// Compose with copied parts), b2_download_file_by_id, b2_get_download_authorization,
+// Compose with copied parts), b2_get_download_authorization,
 // b2_get_bucket_notification_rules, b2_set_bucket_notification_rules,
 // b2_update_file_retention, b2_update_file_legal_hold, b2_create_key (v4),
 // b2_list_keys, and b2_delete_key return HTTP 501 unsupported_operation.
@@ -289,7 +289,7 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		operation = "b2_download_file_by_name"
 	}
 	s.calls[operation]++
-	if strings.HasPrefix(path, "/file/") {
+	if strings.HasPrefix(path, "/file/") || path == "/b2api/v4/b2_download_file_by_id" {
 		return s.download(req)
 	}
 	if strings.HasPrefix(path, "/upload/file/") {
@@ -692,21 +692,32 @@ func (s *Simulator) download(req *http.Request) (*http.Response, error) {
 	if (req.Method != http.MethodGet && req.Method != http.MethodHead) || req.Header.Get("Authorization") != "b2sim-token" {
 		return failure(req, 401, "bad_auth_token", "download authorization required")
 	}
-	parts := strings.SplitN(strings.TrimPrefix(req.URL.EscapedPath(), "/file/"), "/", 2)
-	if len(parts) != 2 {
-		return failure(req, 404, "not_found", "file not found")
-	}
-	name, err := url.QueryUnescape(parts[1])
-	if err != nil {
-		return failure(req, 400, "bad_request", "invalid file name")
-	}
 	var f *version
-	for _, b := range s.buckets {
-		if b.name == parts[0] {
-			for i := len(b.versions) - 1; i >= 0; i-- {
-				if b.versions[i].name == name {
-					f = b.versions[i]
-					break
+	if req.URL.Path == "/b2api/v4/b2_download_file_by_id" {
+		id := req.URL.Query().Get("fileId")
+		for _, b := range s.buckets {
+			for _, v := range b.versions {
+				if v.id == id {
+					f = v
+				}
+			}
+		}
+	} else {
+		parts := strings.SplitN(strings.TrimPrefix(req.URL.EscapedPath(), "/file/"), "/", 2)
+		if len(parts) != 2 {
+			return failure(req, 404, "not_found", "file not found")
+		}
+		name, err := url.QueryUnescape(parts[1])
+		if err != nil {
+			return failure(req, 400, "bad_request", "invalid file name")
+		}
+		for _, b := range s.buckets {
+			if b.name == parts[0] {
+				for i := len(b.versions) - 1; i >= 0; i-- {
+					if b.versions[i].name == name {
+						f = b.versions[i]
+						break
+					}
 				}
 			}
 		}

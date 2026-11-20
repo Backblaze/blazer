@@ -60,7 +60,7 @@ func (w *sseB2Wire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	recorded := sseB2WireRequest{method: r.Method, path: r.URL.Path, headers: r.Header.Clone()}
-	if strings.HasPrefix(r.URL.Path, "/b2api/") {
+	if strings.HasPrefix(r.URL.Path, "/b2api/") && r.Method == http.MethodPost {
 		recorded.body = map[string]any{}
 		if err := json.NewDecoder(r.Body).Decode(&recorded.body); err != nil {
 			w.t.Errorf("decode %s: %v", r.URL.Path, err)
@@ -119,7 +119,7 @@ func (w *sseB2Wire) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(rw, `{}`)
 	case strings.HasSuffix(r.URL.Path, "/b2_finish_large_file"):
 		_, _ = fmt.Fprint(rw, `{"fileId":"large","fileName":"large","action":"upload"}`)
-	case strings.HasPrefix(r.URL.Path, "/file/bucket/"):
+	case strings.HasPrefix(r.URL.Path, "/file/bucket/"), strings.HasSuffix(r.URL.Path, "/b2_download_file_by_id"):
 		w.serveDownload(rw, r)
 	default:
 		w.t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
@@ -153,6 +153,14 @@ func (w *sseB2Wire) fileJSON(name string) map[string]any {
 
 func (w *sseB2Wire) serveDownload(rw http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/file/bucket/")
+	if strings.HasSuffix(r.URL.Path, "/b2_download_file_by_id") {
+		var err error
+		name, err = url.QueryUnescape(strings.TrimPrefix(r.URL.Query().Get("fileId"), "id-"))
+		if err != nil {
+			w.t.Errorf("decode download file ID: %v", err)
+			return
+		}
+	}
 	w.mu.Lock()
 	data := append([]byte(nil), w.objects[name]...)
 	w.mu.Unlock()
