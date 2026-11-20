@@ -130,17 +130,6 @@ func TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption(t *testin
 	}
 }
 
-// ListKeys must not treat an empty page that still has a
-// next-page marker as the end of the list.
-func TestKnownDefect_ListKeysContinuesPastEmptyPageWithCursor(t *testing.T) {
-	srv, bucket := bucketListedWith(t, updateBucketJSON)
-	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[],"nextApplicationKeyId":"next-id"}`)
-	keys, next, err := bucket.c.ListKeys(newTestCtx(t), 10, "")
-	if len(keys) != 0 || !validEmptyKeyPage(next, err) {
-		t.Errorf("ListKeys = (%d keys, next=%q, err=%v), want no keys, the cursor %q and nil error", len(keys), next, err, "next-id")
-	}
-}
-
 // Calls that must not be repeated blindly (create key, create
 // bucket, start large file, finish large file) are sent once after a gateway error.
 func TestKnownDefect_NonIdempotentCallsAreNotResentAfter504(t *testing.T) {

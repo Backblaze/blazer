@@ -171,6 +171,42 @@ func TestListSendsPrefixAndCursorOnEveryPage(t *testing.T) {
 	}
 }
 
+// A version cursor can identify the next folder by name without a file ID.
+func TestListVersionsContinuesWithNameOnlyCursor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := b2wiretest.New(t)
+	const call = "b2_list_file_versions"
+	pages := [2]string{
+		`{"files":[{"fileName":"logs/a","fileId":"id-a","action":"upload"}],"nextFileName":"logs/sub/","nextFileId":null}`,
+		`{"files":[{"fileName":"logs/sub/","fileId":null,"action":"folder"},{"fileName":"logs/z","fileId":"id-z","action":"upload"}],"nextFileName":null,"nextFileId":null}`,
+	}
+	srv.Handle(call, listingPages(pages, map[string]string{"startFileName": "logs/sub/"}))
+	bucket := newListingWireBucket(t, ctx, srv)
+	iter := bucket.List(ctx, ListHidden(), ListPrefix("logs/"), ListDelimiter("/"), ListPageSize(2))
+	var names []string
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if want := []string{"logs/a", "logs/z"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("names = %q, want %q", names, want)
+	}
+	calls := srv.Calls(call)
+	if len(calls) != 2 {
+		t.Fatalf("%s requests = %d, want 2", call, len(calls))
+	}
+	b2wiretest.AssertNoJSON(t, calls[0], "startFileName")
+	b2wiretest.AssertJSON(t, calls[1], "startFileName", "logs/sub/")
+	for _, call := range calls {
+		b2wiretest.AssertNoJSON(t, call, "startFileId")
+		b2wiretest.AssertJSON(t, call, "prefix", "logs/")
+		b2wiretest.AssertJSON(t, call, "delimiter", "/")
+	}
+}
+
 // Listing unfinished uploads with a name prefix must only return
 // uploads that match the prefix.
 func TestRegression_ListUnfinishedHonoursPrefix(t *testing.T) {
