@@ -27,17 +27,19 @@ func TestNewBucketRetentionUpdateDenied(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		deleteStatus int
+		deleteBody   string
 		wantBucket   bool
 	}{
-		{name: "cleanup succeeds", deleteStatus: http.StatusOK},
-		{name: "cleanup denied", deleteStatus: http.StatusForbidden, wantBucket: true},
+		{name: "cleanup succeeds", deleteStatus: http.StatusOK, deleteBody: `{"bucketId":"bid","bucketName":"n"}`},
+		{name: "already absent", deleteStatus: http.StatusBadRequest, deleteBody: `{"status":400,"code":"bad_request","message":"Bucket n does not exist"}`},
+		{name: "cleanup denied", deleteStatus: http.StatusForbidden, deleteBody: `{"status":403,"code":"access_denied","message":"delete denied"}`, wantBucket: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := b2wiretest.New(t)
 			srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
 			srv.Reply("b2_create_bucket", http.StatusOK, `{"bucketId":"bid","bucketName":"n","fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":true,"defaultRetention":{"mode":null,"period":null}}}}`)
 			srv.Reply("b2_update_bucket", http.StatusForbidden, `{"status":403,"code":"access_denied","message":"retention denied"}`)
-			srv.Reply("b2_delete_bucket", tc.deleteStatus, `{"status":403,"code":"access_denied","message":"delete denied"}`)
+			srv.Reply("b2_delete_bucket", tc.deleteStatus, tc.deleteBody)
 			ctx := context.Background()
 			client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 			if err != nil {
