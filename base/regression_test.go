@@ -80,14 +80,15 @@ func TestRegression_UpdateReturnsNewRevision(t *testing.T) {
 	b2wiretest.AssertJSON(t, srv.Last(t, "b2_update_bucket"), "ifRevisionIs", 7)
 }
 
-func TestBucketUpdateDocumentsReturnedRevision(t *testing.T) {
+func methodDocumentation(t *testing.T, typeName, methodName string) string {
+	t.Helper()
 	f, err := parser.ParseFile(token.NewFileSet(), "base.go", nil, parser.ParseComments)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, decl := range f.Decls {
 		method, ok := decl.(*ast.FuncDecl)
-		if !ok || method.Name.Name != "Update" || method.Recv == nil {
+		if !ok || method.Name.Name != methodName || method.Recv == nil {
 			continue
 		}
 		receiver, ok := method.Recv.List[0].Type.(*ast.StarExpr)
@@ -95,18 +96,31 @@ func TestBucketUpdateDocumentsReturnedRevision(t *testing.T) {
 			continue
 		}
 		name, ok := receiver.X.(*ast.Ident)
-		if !ok || name.Name != "Bucket" {
+		if !ok || name.Name != typeName {
 			continue
 		}
-		doc := strings.ToLower(method.Doc.Text())
-		for _, phrase := range []string{"returned bucket", "subsequent updates", "revision"} {
-			if !strings.Contains(doc, phrase) {
-				t.Errorf("Bucket.Update documentation must explain %q; got %q", phrase, doc)
-			}
-		}
-		return
+		return strings.ToLower(strings.Join(strings.Fields(method.Doc.Text()), " "))
 	}
-	t.Fatal("Bucket.Update not found")
+	t.Fatalf("%s.%s not found", typeName, methodName)
+	return ""
+}
+
+func TestBucketUpdateDocumentsReturnedRevision(t *testing.T) {
+	doc := methodDocumentation(t, "Bucket", "Update")
+	for _, phrase := range []string{"returned bucket", "subsequent updates", "revision", "on success", "nil", "error"} {
+		if !strings.Contains(doc, phrase) {
+			t.Errorf("Bucket.Update documentation must explain %q; got %q", phrase, doc)
+		}
+	}
+}
+
+func TestUploadPartDocumentsStreamedSize(t *testing.T) {
+	doc := methodDocumentation(t, "FileChunk", "UploadPart")
+	for _, phrase := range []string{"hex_digits_at_end", "40", "payload"} {
+		if !strings.Contains(doc, phrase) {
+			t.Errorf("FileChunk.UploadPart documentation must explain %q; got %q", phrase, doc)
+		}
+	}
 }
 
 // The size reported for a large file must not include the 40-byte

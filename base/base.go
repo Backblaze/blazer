@@ -941,9 +941,10 @@ type Bucket struct {
 	ReplicationConfigurationUnreadable bool
 }
 
-// Update wraps b2_update_bucket. It returns a new Bucket with the revision from
-// the response and does not update the receiver. Use the returned Bucket for
-// subsequent updates so their revision-conflict checks use the latest revision.
+// Update wraps b2_update_bucket. On success, it returns a new Bucket with the
+// revision from the response and does not update the receiver. For subsequent
+// updates, use the returned Bucket so revision-conflict checks use the latest
+// revision. On failure, it returns nil and the request error.
 func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	state := b.b2.snapshot()
 	// Only a non-nil list is sent: nil leaves lifecycle rules unchanged, and an
@@ -1575,13 +1576,15 @@ func (fc *FileChunk) Reload(ctx context.Context) error {
 	return nil
 }
 
-// UploadPart wraps b2_upload_part.
+// UploadPart wraps b2_upload_part. When sha1 is "hex_digits_at_end", size and
+// the returned byte count include the 40-byte SHA-1 trailer; the finished
+// large-file size counts only payload bytes.
 func (fc *FileChunk) UploadPart(ctx context.Context, r io.Reader, sha1 string, size, index int) (int, error) {
 	return fc.UploadPartWithSSEC(ctx, r, sha1, size, index, nil)
 }
 
-// UploadPartWithSSEC wraps b2_upload_part and repeats the SSE-C headers selected
-// by b2_start_large_file.
+// UploadPartWithSSEC works like UploadPart and repeats the SSE-C headers
+// selected by b2_start_large_file.
 func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 string, size, index int, sse *b2types.ServerSideEncryption) (int, error) {
 	previousSize, err := fc.file.previousPartSize(ctx, index)
 	if err != nil {
