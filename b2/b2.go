@@ -529,7 +529,7 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 		if err := bucket.Update(ctx, &BucketAttrs{DefaultRetention: attrs.DefaultRetention}); err != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if cleanupErr := bucket.Delete(cleanupCtx); cleanupErr != nil {
+			if cleanupErr := bucket.Delete(cleanupCtx); cleanupErr != nil && !IsNotExist(cleanupErr) {
 				return bucket, err
 			}
 			return nil, err
