@@ -1168,6 +1168,25 @@ func TestListUnfinishedLargeFiles(t *testing.T) {
 	if want := []string{largeFileName}; !reflect.DeepEqual(names, want) {
 		t.Errorf("ListUnfinishedLargeFiles: got %q, want %q", names, want)
 	}
+	for _, tc := range []struct {
+		prefix string
+		want   []string
+	}{
+		{largeFileName, []string{largeFileName}},
+		{largeFileName + "-nonmatching", nil},
+	} {
+		iter := bucket.List(ctx, ListUnfinished(), ListPrefix(tc.prefix))
+		var got []string
+		for iter.Next() {
+			got = append(got, iter.Object().Name())
+		}
+		if err := iter.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("ListUnfinished with prefix %q: got %q, want %q", tc.prefix, got, tc.want)
+		}
+	}
 }
 
 func TestReauthPreservesOptions(t *testing.T) {

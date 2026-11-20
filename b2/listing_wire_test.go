@@ -171,9 +171,47 @@ func TestListSendsPrefixAndCursorOnEveryPage(t *testing.T) {
 	}
 }
 
+// Listing unfinished uploads with a name prefix must only return
+// uploads that match the prefix.
+func TestRegression_ListUnfinishedHonoursPrefix(t *testing.T) {
+	srv := b2wiretest.New(t)
+	bucket := newListingWireBucket(t, newTestCtx(t), srv)
+	all := []string{"logs/a", "other/b", "logs/c", "tmp/d"}
+	srv.Handle("b2_list_unfinished_large_files", func(r b2wiretest.Request) b2wiretest.Response {
+		prefix, _ := r.JSON["namePrefix"].(string) // a server honours the B2 namePrefix parameter
+		var files []string
+		for _, n := range all {
+			if strings.HasPrefix(n, prefix) {
+				files = append(files, `{"fileName":"`+n+`","fileId":"id-`+n+`","action":"start"}`)
+			}
+		}
+		return b2wiretest.Response{Body: `{"files":[` + strings.Join(files, ",") + `],"nextFileId":null}`}
+	})
+	iter := bucket.List(newTestCtx(t), ListUnfinished(), ListPrefix("logs/"))
+	var got []string
+	for iter.Next() {
+		got = append(got, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture holds logs/a, logs/c, other/b and tmp/d; exactly the two
+	// matching uploads must come back (the fake server lists in fixture
+	// order, so the order is fixed), and the prefix must reach the wire.
+	if want := []string{"logs/a", "logs/c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ListUnfinished with ListPrefix(\"logs/\") returned %q, want %q", got, want)
+	}
+	calls := srv.Calls("b2_list_unfinished_large_files")
+	if len(calls) == 0 {
+		t.Fatal("no b2_list_unfinished_large_files request was sent")
+	}
+	for _, c := range calls {
+		b2wiretest.AssertJSON(t, c, "namePrefix", "logs/")
+	}
+}
+
 func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
 	// https://www.backblaze.com/apidocs/b2-list-unfinished-large-files
-	// Add the prefix assertion when #184 makes ListUnfinished send it.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv := b2wiretest.New(t)
@@ -184,7 +222,7 @@ func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
 	}
 	srv.Handle(call, listingPages(pages, map[string]string{"startFileId": "id-c"}))
 	bucket := newListingWireBucket(t, ctx, srv)
-	iter := bucket.List(ctx, ListUnfinished(), ListPageSize(2))
+	iter := bucket.List(ctx, ListUnfinished(), ListPrefix("logs/"), ListPageSize(2))
 	var names []string
 	for iter.Next() {
 		names = append(names, iter.Object().Name())
@@ -202,6 +240,7 @@ func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
 	for _, r := range calls {
 		b2wiretest.AssertJSON(t, r, "bucketId", "bid")
 		b2wiretest.AssertJSON(t, r, "maxFileCount", 2)
+		b2wiretest.AssertJSON(t, r, "namePrefix", "logs/")
 	}
 	b2wiretest.AssertNoJSON(t, calls[0], "startFileId")
 	b2wiretest.AssertJSON(t, calls[1], "startFileId", "id-c")

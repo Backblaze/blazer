@@ -30,7 +30,6 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -128,44 +127,6 @@ func TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption(t *testin
 	}
 	if v, ok := srv.Last(t, "b2_update_bucket").JSON["defaultServerSideEncryption"]; ok {
 		t.Errorf("info-only update re-sent the cached defaultServerSideEncryption=%v", v)
-	}
-}
-
-// Listing unfinished uploads with a name prefix must only return
-// uploads that match the prefix.
-func TestKnownDefect_ListUnfinishedHonoursPrefix(t *testing.T) {
-	srv, bucket := bucketListedWith(t, updateBucketJSON)
-	all := []string{"logs/a", "other/b", "logs/c", "tmp/d"}
-	srv.Handle("b2_list_unfinished_large_files", func(r b2wiretest.Request) b2wiretest.Response {
-		prefix, _ := r.JSON["namePrefix"].(string) // a server honours the B2 namePrefix parameter
-		var files []string
-		for _, n := range all {
-			if strings.HasPrefix(n, prefix) {
-				files = append(files, `{"fileName":"`+n+`","fileId":"id-`+n+`","action":"start"}`)
-			}
-		}
-		return b2wiretest.Response{Body: `{"files":[` + strings.Join(files, ",") + `],"nextFileId":null}`}
-	})
-	iter := bucket.List(newTestCtx(t), ListUnfinished(), ListPrefix("logs/"))
-	var got []string
-	for iter.Next() {
-		got = append(got, iter.Object().Name())
-	}
-	if err := iter.Err(); err != nil {
-		t.Fatal(err)
-	}
-	// The fixture holds logs/a, logs/c, other/b and tmp/d; exactly the two
-	// matching uploads must come back (the fake server lists in fixture
-	// order, so the order is fixed), and the prefix must reach the wire.
-	if want := []string{"logs/a", "logs/c"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("ListUnfinished with ListPrefix(\"logs/\") returned %q, want %q", got, want)
-	}
-	calls := srv.Calls("b2_list_unfinished_large_files")
-	if len(calls) == 0 {
-		t.Fatal("no b2_list_unfinished_large_files request was sent")
-	}
-	for _, c := range calls {
-		b2wiretest.AssertJSON(t, c, "namePrefix", "logs/")
 	}
 }
 
