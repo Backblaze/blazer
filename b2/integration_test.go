@@ -783,6 +783,42 @@ func TestBucketClearCORSLive(t *testing.T) {
 	}
 }
 
+func TestNewBucketDefaultRetentionLive(t *testing.T) {
+	id, key := os.Getenv(apiID), os.Getenv(apiKey)
+	if id == "" || key == "" {
+		t.Skip("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := NewClient(ctx, id, key, endpointOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, fmt.Sprintf("%s-default-retention-%s", id, uniq), &BucketAttrs{
+		Type: Private, FileLockEnabled: true,
+		DefaultRetention: &Retention{Mode: "governance", Period: &RetentionPeriod{Duration: 7, Unit: "days"}},
+	})
+	if bucket != nil {
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cleanupCancel()
+			if err := bucket.Delete(cleanupCtx); err != nil {
+				t.Errorf("delete scratch bucket: %v", err)
+			}
+		}()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := bucket.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.DefaultRetention == nil || attrs.DefaultRetention.Mode != "governance" || attrs.DefaultRetention.Period == nil || attrs.DefaultRetention.Period.Duration != 7 || attrs.DefaultRetention.Period.Unit != "days" {
+		t.Fatalf("default retention = %+v, want governance for 7 days", attrs.DefaultRetention)
+	}
+}
+
 func TestNewBucket(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)

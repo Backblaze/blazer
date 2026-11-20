@@ -26,7 +26,7 @@ import (
 // Promotes TestKnownDefect_NewBucketDoesNotIgnoreDefaultRetention into the regular suite.
 // B2 sets default retention through b2_update_bucket.
 // https://www.backblaze.com/apidocs/b2-update-bucket
-func TestFindingC47_NewBucketHonorsDefaultRetention(t *testing.T) {
+func TestRegression_NewBucketDoesNotIgnoreDefaultRetention(t *testing.T) {
 	const without = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":true,"defaultRetention":{"mode":null,"period":null}}}}`
 	const with = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":true,"defaultRetention":{"mode":"governance","period":{"duration":7,"unit":"days"}}}}}`
 	srv := b2wiretest.New(t)

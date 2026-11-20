@@ -61,6 +61,30 @@ func TestNewBucketRetentionUpdateDenied(t *testing.T) {
 	}
 }
 
+func TestNewBucketRetentionCleanupAfterCancellation(t *testing.T) {
+	srv := b2wiretest.New(t)
+	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+	srv.Reply("b2_create_bucket", http.StatusOK, `{"bucketId":"bid","bucketName":"n","fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":true,"defaultRetention":{"mode":null,"period":null}}}}`)
+	srv.Reply("b2_delete_bucket", http.StatusOK, `{}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv.Handle("b2_update_bucket", func(b2wiretest.Request) b2wiretest.Response {
+		cancel()
+		return b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"retention denied"}`}
+	})
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, "n", &BucketAttrs{Type: Private, FileLockEnabled: true, DefaultRetention: &Retention{Mode: "governance", Period: &RetentionPeriod{Duration: 7, Unit: "days"}}})
+	if err == nil || bucket != nil {
+		t.Errorf("NewBucket returned bucket=%v, err=%v; want nil bucket and an error", bucket, err)
+	}
+	if got := len(srv.Calls("b2_delete_bucket")); got != 1 {
+		t.Errorf("cleanup calls after cancellation = %d, want 1", got)
+	}
+}
+
 func TestNewBucketRetentionDoesNotUpdateExistingBucket(t *testing.T) {
 	srv := b2wiretest.New(t)
 	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate"}]}`)
