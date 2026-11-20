@@ -139,18 +139,15 @@ func TestObjectAuthURLWire(t *testing.T) {
 
 // An empty key page with a cursor is not the end of the listing.
 func TestRegression_ListKeysContinuesPastEmptyPageWithCursor(t *testing.T) {
-	ctx := newTestCtx(t)
-	srv := b2wiretest.New(t)
-	client := liveOnlyClient(t, srv)
-	srv.ReplySequence("b2_list_keys",
-		b2wiretest.Response{Status: http.StatusOK, Body: `{"keys":[],"nextApplicationKeyId":"next-id"}`},
-		b2wiretest.Response{Status: http.StatusOK, Body: `{"keys":[{"applicationKeyId":"next-id","keyName":"found","capabilities":[]}],"nextApplicationKeyId":null}`},
-	)
-	keys, next, err := client.ListKeys(ctx, 10, "")
-	if len(keys) != 0 || next != "next-id" || err != nil {
-		t.Fatalf("first ListKeys = (%d keys, next=%q, err=%v), want (0, next-id, nil)", len(keys), next, err)
+	srv, bucket := liveOnlyBucket(t)
+	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[],"nextApplicationKeyId":"next-id"}`)
+	keys, next, err := bucket.c.ListKeys(newTestCtx(t), 10, "")
+	if len(keys) != 0 || !validEmptyKeyPage(next, err) {
+		t.Errorf("ListKeys = (%d keys, next=%q, err=%v), want no keys, the cursor %q and nil error", len(keys), next, err, "next-id")
+		return
 	}
-	keys, next, err = client.ListKeys(ctx, 10, next)
+	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[{"applicationKeyId":"next-id","keyName":"found","capabilities":[]}],"nextApplicationKeyId":null}`)
+	keys, next, err = bucket.c.ListKeys(newTestCtx(t), 10, next)
 	if len(keys) != 1 || keys[0].ID() != "next-id" || next != "" || err != io.EOF {
 		t.Fatalf("second ListKeys = (%v, next=%q, err=%v), want key next-id, empty cursor, io.EOF", keys, next, err)
 	}
