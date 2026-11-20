@@ -142,7 +142,8 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 // are not available. Matching files are skipped, and cloud objects are never
 // deleted. Symlinks below the root are not followed; a
 // symlinked root is followed. Changed large files are re-uploaded in full,
-// without resuming a previous upload. Options must not be nil. Object names
+// without resuming a previous upload. A nil option returns a nil result and an
+// error before accessing the local root or making B2 requests. Object names
 // longer than 1024 bytes are per-file failures, including in a dry run.
 // Per-file failures are returned in Result.Failed along with an aggregate
 // error; other files continue.

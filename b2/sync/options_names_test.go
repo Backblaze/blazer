@@ -17,6 +17,9 @@ package sync
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"slices"
@@ -43,7 +46,8 @@ func TestSyncRejectsNilOptionsBeforeRequests(t *testing.T) {
 					t.Errorf("Sync panicked for a nil option: %v", value)
 				}
 			}()
-			result, err := Sync(context.Background(), bucket, "p", t.TempDir(), tc.opts...)
+			missingRoot := filepath.Join(t.TempDir(), "missing")
+			result, err := Sync(context.Background(), bucket, "p", missingRoot, tc.opts...)
 			if result != nil || err == nil || !strings.Contains(err.Error(), "nil option") {
 				t.Errorf("Sync = (%+v, %v), want nil result and nil-option error", result, err)
 			}
@@ -54,6 +58,29 @@ func TestSyncRejectsNilOptionsBeforeRequests(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncNilOptionDocumentation(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "sync.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Recv != nil || function.Name.Name != "Sync" {
+			continue
+		}
+		if function.Doc == nil {
+			t.Fatal("Sync has no documentation")
+		}
+		doc := strings.Join(strings.Fields(function.Doc.Text()), " ")
+		want := "A nil option returns a nil result and an error before accessing the local root or making B2 requests."
+		if !strings.Contains(doc, want) {
+			t.Fatalf("Sync documentation does not state the nil-option contract: want %q", want)
+		}
+		return
+	}
+	t.Fatal("Sync declaration not found")
 }
 
 func TestSyncObjectNameByteLimit(t *testing.T) {
