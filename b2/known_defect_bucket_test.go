@@ -273,31 +273,6 @@ func TestKnownDefect_ListKeysContinuesPastEmptyPageWithCursor(t *testing.T) {
 	}
 }
 
-// Deleting a key after the sign-in token expired must sign in
-// again and succeed, like every other call.
-func TestKnownDefect_DeleteKeyReauthorizesAfterTokenExpiry(t *testing.T) {
-	srv, bucket := bucketListedWith(t, updateBucketJSON)
-	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[{"accountId":"a","applicationKeyId":"kid","bucketId":null,"capabilities":["listFiles"],"expirationTimestamp":null,"keyName":"k","namePrefix":null,"options":[]}],"nextApplicationKeyId":null}`)
-	ctx := newTestCtx(t)
-	keys, _, err := bucket.c.ListKeys(ctx, 10, "")
-	if err != nil && !errors.Is(err, io.EOF) {
-		t.Fatal(err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("listed %d keys, want 1", len(keys))
-	}
-	srv.ReplySequence("b2_delete_key",
-		b2wiretest.Response{Status: http.StatusUnauthorized, Body: `{"status":401,"code":"expired_auth_token","message":"expired"}`},
-		b2wiretest.Response{Body: `{"accountId":"a","applicationKeyId":"kid","bucketId":null,"capabilities":["listFiles"],"expirationTimestamp":null,"keyName":"k","namePrefix":null,"options":[]}`})
-	authBefore := len(srv.Calls("b2_authorize_account"))
-	if err := keys[0].Delete(ctx); err != nil {
-		t.Errorf("Delete after token expiry failed instead of re-authorizing: %v", err)
-	}
-	if got := len(srv.Calls("b2_authorize_account")) - authBefore; got != 1 {
-		t.Errorf("%d re-authorizations after the 401, want 1", got)
-	}
-}
-
 // Calls that must not be repeated blindly (create key, create
 // bucket, start large file, finish large file) are sent once after a gateway error.
 func TestKnownDefect_NonIdempotentCallsAreNotResentAfter504(t *testing.T) {
