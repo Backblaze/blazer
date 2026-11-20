@@ -1,0 +1,3 @@
+kind: Fixed
+body: Bucket updates now clear CORS rules when given an explicitly empty list.
+time: 2026-11-20T11:45:00-06:00

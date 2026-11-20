@@ -924,6 +924,9 @@ type Bucket struct {
 	rev            int
 	b2             *B2
 
+	// CORSRules are the bucket's rules. Update omits nil, clears the rules for
+	// a non-nil empty slice, and replaces them for a nonempty slice. A listed
+	// bucket can contain an empty slice; set it to nil to leave rules unchanged.
 	CORSRules        []b2types.CORSRule
 	DefaultRetention *b2types.Retention
 	// DefaultServerSideEncryption is the bucket's default encryption for new
@@ -959,6 +962,10 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	if b.Info != nil {
 		info = &b.Info
 	}
+	var corsRules *[]b2types.CORSRule
+	if b.CORSRules != nil {
+		corsRules = &b.CORSRules
+	}
 	b2req := &b2types.UpdateBucketRequest{
 		AccountID: state.accountID,
 		BucketID:  b.ID,
@@ -968,7 +975,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		LifecycleRules: rules,
 		IfRevisionIs:   b.rev,
 
-		CORSRules:                   b.CORSRules,
+		CORSRules:                   corsRules,
 		DefaultRetention:            b.DefaultRetention,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b.DefaultServerSideEncryption),
 		FileLockEnabled:             b.FileLockEnabled,

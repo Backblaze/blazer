@@ -271,7 +271,8 @@ type BucketAttrs struct {
 	// with an empty slice.
 	LifecycleRules []LifecycleRule
 
-	// The initial list (a JSON array) of CORS rules for this bucket.
+	// CORSRules reports or sets the bucket's CORS rules. During Update, nil
+	// leaves the rules unchanged and a non-nil empty slice clears them.
 	// See CORS Rules (https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules) for an overview and the rule structure.
 	CORSRules []CORSRule
 

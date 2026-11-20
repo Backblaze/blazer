@@ -761,6 +761,28 @@ func compare(a, b *BucketAttrs) bool {
 	return reflect.DeepEqual(a.LifecycleRules, b.LifecycleRules)
 }
 
+func TestBucketClearCORSLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	bucket, done := startLiveTest(ctx, t)
+	defer done()
+	rule := CORSRule{Name: "browser", AllowedOrigins: []string{"https://example.com"}, AllowedOperations: []string{"b2_download_file_by_name"}}
+	if err := bucket.Update(ctx, &BucketAttrs{CORSRules: []CORSRule{rule}}); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := bucket.Attrs(ctx)
+	if err != nil || len(attrs.CORSRules) != 1 || attrs.CORSRules[0].Name != "browser" {
+		t.Fatalf("after setting CORS: attrs=%+v, err=%v; want browser rule", attrs, err)
+	}
+	if err := bucket.Update(ctx, &BucketAttrs{CORSRules: []CORSRule{}}); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err = bucket.Attrs(ctx)
+	if err != nil || len(attrs.CORSRules) != 0 {
+		t.Fatalf("after clearing CORS: attrs=%+v, err=%v; want no rules", attrs, err)
+	}
+}
+
 func TestNewBucket(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)

@@ -155,7 +155,7 @@ type UpdateBucketRequest struct {
 	LifecycleRules *[]LifecycleRule `json:"lifecycleRules,omitempty"`
 	IfRevisionIs   int              `json:"ifRevisionIs,omitempty"`
 
-	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
+	CORSRules                   *[]CORSRule               `json:"corsRules,omitempty"`
 	DefaultRetention            *Retention                `json:"defaultRetention,omitempty"`
 	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
 	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`

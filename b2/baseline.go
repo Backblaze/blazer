@@ -291,7 +291,10 @@ func (b *b2Root) listBuckets(ctx context.Context, name string, bucketTypes ...st
 }
 
 func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
-	var out []b2types.CORSRule
+	if rules == nil {
+		return nil
+	}
+	out := make([]b2types.CORSRule, 0, len(rules))
 	for _, rule := range rules {
 		out = append(out, b2types.CORSRule{
 			Name:              rule.Name,
@@ -441,8 +444,11 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	} else {
 		b.b.LifecycleRules = nil
 	}
-	if len(attrs.CORSRules) > 0 {
+	if attrs.CORSRules != nil {
 		b.b.CORSRules = toBaseCORSRules(attrs.CORSRules)
+	} else {
+		// Omit cached rules when the caller did not request a CORS update.
+		b.b.CORSRules = nil
 	}
 
 	// Setting a default retention needs the writeBucketRetentions capability, and
