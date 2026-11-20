@@ -490,6 +490,10 @@ func (c *Client) Bucket(ctx context.Context, name string) (*Bucket, error) {
 // NewBucket returns a bucket.  The bucket is created with the given attributes
 // if it does not already exist.  If attrs is nil, it is created as a private
 // bucket with no info metadata and no lifecycle rules.
+// Default retention on a newly created bucket requires a separate update. If
+// that update fails, NewBucket attempts to delete the new bucket and returns
+// the update error. If deletion also fails, it returns the bucket and error so
+// the caller can handle the remaining bucket. Existing buckets are not updated.
 func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs) (*Bucket, error) {
 	buckets, err := c.backend.listBuckets(ctx, name)
 	if err != nil {
@@ -515,12 +519,23 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if err != nil {
 		return nil, err
 	}
-	return &Bucket{
+	bucket := &Bucket{
 		b:       b,
 		r:       c.backend,
 		c:       c,
 		urlPool: newURLPool(),
-	}, err
+	}
+	if attrs.DefaultRetention != nil {
+		if err := bucket.Update(ctx, &BucketAttrs{DefaultRetention: attrs.DefaultRetention}); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if cleanupErr := bucket.Delete(cleanupCtx); cleanupErr != nil && !IsNotExist(cleanupErr) {
+				return bucket, err
+			}
+			return nil, err
+		}
+	}
+	return bucket, nil
 }
 
 // ListBuckets returns all the available buckets.
