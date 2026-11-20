@@ -1044,7 +1044,9 @@ func (b *beFilePart) size() int64  { return b.b2filePart.size() }
 
 func (b *beKey) del(ctx context.Context) error {
 	f := func() error {
-		return b.k.del(ctx)
+		return withReauth(ctx, b.b2i, func() error {
+			return b.k.del(ctx)
+		})
 	}
 	return withBackoff(ctx, b.b2i, f)
 }
