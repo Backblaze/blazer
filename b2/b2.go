@@ -959,6 +959,9 @@ func (b *Bucket) Reveal(ctx context.Context, name string) error {
 			break
 		}
 	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
 	return b2err{err: fmt.Errorf("%s: not found", name), notFoundErr: true}
 }
 
