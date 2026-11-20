@@ -1,0 +1,3 @@
+kind: Changed
+body: '**Breaking:** NewReader and NewRangeReader on an Object resolved by an upload, listing or Attrs now read that version by ID, even after its name is overwritten. Use a fresh bucket.Object(name) handle to read the latest version. Fresh handles resolve the name once, then use the ID for subsequent chunks and retries; transports must allow b2_download_file_by_id.'
+time: 2026-11-20T17:00:00-06:00

@@ -827,6 +827,11 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 // is negative, the rest of the object is read. With a Progress
 // callback, a finite range reports the available byte count when a HEAD
 // request can determine it; otherwise the progress total is -1.
+//
+// If the Object already identifies a version after an upload, listing or Attrs,
+// the reader downloads that version by ID. Otherwise it resolves the name once
+// and uses that ID for subsequent chunks and retries. Use a fresh
+// bucket.Object(name) handle to read the latest version.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys ...*SSECKey) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	key, err := optionalSSECKey(keys)
@@ -858,14 +863,21 @@ func readerProgressTotal(length int64) int64 {
 // NewReader returns a reader for the given object. Pass an SSE-C key when the
 // object was encrypted with a customer-managed key; the key is not retained by
 // the Object, Bucket or Client.
+//
+// An Object resolved by an upload, listing or Attrs reads that version by ID.
+// Use a fresh bucket.Object(name) handle to read the latest version. A fresh
+// handle resolves the name once, then downloads subsequent chunks and retries
+// by that ID.
 func (o *Object) NewReader(ctx context.Context, keys ...*SSECKey) *Reader {
 	return o.NewRangeReader(ctx, 0, -1, keys...)
 }
 
 // DownloadFileByID returns a reader for a file identified by its B2 file ID.
-// It makes one download request; use Object.NewReader for chunked downloads by
-// file name. Supply an SSE-C key for a customer-key-encrypted version; the key
-// is used only on this request and is not retained.
+// It makes one download request. For chunked downloads, use Object.NewReader,
+// which uses the Object's resolved ID or resolves the name once before using
+// that ID for subsequent chunks and retries. Supply an SSE-C key for a
+// customer-key-encrypted version; the key is used only on this request and
+// is not retained.
 func (b *Bucket) DownloadFileByID(ctx context.Context, id string, keys ...*SSECKey) (io.ReadCloser, error) {
 	key, err := optionalSSECKey(keys)
 	if err != nil {

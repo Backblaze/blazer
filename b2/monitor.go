@@ -105,8 +105,8 @@ type WriterStatus struct {
 
 // ReaderStatus reports the status for each reader.
 type ReaderStatus struct {
-	// Progress is a slice of completion ratios.  The index of a ratio is its
-	// chunk id less one.
+	// Progress is a slice of completion ratios indexed by zero-based chunk ID.
+	// Gaps for chunks awaiting a response are zero; completed chunks are one.
 	Progress []float64
 }
 
