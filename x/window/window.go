@@ -77,7 +77,7 @@ func New(size, resolution time.Duration, r Reducer) *Window {
 func (w *Window) bucket(now time.Time) int {
 	nanos := now.UnixNano()
 	abs := nanos / int64(w.res)
-	return int(abs) % len(w.events)
+	return int(abs % int64(len(w.events)))
 }
 
 // sweep keeps the window valid.  It needs to be called from every method that
@@ -122,7 +122,7 @@ func (w *Window) sweep(now time.Time, diff time.Duration) {
 	// previous sweep and now, including the current bucket but not including the
 	// previous bucket.
 	for i := old + 1; i <= new; i++ {
-		b := int(i) % len(w.events)
+		b := int(i % int64(len(w.events)))
 		w.events[b] = nil
 	}
 }

@@ -138,7 +138,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
       - name: Execute Linux/386 tests
         if: ${{ matrix.goos == 'linux' && matrix.goarch == '386' }}
-        run: go test -count=1 ./base ./b2/...
+        run: go test -count=1 ./base ./b2/... ./x/window
         env:
           CGO_ENABLED: '0'
           GOOS: linux

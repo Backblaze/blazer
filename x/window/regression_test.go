@@ -12,22 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build knowndefect
-
 package window
 
-// Known-defect tests. Each test asserts the correct behaviour and currently
-// fails because of an open defect, so this file is built only with the
-// knowndefect tag and the default "go test" does not run it:
-//
-//	make known-defects
-//
-// When a defect is fixed, move its test into the regular suite (a file without
-// the build tag, for example regression_test.go in this package) and rename
-// TestKnownDefect_X to TestRegression_X.
-
 import (
-	"strconv"
 	"testing"
 	"time"
 )
@@ -35,17 +22,11 @@ import (
 // A time bucket index must be reduced modulo the bucket count in 64-bit
 // arithmetic before converting to int: `int(x) % n` truncates x to 32 bits on
 // 32-bit platforms first and gives a negative (out of range) index for
-// millisecond windows. The defect exists only where int is 32 bits, so the
-// test skips elsewhere; run it with
-//
-//	make known-defects-32bit
-//
+// millisecond windows.
+
 // With three one-millisecond buckets, the absolute bucket 2147483648 (the first
 // that does not fit in int32) belongs in bucket 2147483648 % 3 = 2.
-func TestKnownDefect_BucketIndexReducedBeforeIntConversion(t *testing.T) {
-	if strconv.IntSize != 32 {
-		t.Skipf("int is %d bits; the defect only exists on 32-bit platforms (make known-defects-32bit)", strconv.IntSize)
-	}
+func TestRegression_BucketIndexReducedBeforeIntConversion(t *testing.T) {
 	const abs = int64(1) << 31
 	at := time.Unix(0, abs*int64(time.Millisecond))
 	sum := func(i, j interface{}) interface{} {
