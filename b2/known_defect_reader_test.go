@@ -219,7 +219,7 @@ func TestKnownDefect_ChunkOffsetMultipliedIn64Bit(t *testing.T) {
 func TestKnownDefect_NoChunkWaiterLeftBlockedAfterClose(t *testing.T) {
 	const readers = 1000
 	bucket := blockingDownload(t)
-	before := goroutinesIn("(*Reader).curChunk")
+	before := goroutinesIn(chunkWaiterSymbol)
 	for i := 0; i < readers; i++ {
 		r := newSlowReader(bucket, newTestCtx(t))
 		done := make(chan any, 1)
@@ -228,6 +228,11 @@ func TestKnownDefect_NoChunkWaiterLeftBlockedAfterClose(t *testing.T) {
 		if !awaitCond(func() bool { return newChunkWaiterParked(parked) }) {
 			closeWithin(r, 3*time.Second)
 			t.Fatalf("reader %d: the Read never parked waiting for a chunk", i)
+		}
+		if i == 0 && goroutinesIn(chunkWaiterSymbol) <= before {
+			// The final count would be 0 <= 0 and pass vacuously if the symbol were renamed.
+			closeWithin(r, 3*time.Second)
+			t.Fatalf("goroutine dump does not contain %q while a Read is parked in it; the symbol was renamed and this test would pass vacuously", chunkWaiterSymbol)
 		}
 		if !closeWithin(r, 3*time.Second) {
 			t.Fatalf("reader %d: Close did not return", i)
@@ -242,10 +247,13 @@ func TestKnownDefect_NoChunkWaiterLeftBlockedAfterClose(t *testing.T) {
 		}
 	}
 	var now int
-	if !awaitCond(func() bool { now = goroutinesIn("(*Reader).curChunk"); return now <= before }) {
+	if !awaitCond(func() bool { now = goroutinesIn(chunkWaiterSymbol); return now <= before }) {
 		t.Errorf("%d chunk-waiter goroutine(s) still blocked after %d closed readers (before: %d)", now-before, readers, before)
 	}
 }
+
+// chunkWaiterSymbol is the stack frame whose goroutines the test counts.
+const chunkWaiterSymbol = "(*Reader).curChunk"
 
 func goroutinesIn(fn string) int {
 	buf := make([]byte, 1<<22)
