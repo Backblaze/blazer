@@ -79,7 +79,10 @@ func (g *Group) Mutex(ctx context.Context, name string) *Mutex {
 // first error.  Callers must ensure that this is sufficient for the reader to
 // clean up after itself. If copying fails, OperateStream closes the writer
 // without publishing partial data and attempts to cancel an unfinished large
-// upload. A cancellation failure is included in the returned error.
+// upload. A cancellation failure is included in the returned error. Cleanup
+// uses a fresh context with a 30-second timeout and replaces any client-default
+// b2.WithCancelOnError for these writers; its callbacks are not called. Callers
+// should inspect the returned error to observe cancellation failures.
 func (g *Group) OperateStream(ctx context.Context, name string, f func(io.Reader) (io.Reader, error)) error {
 	for {
 		r, err := g.NewReader(ctx, name)
