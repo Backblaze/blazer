@@ -102,8 +102,10 @@ func (o *ObjectIterator) Next() bool {
 		if o.count == 0 && !o.opts.unfinished {
 			o.count = 100
 		}
-		if o.count < 0 || o.count > 1000 {
+		if o.count < 0 {
 			o.count = 1000
+		} else if o.count > 10000 {
+			o.count = 10000
 		}
 		switch {
 		case o.opts.unfinished:
@@ -219,7 +221,7 @@ func ListDelimiter(delimiter string) ListOption {
 // version listings request 100 objects per page. Unfinished large-file listings
 // omit maxFileCount and use B2's default of 100.
 //
-// The SDK limits object and version listings to 1000 objects, and unfinished
+// The SDK limits object and version listings to 10,000 objects, and unfinished
 // large-file listings to 100.
 func ListPageSize(count int) ListOption {
 	return func(o *objectIteratorOptions) {
