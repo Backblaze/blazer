@@ -766,7 +766,7 @@ func TestBucketClearCORSLive(t *testing.T) {
 	defer cancel()
 	bucket, done := startLiveTest(ctx, t)
 	defer done()
-	rule := CORSRule{Name: "browser", AllowedOrigins: []string{"https://example.com"}, AllowedOperations: []string{"b2_download_file_by_name"}}
+	rule := CORSRule{Name: "browser", AllowedOrigins: []string{"https://example.com"}, AllowedOperations: []string{"b2_download_file_by_name"}, MaxAgeSeconds: 3600}
 	if err := bucket.Update(ctx, &BucketAttrs{CORSRules: []CORSRule{rule}}); err != nil {
 		t.Fatal(err)
 	}
