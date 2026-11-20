@@ -1,0 +1,3 @@
+kind: Fixed
+body: sync.Sync returns an error for a nil Option instead of panicking, before walking local files or making B2 requests.
+time: 2026-11-15T09:38:18.768585+05:30

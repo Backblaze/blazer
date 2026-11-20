@@ -81,6 +81,25 @@ func TestShouldTransfer(t *testing.T) {
 	}
 }
 
+func TestSyncRejectsNilOptions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		opts []Option
+	}{
+		{"only", []Option{nil}},
+		{"first", []Option{nil, WithConcurrency(2)}},
+		{"last", []Option{WithConcurrency(2), nil}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// A nil bucket and missing root ensure validation precedes any I/O.
+			result, err := Sync(context.Background(), nil, "", filepath.Join(t.TempDir(), "missing"), test.opts...)
+			if result != nil || err == nil || !strings.Contains(err.Error(), "nil option") {
+				t.Fatalf("Sync() = (%v, %v), want (nil, nil option error)", result, err)
+			}
+		})
+	}
+}
+
 func TestSyncRejectsConflictingOptions(t *testing.T) {
 	bucket, _ := newSyncWire(t)
 	for _, test := range []struct {
