@@ -93,59 +93,84 @@ func TestReaderStatusPreservesSparseChunkIDs(t *testing.T) {
 	}
 }
 
-func TestReaderStatusWhileFirstResponseIsBlocked(t *testing.T) {
-	srv, bucket := newSHA1WireBucket(t)
-	ctx := newTestCtx(t)
-	firstEntered, release := make(chan struct{}), make(chan struct{})
-	releaseFirst := sync.OnceFunc(func() { close(release) })
-	secondRead := make(chan struct{})
-	reportSecond := sync.OnceFunc(func() { close(secondRead) })
-	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
-		if req.Method == http.MethodHead {
-			return b2wiretest.Response{Header: http.Header{"Content-Length": {"8"}, "X-Bz-File-Id": {"sparse-id"}}}
-		}
-		if req.Header.Get("Range") == "bytes=0-3" {
-			close(firstEntered)
-			<-release
-		}
-		response := b2wiretest.RangeDownload("abcdefgh", req.Header.Get("Range"))
-		response.Header.Set("X-Bz-File-Id", "sparse-id")
-		return response
-	})
-	object := bucket.Object("sparse-status")
-	object.f = bucket.b.file("sparse-id", "sparse-status")
-	reader := object.NewRangeReader(ctx, 0, 8)
-	reader.ChunkSize, reader.ConcurrentDownloads = 4, 2
-	reader.Progress = func(n, _ int64) {
-		if n >= 4 {
-			reportSecond()
-		}
+func TestReaderStatusIncludesAllocatedChunks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader *Reader
+		want   []float64
+	}{
+		{"waiting for first headers", &Reader{chwid: 1}, []float64{0}},
+		{"later headers delayed", &Reader{chwid: 2, smap: map[int]*meteredReader{0: nil}}, []float64{1, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.reader.status().Progress; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("allocated chunk progress = %v, want %v", got, tc.want)
+			}
+		})
 	}
-	t.Cleanup(func() { releaseFirst(); _ = reader.Close() })
-	type result struct {
-		body []byte
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() { body, err := io.ReadAll(reader); done <- result{body, err} }()
-	for _, event := range []<-chan struct{}{firstEntered, secondRead} {
-		select {
-		case <-event:
-		case <-ctx.Done():
-			t.Fatal("parallel download did not reach the blocked-first/read-second state")
-		}
-	}
-	if got := reader.status().Progress; !reflect.DeepEqual(got, []float64{0, 1}) {
-		t.Fatalf("out-of-order download status = %v, want [0 1]", got)
-	}
-	releaseFirst()
-	select {
-	case got := <-done:
-		if got.err != nil || string(got.body) != "abcdefgh" {
-			t.Fatalf("download after release = %q, %v; want abcdefgh, nil", got.body, got.err)
-		}
-	case <-ctx.Done():
-		t.Fatal("download did not finish after releasing its first response")
+}
+
+func TestReaderStatusWhileResponseIsBlocked(t *testing.T) {
+	for _, blocked := range []string{"bytes=0-3", "bytes=4-7"} {
+		t.Run(blocked, func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			ctx := newTestCtx(t)
+			firstEntered, release := make(chan struct{}), make(chan struct{})
+			releaseFirst := sync.OnceFunc(func() { close(release) })
+			secondRead := make(chan struct{})
+			reportSecond := sync.OnceFunc(func() { close(secondRead) })
+			srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+				if req.Method == http.MethodHead {
+					return b2wiretest.Response{Header: http.Header{"Content-Length": {"8"}, "X-Bz-File-Id": {"sparse-id"}}}
+				}
+				if req.Header.Get("Range") == blocked {
+					close(firstEntered)
+					<-release
+				}
+				response := b2wiretest.RangeDownload("abcdefgh", req.Header.Get("Range"))
+				response.Header.Set("X-Bz-File-Id", "sparse-id")
+				return response
+			})
+			object := bucket.Object("sparse-status")
+			object.f = bucket.b.file("sparse-id", "sparse-status")
+			reader := object.NewRangeReader(ctx, 0, 8)
+			reader.ChunkSize, reader.ConcurrentDownloads = 4, 2
+			reader.Progress = func(n, _ int64) {
+				if n >= 4 {
+					reportSecond()
+				}
+			}
+			t.Cleanup(func() { releaseFirst(); _ = reader.Close() })
+			type result struct {
+				body []byte
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() { body, err := io.ReadAll(reader); done <- result{body, err} }()
+			for _, event := range []<-chan struct{}{firstEntered, secondRead} {
+				select {
+				case <-event:
+				case <-ctx.Done():
+					t.Fatal("parallel download did not reach the blocked-response/read-other state")
+				}
+			}
+			want := []float64{0, 1}
+			if blocked == "bytes=4-7" {
+				want = []float64{1, 0}
+			}
+			if got := reader.status().Progress; !reflect.DeepEqual(got, want) {
+				t.Fatalf("out-of-order download status = %v, want %v", got, want)
+			}
+			releaseFirst()
+			select {
+			case got := <-done:
+				if got.err != nil || string(got.body) != "abcdefgh" {
+					t.Fatalf("download after release = %q, %v; want abcdefgh, nil", got.body, got.err)
+				}
+			case <-ctx.Done():
+				t.Fatal("download did not finish after releasing its first response")
+			}
+		})
 	}
 }
 
