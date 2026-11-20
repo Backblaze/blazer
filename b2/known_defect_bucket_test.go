@@ -33,49 +33,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
-
-// requireScriptedError fails the test unless err (or an error it wraps) is the
-// B2 error that the test scripted: same HTTP status, code and message. An
-// unrelated error, a transport failure or a nil error does not satisfy it, so
-// a known-defect test cannot pass for the wrong reason.
-func requireScriptedError(t *testing.T, err error, status int, code, message string) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("got a nil error, want the scripted %d %s (%q)", status, code, message)
-	}
-	for e := err; e != nil; e = errors.Unwrap(e) {
-		if gotStatus, gotCode, gotMessage := base.MsgCode(e); gotStatus != 0 {
-			if gotStatus != status || gotCode != code || gotMessage != message {
-				t.Fatalf("error carries %d %s (%q), want the scripted %d %s (%q)", gotStatus, gotCode, gotMessage, status, code, message)
-			}
-			return
-		}
-	}
-	t.Fatalf("error %v does not carry the scripted B2 error %d %s (%q)", err, status, code, message)
-}
-
-// bucketListedWith returns a client and the bucket "n" as listed by the server
-// (so its cached attributes come from listJSON), with b2_update_bucket scripted
-// by the caller afterwards.
-func bucketListedWith(t *testing.T, listJSON string) (*b2wiretest.Server, *Bucket) {
-	t.Helper()
-	srv := b2wiretest.New(t)
-	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[`+listJSON+`]}`)
-	srv.Reply("b2_update_bucket", http.StatusOK, listJSON)
-	ctx := newTestCtx(t)
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket, err := client.Bucket(ctx, "n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return srv, bucket
-}
 
 func bucketJSONWith(extra string) string {
 	return strings.Replace(updateBucketJSON, `"revision":2,`, `"revision":2,`+extra, 1)
@@ -127,66 +86,6 @@ func TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption(t *testin
 	}
 	if v, ok := srv.Last(t, "b2_update_bucket").JSON["defaultServerSideEncryption"]; ok {
 		t.Errorf("info-only update re-sent the cached defaultServerSideEncryption=%v", v)
-	}
-}
-
-// Calls that must not be repeated blindly (create key, create
-// bucket, start large file, finish large file) are sent once after a gateway error.
-func TestKnownDefect_NonIdempotentCallsAreNotResentAfter504(t *testing.T) {
-	gateway := b2wiretest.Response{Status: http.StatusGatewayTimeout, Body: `{"status":504,"code":"gateway_timeout","message":"timeout"}`}
-	for _, tc := range []struct {
-		name, call string
-		ok         b2wiretest.Response
-		run        func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error
-	}{
-		{"create key", "b2_create_key",
-			b2wiretest.Response{Body: `{"accountId":"a","applicationKey":"s","applicationKeyId":"kid","bucketId":null,"capabilities":["listFiles"],"expirationTimestamp":null,"keyName":"k","namePrefix":null,"options":[]}`},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
-				_, err := bucket.c.CreateKey(newTestCtx(t), "k", Capabilities("listFiles"))
-				return err
-			}},
-		{"create bucket", "b2_create_bucket", b2wiretest.Response{Body: updateBucketJSON},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
-				srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
-				_, err := bucket.c.NewBucket(newTestCtx(t), "fresh", &BucketAttrs{Type: Private})
-				return err
-			}},
-		{"start large file", "b2_start_large_file", b2wiretest.Response{Body: `{"fileId":"lid","fileName":"o"}`},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
-				srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"lid","fileName":"o","action":"upload"}`)
-				w := bucket.Object("o").NewWriter(newTestCtx(t))
-				w.ChunkSize = knownDefectChunkSize
-				_, werr := w.Write(make([]byte, knownDefectUploadBytes))
-				cerr := w.Close()
-				if werr != nil {
-					return werr
-				}
-				return cerr
-			}},
-		{"finish large file", "b2_finish_large_file", b2wiretest.Response{Body: `{"fileId":"lid","fileName":"o","action":"upload"}`},
-			func(t *testing.T, srv *b2wiretest.Server, bucket *Bucket) error {
-				srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"lid","fileName":"o"}`)
-				w := bucket.Object("o").NewWriter(newTestCtx(t))
-				w.ChunkSize = knownDefectChunkSize
-				_, werr := w.Write(make([]byte, knownDefectUploadBytes))
-				cerr := w.Close()
-				if werr != nil {
-					return werr
-				}
-				return cerr
-			}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, bucket := bucketListedWith(t, updateBucketJSON)
-			srv.ReplySequence(tc.call, gateway, tc.ok)
-			err := tc.run(t, srv, bucket)
-			if got := len(srv.Calls(tc.call)); got != 1 {
-				t.Errorf("%s sent %d times after a 504 reply, want 1", tc.call, got)
-			}
-			// The caller must also learn that the operation failed: the
-			// scripted 504 is the only reply the single request got.
-			requireScriptedError(t, err, http.StatusGatewayTimeout, "gateway_timeout", "timeout")
-		})
 	}
 }
 

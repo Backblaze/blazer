@@ -1,0 +1,164 @@
+// Copyright 2026, the Blazer authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package base
+
+import (
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptrace"
+	"strings"
+	"testing"
+)
+
+var issue172Writes = []string{
+	"b2_create_key", "b2_create_bucket", "b2_start_large_file", "b2_finish_large_file",
+	"b2_hide_file", "b2_copy_file", "b2_delete_file_version",
+}
+
+func issue172TransportError(t *testing.T, method string, cause error) error {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/api", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Blazer-Method", method)
+	_, err = makeNetRequest(req.Context(), req, authSnapshotTransport(func(*http.Request) (*http.Response, error) { return nil, cause }))
+	return err
+}
+
+func TestIssue172WritesDoNotRetryAmbiguousReplies(t *testing.T) {
+	for _, method := range issue172Writes {
+		for _, status := range []int{500, 502, 504} {
+			t.Run(fmt.Sprintf("%s/%d", method, status), func(t *testing.T) {
+				err := b2err{method: method, code: status, retry: 7, msg: "lost reply"}
+				if got := Action(err); got == Retry {
+					t.Errorf("Action = Retry, want outcome unknown")
+				}
+				if got := MaxRetries(err); got != 0 {
+					t.Errorf("MaxRetries = %d, want 0", got)
+				}
+			})
+		}
+	}
+}
+
+func TestIssue172TransportCauseIsRetained(t *testing.T) {
+	for _, method := range issue172Writes {
+		t.Run(method, func(t *testing.T) {
+			err := issue172TransportError(t, method, fmt.Errorf("lost response: %w", io.EOF))
+			if !errors.Is(err, io.EOF) {
+				t.Errorf("errors.Is(%v, io.EOF) = false, want true", err)
+			}
+			if got := Action(err); got == Retry {
+				t.Errorf("Action = Retry, want outcome unknown")
+			}
+			if got := MaxRetries(err); got != 0 {
+				t.Errorf("MaxRetries = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestIssue172TransportErrorHasNoZeroStatus(t *testing.T) {
+	err := b2err{method: "b2_create_key", msg: "EOF"}
+	if got := err.Error(); strings.Contains(got, ": 0:") || !strings.Contains(got, "b2_create_key") || !strings.Contains(got, "EOF") {
+		t.Errorf("Error = %q, want method and cause without a zero HTTP status", got)
+	}
+}
+
+func TestIssue172OutcomeUnknownAPI(t *testing.T) {
+	for _, method := range issue172Writes {
+		for _, status := range []int{500, 502, 504} {
+			for _, retryAfter := range []int{0, 7} {
+				t.Run(fmt.Sprintf("%s/%d/retry-after=%d", method, status, retryAfter), func(t *testing.T) {
+					err := fmt.Errorf("context: %w", b2err{method: method, code: status, retry: retryAfter, msg: "scripted"})
+					if got := Action(err); got != OutcomeUnknown {
+						t.Errorf("Action = %v, want OutcomeUnknown", got)
+					}
+					if got := MaxRetries(err); got != 0 {
+						t.Errorf("MaxRetries = %d, want 0", got)
+					}
+					if !errors.Is(err, ErrOutcomeUnknown) {
+						t.Errorf("errors.Is(%v, ErrOutcomeUnknown) = false", err)
+					}
+					if !strings.Contains(err.Error(), "outcome unknown") {
+						t.Errorf("error does not explain the uncertain outcome: %v", err)
+					}
+				})
+			}
+		}
+		for _, cause := range []error{io.EOF, io.ErrUnexpectedEOF, &net.OpError{Op: "read", Err: errors.New("reset")}, &net.OpError{Op: "write", Err: errors.New("reset")}} {
+			t.Run(method+"/"+cause.Error(), func(t *testing.T) {
+				err := issue172TransportError(t, method, cause)
+				if Action(err) != OutcomeUnknown || MaxRetries(err) != 0 || !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, cause) {
+					t.Errorf("error=%v action=%v retries=%d; want OutcomeUnknown, zero retries, marker and original cause", err, Action(err), MaxRetries(err))
+				}
+			})
+		}
+	}
+}
+
+func TestIssue172RetryControls(t *testing.T) {
+	for _, method := range issue172Writes {
+		for _, status := range []int{429, 503, 401, 408} {
+			t.Run(fmt.Sprintf("%s/%d", method, status), func(t *testing.T) {
+				err := b2err{method: method, code: status}
+				want := Retry
+				if status == 401 {
+					want = ReAuthenticate
+				}
+				if Action(err) != want || MaxRetries(err) != 5 || errors.Is(err, ErrOutcomeUnknown) {
+					t.Errorf("action=%v retries=%d unknown=%t; want %v, 5, false", Action(err), MaxRetries(err), errors.Is(err, ErrOutcomeUnknown), want)
+				}
+			})
+		}
+		for _, cause := range []error{&net.OpError{Op: "dial", Err: errors.New("refused")}, &net.DNSError{Err: "not found", Name: "example.invalid"}} {
+			t.Run(method+"/"+cause.Error(), func(t *testing.T) {
+				err := issue172TransportError(t, method, fmt.Errorf("network: %w", cause))
+				if Action(err) != Retry || MaxRetries(err) != 5 || errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, cause) {
+					t.Errorf("error=%v action=%v retries=%d; want Retry, 5 and original cause without outcome-unknown marker", err, Action(err), MaxRetries(err))
+				}
+			})
+		}
+		t.Run(method+"/TLS handshake", func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost, "https://example.invalid", nil)
+			req.Header.Set("X-Blazer-Method", method)
+			cause := errors.New("handshake failed before HTTP")
+			_, err := makeNetRequest(req.Context(), req, authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
+				if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.TLSHandshakeDone != nil {
+					trace.TLSHandshakeDone(tls.ConnectionState{}, cause)
+				}
+				return nil, cause
+			}))
+			if Action(err) != Retry || !errors.Is(err, cause) || errors.Is(err, ErrOutcomeUnknown) {
+				t.Errorf("handshake error=%v action=%v; want Retry and retained cause", err, Action(err))
+			}
+		})
+	}
+	for _, method := range []string{"b2_list_file_names", "b2_get_file_info", "b2_download_file_by_name", "b2_download_file_by_id"} {
+		for _, status := range []int{408, 500, 502, 503, 504} {
+			t.Run(fmt.Sprintf("%s/%d", method, status), func(t *testing.T) {
+				err := b2err{method: method, code: status}
+				if Action(err) != Retry || errors.Is(err, ErrOutcomeUnknown) {
+					t.Errorf("action=%v unknown=%t; want Retry, false", Action(err), errors.Is(err, ErrOutcomeUnknown))
+				}
+			})
+		}
+	}
+}
