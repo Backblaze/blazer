@@ -162,7 +162,8 @@ func issue172Call(ctx context.Context, c *Client, b *Bucket, method string) erro
 		_, err = f.finishLargeFile(ctx)
 		return err
 	case "b2_hide_file":
-		return b.Object("object").Hide(ctx)
+		_, err := b.b.hideFile(ctx, "object")
+		return err
 	case "b2_copy_file":
 		_, err := b.Copy(ctx, "source-id", "object")
 		return err
@@ -252,6 +253,9 @@ func TestIssue172BackendRequestCounts(t *testing.T) {
 				wantAttempts, wantRequests := 2, 2
 				if unknown {
 					wantAttempts, wantRequests = 1, 1
+					if got := len(srv.Calls(wireMethod)); got != 1 || attempts != 1 {
+						t.Errorf("ambiguous failure: attempts=%d requests=%d, want 1 and 1", attempts, got)
+					}
 					if base.Action(err) != base.OutcomeUnknown || base.MaxRetries(err) != 0 || !errors.Is(err, base.ErrOutcomeUnknown) {
 						t.Errorf("error=%v action=%v retries=%d; want OutcomeUnknown, zero retries and marker", err, base.Action(err), base.MaxRetries(err))
 					}

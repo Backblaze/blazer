@@ -15,6 +15,7 @@
 package base
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -24,11 +25,45 @@ import (
 	"net/http/httptrace"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 var issue172Writes = []string{
 	"b2_create_key", "b2_create_bucket", "b2_start_large_file", "b2_finish_large_file",
 	"b2_hide_file", "b2_copy_file", "b2_delete_file_version",
+}
+
+func TestIssue172ResponseBodyLoss(t *testing.T) {
+	for _, method := range issue172Writes {
+		t.Run(method, func(t *testing.T) {
+			opts := &b2Options{transport: authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Request: req, Body: io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))}, nil
+			})}
+			var reply map[string]any
+			err := opts.makeRequest(context.Background(), method, http.MethodPost, "https://example.invalid", nil, &reply, nil, nil)
+			if Action(err) != OutcomeUnknown || MaxRetries(err) != 0 || !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Errorf("response-body error=%v action=%v retries=%d; want OutcomeUnknown and original cause", err, Action(err), MaxRetries(err))
+			}
+		})
+	}
+}
+
+func TestIssue172SentRequestEvidence(t *testing.T) {
+	for _, cause := range []error{context.DeadlineExceeded, &net.OpError{Op: "dial", Err: errors.New("later connection refused")}} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost, "https://example.invalid", nil)
+			req.Header.Set("X-Blazer-Method", "b2_create_key")
+			_, err := makeNetRequest(req.Context(), req, authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
+				if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.WroteHeaders != nil {
+					trace.WroteHeaders()
+				}
+				return nil, cause
+			}))
+			if Action(err) != OutcomeUnknown || MaxRetries(err) != 0 || !errors.Is(err, cause) || !errors.Is(err, ErrOutcomeUnknown) {
+				t.Errorf("post-send error=%v action=%v retries=%d; want OutcomeUnknown and retained cause", err, Action(err), MaxRetries(err))
+			}
+		})
+	}
 }
 
 func issue172TransportError(t *testing.T, method string, cause error) error {
