@@ -184,9 +184,6 @@ func (c *Client) ListKeys(ctx context.Context, count int, cursor string) ([]*Key
 	if err != nil {
 		return nil, "", err
 	}
-	if len(ks) == 0 {
-		return nil, "", io.EOF
-	}
 	var keys []*Key
 	for _, k := range ks {
 		keys = append(keys, &Key{

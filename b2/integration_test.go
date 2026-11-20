@@ -1131,6 +1131,46 @@ func TestZeroByteObject(t *testing.T) {
 	}
 }
 
+// TestListHiddenDelimiterFolderBoundaryLive checks real B2 pagination across a
+// virtual folder while preserving every version on either side of it.
+func TestListHiddenDelimiterFolderBoundaryLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	bucket, done := startLiveTest(ctx, t)
+	defer done()
+
+	for _, name := range []string{"a", "a", "dir/inside", "z", "z"} {
+		w := bucket.Object(name).NewWriter(ctx)
+		if _, err := io.WriteString(w, "test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	iter := bucket.List(ctx, ListHidden(), ListDelimiter("/"), ListPageSize(1))
+	var names []string
+	ids := make(map[string]bool)
+	for iter.Next() {
+		obj := iter.Object()
+		names = append(names, obj.Name())
+		if id := obj.ID(); id == "" || ids[id] {
+			t.Errorf("listed version %q has empty or duplicate ID %q", obj.Name(), id)
+		} else {
+			ids[id] = true
+		}
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// ListHidden excludes the virtual folder entry, but returns both versions
+	// of each top-level file on either side of it.
+	if want := []string{"a", "a", "z", "z"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("version listing = %q, want %q", names, want)
+	}
+}
+
 func TestListUnfinishedLargeFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()

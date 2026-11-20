@@ -264,7 +264,7 @@ func (b *Bucket) listObjects(ctx context.Context, count int, c *cursor) ([]*Obje
 		return nil, nil, err
 	}
 	var next *cursor
-	if name != "" && id != "" {
+	if name != "" {
 		next = &cursor{
 			prefix:    c.prefix,
 			delimiter: c.delimiter,
