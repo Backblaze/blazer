@@ -18,6 +18,9 @@ import (
 	"context"
 	"crypto/sha1"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"strings"
 	"testing"
@@ -75,6 +78,35 @@ func TestRegression_UpdateReturnsNewRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	b2wiretest.AssertJSON(t, srv.Last(t, "b2_update_bucket"), "ifRevisionIs", 7)
+}
+
+func TestBucketUpdateDocumentsReturnedRevision(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "base.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decl := range f.Decls {
+		method, ok := decl.(*ast.FuncDecl)
+		if !ok || method.Name.Name != "Update" || method.Recv == nil {
+			continue
+		}
+		receiver, ok := method.Recv.List[0].Type.(*ast.StarExpr)
+		if !ok {
+			continue
+		}
+		name, ok := receiver.X.(*ast.Ident)
+		if !ok || name.Name != "Bucket" {
+			continue
+		}
+		doc := strings.ToLower(method.Doc.Text())
+		for _, phrase := range []string{"returned bucket", "subsequent updates", "revision"} {
+			if !strings.Contains(doc, phrase) {
+				t.Errorf("Bucket.Update documentation must explain %q; got %q", phrase, doc)
+			}
+		}
+		return
+	}
+	t.Fatal("Bucket.Update not found")
 }
 
 // The size reported for a large file must not include the 40-byte

@@ -941,7 +941,9 @@ type Bucket struct {
 	ReplicationConfigurationUnreadable bool
 }
 
-// Update wraps b2_update_bucket.
+// Update wraps b2_update_bucket. It returns a new Bucket with the revision from
+// the response and does not update the receiver. Use the returned Bucket for
+// subsequent updates so their revision-conflict checks use the latest revision.
 func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	state := b.b2.snapshot()
 	// Only a non-nil list is sent: nil leaves lifecycle rules unchanged, and an
