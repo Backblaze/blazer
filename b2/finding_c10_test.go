@@ -24,8 +24,9 @@ import (
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
+// Promoted from TestKnownDefect_EmptyCORSListClearsRules.
 // https://www.backblaze.com/apidocs/b2-update-bucket
-func TestFindingC10_EmptyCORSListClearsRules(t *testing.T) {
+func TestRegression_EmptyCORSListClearsRules(t *testing.T) {
 	const cors = `"corsRules":[{"corsRuleName":"browser","allowedOrigins":["https://example.com"],"allowedOperations":["b2_download_file_by_name"]}],`
 	withCORS := strings.Replace(updateBucketJSON, `"revision":2,`, `"revision":2,`+cors, 1)
 	cleared := strings.Replace(updateBucketJSON, `"revision":2,`, `"revision":2,"corsRules":[],`, 1)
