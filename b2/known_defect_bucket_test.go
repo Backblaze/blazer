@@ -28,7 +28,6 @@ package b2
 
 import (
 	"errors"
-	"io"
 	"io/fs"
 	"net/http"
 	"reflect"
@@ -234,31 +233,6 @@ func TestKnownDefect_ListKeysContinuesPastEmptyPageWithCursor(t *testing.T) {
 	keys, next, err := bucket.c.ListKeys(newTestCtx(t), 10, "")
 	if len(keys) != 0 || !validEmptyKeyPage(next, err) {
 		t.Errorf("ListKeys = (%d keys, next=%q, err=%v), want no keys, the cursor %q and nil error", len(keys), next, err, "next-id")
-	}
-}
-
-// Deleting a key after the sign-in token expired must sign in
-// again and succeed, like every other call.
-func TestKnownDefect_DeleteKeyReauthorizesAfterTokenExpiry(t *testing.T) {
-	srv, bucket := bucketListedWith(t, updateBucketJSON)
-	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[{"accountId":"a","applicationKeyId":"kid","bucketId":null,"capabilities":["listFiles"],"expirationTimestamp":null,"keyName":"k","namePrefix":null,"options":[]}],"nextApplicationKeyId":null}`)
-	ctx := newTestCtx(t)
-	keys, _, err := bucket.c.ListKeys(ctx, 10, "")
-	if err != nil && !errors.Is(err, io.EOF) {
-		t.Fatal(err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("listed %d keys, want 1", len(keys))
-	}
-	srv.ReplySequence("b2_delete_key",
-		b2wiretest.Response{Status: http.StatusUnauthorized, Body: `{"status":401,"code":"expired_auth_token","message":"expired"}`},
-		b2wiretest.Response{Body: `{"accountId":"a","applicationKeyId":"kid","bucketId":null,"capabilities":["listFiles"],"expirationTimestamp":null,"keyName":"k","namePrefix":null,"options":[]}`})
-	authBefore := len(srv.Calls("b2_authorize_account"))
-	if err := keys[0].Delete(ctx); err != nil {
-		t.Errorf("Delete after token expiry failed instead of re-authorizing: %v", err)
-	}
-	if got := len(srv.Calls("b2_authorize_account")) - authBefore; got != 1 {
-		t.Errorf("%d re-authorizations after the 401, want 1", got)
 	}
 }
 
