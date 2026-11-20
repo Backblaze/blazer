@@ -131,62 +131,6 @@ func TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption(t *testin
 	}
 }
 
-// NewBucket must not silently ignore a requested default
-// retention: it is either applied (create or follow-up update) or rejected.
-func TestKnownDefect_NewBucketDoesNotIgnoreDefaultRetention(t *testing.T) {
-	fixture := func(t *testing.T) (*b2wiretest.Server, *Client) {
-		t.Helper()
-		srv := b2wiretest.New(t)
-		srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
-		srv.Reply("b2_create_bucket", http.StatusOK, updateBucketJSON)
-		srv.Reply("b2_update_bucket", http.StatusOK, updateBucketJSON)
-		client, err := NewClient(newTestCtx(t), "account", "key", APIBase(srv.URL()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return srv, client
-	}
-	t.Run("without retention", func(t *testing.T) {
-		srv, client := fixture(t)
-		if _, err := client.NewBucket(newTestCtx(t), "n", &BucketAttrs{Type: Private, FileLockEnabled: true}); err != nil {
-			t.Fatalf("creation without default retention: %v", err)
-		}
-		if got := len(srv.Calls("b2_create_bucket")); got != 1 {
-			t.Fatalf("control create calls = %d, want 1", got)
-		}
-	})
-	t.Run("with retention", func(t *testing.T) {
-		srv, client := fixture(t)
-		_, err := client.NewBucket(newTestCtx(t), "n", &BucketAttrs{
-			Type:             Private,
-			FileLockEnabled:  true,
-			DefaultRetention: &Retention{Mode: "governance", Period: &RetentionPeriod{Duration: 7, Unit: "days"}},
-		})
-		if err != nil {
-			if !unsupportedRetentionError(err) {
-				t.Fatalf("NewBucket returned an unrelated error instead of rejecting unsupported default retention: %v", err)
-			}
-			if len(srv.Calls("b2_create_bucket")) != 0 || len(srv.Calls("b2_update_bucket")) != 0 {
-				t.Fatal("NewBucket rejected unsupported default retention after sending a bucket write")
-			}
-			return
-		}
-		want := map[string]any{"mode": "governance", "period": map[string]any{"duration": float64(7), "unit": "days"}}
-		var seen []any
-		for _, call := range []string{"b2_create_bucket", "b2_update_bucket"} {
-			for _, r := range srv.Calls(call) {
-				if got, ok := r.JSON["defaultRetention"]; ok {
-					if reflect.DeepEqual(got, want) {
-						return
-					}
-					seen = append(seen, got)
-				}
-			}
-		}
-		t.Errorf("NewBucket returned nil error but no request carried defaultRetention=%v (carried: %v)", want, seen)
-	})
-}
-
 // Listing unfinished uploads with a name prefix must only return
 // uploads that match the prefix.
 func TestKnownDefect_ListUnfinishedHonoursPrefix(t *testing.T) {

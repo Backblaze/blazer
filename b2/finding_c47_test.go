@@ -23,6 +23,7 @@ import (
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
+// Promotes TestKnownDefect_NewBucketDoesNotIgnoreDefaultRetention into the regular suite.
 // B2 sets default retention through b2_update_bucket.
 // https://www.backblaze.com/apidocs/b2-update-bucket
 func TestFindingC47_NewBucketHonorsDefaultRetention(t *testing.T) {

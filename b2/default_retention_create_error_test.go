@@ -60,3 +60,35 @@ func TestNewBucketRetentionUpdateDenied(t *testing.T) {
 		})
 	}
 }
+
+func TestNewBucketRetentionDoesNotUpdateExistingBucket(t *testing.T) {
+	srv := b2wiretest.New(t)
+	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate"}]}`)
+	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.NewBucket(context.Background(), "n", &BucketAttrs{DefaultRetention: &Retention{Mode: "governance", Period: &RetentionPeriod{Duration: 7, Unit: "days"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srv.Calls("b2_create_bucket")) != 0 || len(srv.Calls("b2_update_bucket")) != 0 || len(srv.Calls("b2_delete_bucket")) != 0 {
+		t.Fatal("NewBucket modified an existing bucket")
+	}
+}
+
+func TestNewBucketWithoutRetentionDoesNotUpdate(t *testing.T) {
+	srv := b2wiretest.New(t)
+	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
+	srv.Reply("b2_create_bucket", http.StatusOK, updateBucketJSON)
+	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.NewBucket(context.Background(), "n", &BucketAttrs{Type: Private}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(srv.Calls("b2_update_bucket")); got != 0 {
+		t.Fatalf("updates without default retention = %d, want 0", got)
+	}
+}
