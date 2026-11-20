@@ -99,6 +99,9 @@ func (o *ObjectIterator) page(ctx context.Context) error {
 func (o *ObjectIterator) Next() bool {
 	o.init.Do(func() {
 		o.count = o.opts.pageSize
+		if o.count == 0 && !o.opts.unfinished {
+			o.count = 100
+		}
 		if o.count < 0 || o.count > 1000 {
 			o.count = 1000
 		}
@@ -213,9 +216,8 @@ func ListDelimiter(delimiter string) ListOption {
 
 // ListPageSize configures the iterator to request the given number of objects
 // per network round-trip. With no ListPageSize, or ListPageSize(0), object and
-// version listings send maxFileCount 0, so B2 uses its default of 100.
-// Unfinished large-file listings omit maxFileCount, and B2 likewise uses its
-// default of 100.
+// version listings request 100 objects per page. Unfinished large-file listings
+// omit maxFileCount and use B2's default of 100.
 //
 // The SDK limits object and version listings to 1000 objects, and unfinished
 // large-file listings to 100.
