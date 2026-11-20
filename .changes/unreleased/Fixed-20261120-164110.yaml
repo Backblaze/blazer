@@ -1,0 +1,3 @@
+kind: Fixed
+body: Ambiguous failures while creating keys or buckets, starting or finishing large files, hiding or copying files, or deleting file versions now return OutcomeUnknown with zero automatic retries and match ErrOutcomeUnknown through errors.Is. Transport causes remain available through errors.Is/errors.As, and Idempotent exposes the retry-safety policy; retryable 429/503, definite pre-send failures, reads, and reauthentication remain supported (#172).
+time: 2026-11-20T16:41:10.254786-06:00

@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -43,6 +44,81 @@ const (
 
 	errVar = "B2_TRANSIENT_ERRORS"
 )
+
+// A successful live create whose reply is lost must not create another key.
+func TestOutcomeUnknownKeyCreationLive(t *testing.T) {
+	id, secret := os.Getenv(apiID), os.Getenv(apiKey)
+	if id == "" || secret == "" {
+		t.Skip("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	name := fmt.Sprintf("outcome-unknown-%s-%d", uniq, time.Now().UnixNano())
+	var attempts, faultAt atomic.Int64
+	trip := bucketInfoRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-Blazer-Method") != "b2_create_key" {
+			return defaultTransport.RoundTrip(req)
+		}
+		attempt := attempts.Add(1)
+		resp, err := defaultTransport.RoundTrip(req)
+		if err == nil && resp.StatusCode == http.StatusOK && faultAt.CompareAndSwap(0, attempt) {
+			// Consume the real successful reply without returning its key material.
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			return nil, io.EOF
+		}
+		return resp, err
+	})
+	client, err := NewClient(ctx, id, secret, append([]ClientOption{Transport(trip)}, endpointOpts()...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), time.Minute)
+		defer done()
+		for pass := 0; pass < 2; pass++ {
+			var matches []*Key
+			var cursor string
+			for {
+				keys, next, err := client.ListKeys(cleanup, 1000, cursor)
+				if err != nil && err != io.EOF {
+					t.Errorf("cleanup ListKeys: %v", err)
+					return
+				}
+				for _, key := range keys {
+					if key.Name() == name {
+						matches = append(matches, key)
+					}
+				}
+				if err == io.EOF || next == "" {
+					break
+				}
+				cursor = next
+			}
+			if pass == 1 {
+				if len(matches) != 0 {
+					t.Errorf("cleanup left %d test keys", len(matches))
+				}
+				return
+			}
+			for _, key := range matches {
+				if err := key.Delete(cleanup); err != nil {
+					t.Errorf("cleanup Delete: %v", err)
+				}
+			}
+		}
+	})
+	_, err = client.CreateKey(ctx, name, Capabilities("listFiles"), Lifetime(time.Hour))
+	if faultAt.Load() == 0 {
+		t.Fatal("did not observe a successful create to inject the lost reply")
+	}
+	if got, want := attempts.Load(), faultAt.Load(); got != want {
+		t.Errorf("create attempts=%d, want %d (no replay after the lost reply)", got, want)
+	}
+	if base.Action(err) != base.OutcomeUnknown || !errors.Is(err, base.ErrOutcomeUnknown) || !errors.Is(err, io.EOF) {
+		t.Errorf("CreateKey error=%v action=%v, want outcome unknown wrapping EOF", err, base.Action(err))
+	}
+}
 
 func TestReadWriteLive(t *testing.T) {
 	ctx := context.Background()

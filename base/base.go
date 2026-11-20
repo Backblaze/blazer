@@ -29,7 +29,9 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"math"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
@@ -46,26 +48,77 @@ const (
 	DefaultUserAgent = "blazer/0.10.1"
 )
 
+// ErrOutcomeUnknown marks a failed request that may already have been applied.
+// Reconcile the result before explicitly retrying the operation.
+var ErrOutcomeUnknown = errors.New("operation outcome unknown")
+
 type b2err struct {
 	msg     string
 	method  string
 	retry   int
 	code    int
 	msgCode string
+	cause   error
+	notSent bool
 }
 
 func (e b2err) Error() string {
-	if e.method == "" {
-		return fmt.Sprintf("b2 error: %s", e.msg)
+	prefix := e.method
+	if prefix == "" {
+		prefix = "b2 error"
 	}
-	return fmt.Sprintf("%s: %d: %s", e.method, e.code, e.msg)
+	message := e.msg
+	if e.outcomeUnknown() {
+		message = ErrOutcomeUnknown.Error() + ": " + message
+	}
+	if e.code == 0 {
+		return fmt.Sprintf("%s: %s", prefix, message)
+	}
+	return fmt.Sprintf("%s: %d: %s", prefix, e.code, message)
+}
+
+func (e b2err) Unwrap() error { return e.cause }
+
+func (e b2err) Is(target error) bool {
+	return target == ErrOutcomeUnknown && e.outcomeUnknown()
+}
+
+// Idempotent reports whether the SDK treats a method as safe to retry after an
+// ambiguous failure. Unknown methods return false. Uploads use their existing
+// separate retry policy; copy-part retains its existing retry policy as well.
+func Idempotent(method string) bool {
+	switch method {
+	case "b2_authorize_account", "b2_list_buckets", "b2_list_keys",
+		"b2_list_file_names", "b2_list_file_versions", "b2_list_unfinished_large_files", "b2_list_parts",
+		"b2_get_file_info", "b2_download_file_by_id", "b2_download_file_by_name",
+		"b2_get_upload_url", "b2_get_upload_part_url", "b2_get_download_authorization",
+		"b2_get_bucket_notification_rules", "b2_set_bucket_notification_rules", "b2_copy_part",
+		"b2_update_file_legal_hold", "b2_update_file_retention":
+		return true
+	}
+	return false
+}
+
+func (e b2err) outcomeUnknown() bool {
+	if e.method == "" || Idempotent(e.method) || e.method == "b2_upload_file" || e.method == "b2_upload_part" || e.notSent {
+		return false
+	}
+	switch e.code {
+	case 0, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
 }
 
 // Action checks an error and returns a recommended course of action.
+// An OutcomeUnknown request must be reconciled before an explicit retry.
 func Action(err error) ErrAction {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return Punt
+	}
+	if e.outcomeUnknown() {
+		return OutcomeUnknown
 	}
 	if e.retry > 0 {
 		// A zero status means the transport failed before an HTTP response arrived.
@@ -109,8 +162,8 @@ type ErrAction int
 
 // Code returns the error code and message.
 func Code(err error) (int, string) {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0, ""
 	}
 	return e.code, e.msg
@@ -118,8 +171,8 @@ func Code(err error) (int, string) {
 
 // MsgCode returns the error code, msgCode and message.
 func MsgCode(err error) (int, string, string) {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0, "", ""
 	}
 	return e.code, e.msgCode, e.msg
@@ -142,6 +195,10 @@ const (
 	// Punt means that there is no useful action to be taken on this error, and
 	// that it should be displayed to the user.
 	Punt
+
+	// OutcomeUnknown means a non-idempotent request may have succeeded. It must
+	// not be replayed automatically; reconcile the result before retrying it.
+	OutcomeUnknown
 )
 
 func mkErr(resp *http.Response) error {
@@ -179,6 +236,7 @@ func mkErr(resp *http.Response) error {
 		code:    resp.StatusCode,
 		msgCode: msg.Code,
 		method:  resp.Request.Header.Get("X-Blazer-Method"),
+		cause:   err,
 	}
 }
 
@@ -199,8 +257,8 @@ func parseRetryAfterSeconds(raw string) (int, error) {
 // MaxReuploads returns an appropriate amount of retries for reuploading,
 // given a method and an error if any was returned by the server.
 func MaxReuploads(err error) uint {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 5 // for non b2err errors (e.g. chunk size mismatch), try to reupload 5 times
 	}
 	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
@@ -212,9 +270,15 @@ func MaxReuploads(err error) uint {
 // MaxRetries returns an appropriate amount of retries, given a method
 // and an error if any was returned by the server.
 func MaxRetries(err error) uint {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0 // for non b2err errors, don't retry
+	}
+	if e.outcomeUnknown() {
+		return 0
+	}
+	if e.code == 0 && e.cause != nil && e.method != "b2_upload_file" && e.method != "b2_upload_part" {
+		return 5 // preserve the former method-less transport-error budget
 	}
 	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
 		return 20
@@ -229,8 +293,8 @@ func MaxRetries(err error) uint {
 // indicates Retry, the user should implement their own exponential backoff,
 // beginning with one second.
 func Backoff(err error) time.Duration {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0
 	}
 	// Cap at the same 30s ceiling used by internal/retry.Backoff, so a
@@ -539,22 +603,30 @@ type httpReply struct {
 }
 
 func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper) (*http.Response, error) {
+	var sent, handshakeFailed atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		WroteHeaders: func() { sent.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { sent.Store(true) },
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			if err != nil {
+				handshakeFailed.Store(true)
+			}
+		},
+	})
 	req = req.WithContext(ctx)
 	resp, err := rt.RoundTrip(req)
 	switch err {
 	case nil:
 		return resp, nil
 	case context.Canceled, context.DeadlineExceeded:
-		return nil, err
+		method := req.Header.Get("X-Blazer-Method")
+		if !sent.Load() || Idempotent(method) || method == "b2_upload_file" || method == "b2_upload_part" {
+			return nil, err
+		}
+		fallthrough
 	default:
 		method := req.Header.Get("X-Blazer-Method")
 		blog.V(2).Infof(">> %s transport error: %T [URL and error text redacted]", method, err)
-		// Only an upload fault is classified by method (see Action). Other
-		// transport errors stay method-less so their retry budget and message
-		// do not change.
-		if method != "b2_upload_file" && method != "b2_upload_part" {
-			method = ""
-		}
 		// Certificate verification failures are permanent, including distrust of
 		// compromised CAs. Preserve the original error instead of retrying or
 		// requesting a new upload URL.
@@ -569,14 +641,19 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 			return nil, err
 		}
 
-		// A transport error may include the full URL. Preserve ordinary error
-		// details while removing the file ID before a caller can log it.
-		message := redactDownloadIDText(req, err.Error())
-		return nil, b2err{
-			msg:    message,
-			method: method,
-			retry:  1,
-		}
+		var dialErr *net.OpError
+		var dnsErr *net.DNSError
+		notSent := !sent.Load() && (handshakeFailed.Load() || (errors.As(err, &dialErr) && dialErr.Op == "dial") || errors.As(err, &dnsErr))
+		return nil, requestError(req, err, notSent)
+	}
+}
+
+func requestError(req *http.Request, err error, notSent bool) b2err {
+	return b2err{
+		// Keep the displayed error redacted while retaining the cause for Is/As.
+		msg:    redactDownloadIDText(req, err.Error()),
+		method: req.Header.Get("X-Blazer-Method"),
+		retry:  1, cause: err, notSent: notSent,
 	}
 }
 
@@ -678,6 +755,9 @@ func (o *b2Options) makeRequest(ctx context.Context, method, verb, uri string, b
 		r := io.TeeReader(resp.Body, rbuf)
 		decoder := json.NewDecoder(r)
 		if err := decoder.Decode(b2resp); err != nil {
+			if !Idempotent(method) && method != "b2_upload_file" && method != "b2_upload_part" {
+				return requestError(req, err, false)
+			}
 			return err
 		}
 		replyArgs = rbuf.Bytes()
