@@ -65,3 +65,26 @@ func TestFindingC10_EmptyCORSListClearsRules(t *testing.T) {
 		t.Errorf("after clearing CORS: attrs=%+v, err=%v; want no rules", attrs, err)
 	}
 }
+
+func TestFindingC10_UnsetCORSAfterClearIsOmitted(t *testing.T) {
+	const empty = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","corsRules":[],"revision":2}`
+	bucket, srv := newMappingBucket(t, empty)
+	if err := bucket.Update(context.Background(), &BucketAttrs{Info: map[string]string{"updated": "yes"}}); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := srv.Last(t, "b2_update_bucket").JSON["corsRules"]; ok {
+		t.Errorf("unset CORS after an empty response sent corsRules=%v, want it omitted", value)
+	}
+}
+
+func TestFindingC10_UnsetCachedCORSIsOmitted(t *testing.T) {
+	const cors = `"corsRules":[{"corsRuleName":"browser","allowedOrigins":["https://example.com"],"allowedOperations":["b2_download_file_by_name"]}],`
+	response := strings.Replace(updateBucketJSON, `"revision":2,`, `"revision":2,`+cors, 1)
+	bucket, srv := newMappingBucket(t, response)
+	if err := bucket.Update(context.Background(), &BucketAttrs{Info: map[string]string{"updated": "yes"}}); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := srv.Last(t, "b2_update_bucket").JSON["corsRules"]; ok {
+		t.Errorf("unset CORS sent cached corsRules=%v, want it omitted", value)
+	}
+}

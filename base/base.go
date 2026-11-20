@@ -959,6 +959,10 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	if b.Info != nil {
 		info = &b.Info
 	}
+	var corsRules *[]b2types.CORSRule
+	if b.CORSRules != nil {
+		corsRules = &b.CORSRules
+	}
 	b2req := &b2types.UpdateBucketRequest{
 		AccountID: state.accountID,
 		BucketID:  b.ID,
@@ -968,7 +972,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		LifecycleRules: rules,
 		IfRevisionIs:   b.rev,
 
-		CORSRules:                   b.CORSRules,
+		CORSRules:                   corsRules,
 		DefaultRetention:            b.DefaultRetention,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b.DefaultServerSideEncryption),
 		FileLockEnabled:             b.FileLockEnabled,

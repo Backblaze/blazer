@@ -132,19 +132,6 @@ func TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption(t *testin
 	}
 }
 
-// Existing CORS rules can be cleared with an empty list.
-func TestKnownDefect_EmptyCORSListClearsRules(t *testing.T) {
-	const cors = `"corsRules":[{"corsRuleName":"browser","allowedOrigins":["https://example.com"],"allowedOperations":["b2_download_file_by_name"]}],`
-	srv, bucket := bucketListedWith(t, bucketJSONWith(cors))
-	if err := bucket.Update(newTestCtx(t), &BucketAttrs{CORSRules: []CORSRule{}}); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := srv.Last(t, "b2_update_bucket").JSON["corsRules"].([]any)
-	if !ok || len(got) != 0 {
-		t.Errorf("update with an empty CORS list sent corsRules=%v, want an empty list", srv.Last(t, "b2_update_bucket").JSON["corsRules"])
-	}
-}
-
 // NewBucket must not silently ignore a requested default
 // retention: it is either applied (create or follow-up update) or rejected.
 func TestKnownDefect_NewBucketDoesNotIgnoreDefaultRetention(t *testing.T) {
