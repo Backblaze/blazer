@@ -1003,6 +1003,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		LifecycleRules:              respRules,
 		ID:                          b2resp.BucketID,
 		b2:                          b.b2,
+		rev:                         b2resp.Revision,
 		CORSRules:                   b2resp.CORSRules,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
 	}
@@ -1604,15 +1605,18 @@ func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 s
 	if known, ok := fc.file.partSizes[index]; ok {
 		previousSize = known
 	}
+	partSize := int64(size)
 	if sha1 == "hex_digits_at_end" {
-		sha1 = string(r.(*keepFinalBytes).sha[:])
+		trailer := r.(*keepFinalBytes).sha
+		sha1 = string(trailer[:])
+		partSize -= int64(len(trailer))
 	}
 	fc.file.hashes[index] = sha1
 	if fc.file.partSizes == nil {
 		fc.file.partSizes = make(map[int]int64)
 	}
-	fc.file.partSizes[index] = int64(size)
-	fc.file.size += int64(size) - previousSize
+	fc.file.partSizes[index] = partSize
+	fc.file.size += partSize - previousSize
 	fc.file.mu.Unlock()
 	return size, nil
 }
