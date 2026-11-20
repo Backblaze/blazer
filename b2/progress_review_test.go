@@ -37,7 +37,8 @@ func (s *blockedMeterSource) Reset() error { return nil }
 func TestProgressStatusDoesNotWaitForBlockedRead(t *testing.T) {
 	source := &blockedMeterSource{make(chan struct{}), make(chan struct{})}
 	meter := &meteredReader{r: source, size: 1, progressSize: 1}
-	client := &Client{sWriters: map[string]*Writer{"blocked": {smap: map[int]*meteredReader{1: meter}}}}
+	w := &Writer{smap: map[int]*meteredReader{1: meter}}
+	client := &Client{sWriters: map[*Writer]string{w: "blocked"}}
 	readDone := make(chan struct{})
 	go func() { _, _ = meter.Read(make([]byte, 1)); close(readDone) }()
 	<-source.entered

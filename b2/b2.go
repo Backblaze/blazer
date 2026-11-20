@@ -48,8 +48,8 @@ type Client struct {
 	backend beRootInterface
 
 	slock    sync.Mutex
-	sWriters map[string]*Writer
-	sReaders map[string]*Reader
+	sWriters map[*Writer]string
+	sReaders map[*Reader]string
 	sMethods []methodCounter
 	opts     clientOptions
 }

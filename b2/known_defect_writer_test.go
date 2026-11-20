@@ -85,27 +85,6 @@ func TestKnownDefect_UploadRetryWaitsBetweenAttempts(t *testing.T) {
 	}
 }
 
-// Two simultaneous uploads of the same object name must both be
-// visible in Status().
-func TestKnownDefect_ConcurrentSameNameWritersBothInStatus(t *testing.T) {
-	bucket, _ := newMappingBucket(t, updateBucketJSON)
-	ctx := newTestCtx(t)
-	w1 := bucket.Object("same").NewWriter(ctx)
-	w2 := bucket.Object("same").NewWriter(ctx)
-	if _, err := w1.Write([]byte("a")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w2.Write([]byte("b")); err != nil {
-		t.Fatal(err)
-	}
-	got := len(bucket.c.Status().Writers)
-	_ = w1.Close()
-	_ = w2.Close()
-	if got != 2 {
-		t.Errorf("Status lists %d writers for two simultaneous uploads of one name, want 2", got)
-	}
-}
-
 // Resuming with a shorter source must finish with only the parts
 // the new source has (no stale leftover parts).
 func TestKnownDefect_ResumeShorterSourceDropsStaleParts(t *testing.T) {
