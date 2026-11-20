@@ -33,6 +33,30 @@ var issue172Writes = []string{
 	"b2_hide_file", "b2_copy_file", "b2_delete_file_version",
 }
 
+type issue172SensitiveCause string
+
+func (e issue172SensitiveCause) Error() string { return string(e) }
+
+func TestIssue172RetainedCauseStaysRedactedWhenFormatted(t *testing.T) {
+	const id, key = "private-test-file-id", "private-test-customer-key"
+	req, _ := http.NewRequest(http.MethodGet, "https://example.invalid/download?fileId="+id, nil)
+	req.Header.Set("X-Blazer-Method", "b2_download_file_by_id")
+	req.Header.Set("X-Bz-Server-Side-Encryption-Customer-Key", key)
+	cause := issue172SensitiveCause("failed " + req.URL.String() + " with " + key)
+	_, err := makeNetRequest(req.Context(), req, authSnapshotTransport(func(*http.Request) (*http.Response, error) { return nil, cause }))
+	if !errors.Is(err, cause) {
+		t.Fatal("original transport cause was lost")
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x"} {
+		got := fmt.Sprintf(verb, err)
+		for _, secret := range []string{id, key, req.URL.String()} {
+			if strings.Contains(got, secret) || strings.Contains(got, fmt.Sprintf("%x", secret)) {
+				t.Errorf("%s exposed the retained transport cause", verb)
+			}
+		}
+	}
+}
+
 func TestIssue172ResponseBodyLoss(t *testing.T) {
 	for _, method := range issue172Writes {
 		t.Run(method, func(t *testing.T) {
