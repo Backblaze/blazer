@@ -1,0 +1,90 @@
+name: Agent evals
+on:
+  pull_request:   # no paths filter: a required check must report on every PR, so the scope step skips instead
+  merge_group:    # and in the merge queue
+  schedule:
+    - cron: '0 2 * * *'
+permissions:
+  contents: read
+jobs:
+  evals:
+    if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # each eval starts from an older commit
+          persist-credentials: false   # the agent and the code under test can read .git/config
+      - name: Skip unless the agent configuration changed
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -o pipefail
+          run=true
+          # Skip only when the diff succeeds and touches no configuration; a failed or empty diff runs the suite.
+          # --no-renames lists both sides of a move, so renaming AGENTS.md, CLAUDE.md or an eval away still counts.
+          if { [ "$EVENT" = pull_request ] || [ "$EVENT" = merge_group ]; } \
+             && changed=$(git diff -z --no-renames --name-only "$BASE...HEAD" | tr '\0' '\n') && [ -n "$changed" ] \
+             && ! grep -qE '(^|/)(CLAUDE(\.local)?\.md|AGENTS(\.override)?\.md|GEMINI\.md|REVIEW\.md|\.mcp\.json)$|(^|/)\.(claude|codex|gemini|agents)/|^\.github/(copilot-instructions\.md|instructions/|agents/|hooks/|skills/)|^evals/|^\.github/workflows/agent-evals\.yml$' <<<"$changed"; then
+            run=false
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          # Deleting an eval silently drops a regression test; name each one so the code owner sees it.
+          if [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            git diff --no-renames --name-only --diff-filter=D "$BASE...HEAD" -- 'evals/*.json' | while IFS= read -r f; do
+              echo "::warning file=$f::this PR deletes the eval $f; a code owner of evals/ must approve dropping it"
+            done
+          fi
+      - if: steps.scope.outputs.run == 'true'
+        run: npm install -g @anthropic-ai/claude-code   # Claude Code; other assistants: see references/ai-assistants.md
+      - name: Run eval suite
+        if: steps.scope.outputs.run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          git config --global user.name evals && git config --global user.email evals@example.com
+          ASSISTANT=claude   # claude or codex: picks the result parser in normalize_result.py
+          cp -r evals /tmp/evals   # grade from a copy made before any run
+          sums() { (cd /tmp/evals && find . -type f -print0 | sort -z | xargs -0 sha256sum); }
+          manifest=$(sums)   # checked after the agent and again after grading, since the checks run repo code
+          failed=0
+          ran=0
+          for eval in /tmp/evals/*.json; do
+            [ -f "$eval" ] || continue
+            ran=$((ran + 1))
+            # A fresh clone, not a worktree, so nothing the run writes under .git reaches this checkout or later evals.
+            rm -rf /tmp/run && git clone -q --no-local --no-checkout "$GITHUB_WORKSPACE" /tmp/run
+            git -C /tmp/run -c core.hooksPath=/dev/null checkout -q --detach "$(jq -r '.from' "$eval")"
+            rm -rf /tmp/run/evals                       # keep the checks out of the run's checkout
+            # The configuration under test: every CLAUDE.md, CLAUDE.local.md, AGENTS.md, REVIEW.md, .mcp.json and .claude/ at any depth, from this
+            # checkout, replacing the old commit's copies (including ones this change deletes).
+            cfg=(':(glob)**/CLAUDE.md' ':(glob)**/CLAUDE.local.md' ':(glob)**/AGENTS.md' ':(glob)**/AGENTS.override.md' ':(glob)**/REVIEW.md' ':(glob)**/.mcp.json' ':(glob)**/.claude/**'
+                 ':(glob)**/GEMINI.md' ':(glob)**/.codex/**' ':(glob)**/.gemini/**' ':(glob)**/.agents/**'
+                 ':(glob).github/copilot-instructions.md' ':(glob).github/instructions/**' ':(glob).github/agents/**'
+                 ':(glob).github/hooks/**' ':(glob).github/skills/**')   # every assistant's configuration
+            git -C /tmp/run ls-files -z -- "${cfg[@]}" | (cd /tmp/run && xargs -0 -r rm -f)
+            git ls-files -z -- "${cfg[@]}" | tar --null -T - -cf - | tar -xf - -C /tmp/run
+            git -C /tmp/run add -A && git -C /tmp/run -c core.hooksPath=/dev/null commit -q --allow-empty -m "configuration under test"
+            base=$(git -C /tmp/run rev-parse HEAD)   # pinned before the agent runs
+            ( cd /tmp/run
+              # Claude Code flags; for codex exec, copilot -p or gemini -p keep the same tool limits
+              rc=0
+              claude -p "$(jq -r '.prompt' "$eval")" \
+                --tools "Read,Edit,Write,Glob,Grep,Bash,Skill" \
+                --allowedTools "Read,Edit,Write,Glob,Grep,Skill,Bash(make test)" \
+                --strict-mcp-config \
+                --permission-mode dontAsk \
+                --output-format json > /tmp/raw.out || rc=$?
+              # Verify the graders before running any of them: the run could have replaced normalize_result.py.
+              [ "$(sums)" = "$manifest" ] || { echo "FAIL $(jq -r '.name' "$eval") (the run modified the graders)"; exit 1; }
+              # One result shape for the grader, decided from the runtime's signals, not the model's text.
+              env -u ANTHROPIC_API_KEY -u CODEX_API_KEY -u OPENAI_API_KEY python3 /tmp/evals/normalize_result.py --assistant "$ASSISTANT" --exit-code "$rc" /tmp/raw.out > /tmp/result.json
+              env -u ANTHROPIC_API_KEY -u CODEX_API_KEY -u OPENAI_API_KEY EVAL_BASE="$base" /tmp/evals/check.sh "$eval" /tmp/result.json; graded=$?
+              [ "$(sums)" = "$manifest" ] || { echo "FAIL $(jq -r '.name' "$eval") (the checks modified the graders)"; exit 1; }
+              exit "$graded" ) || failed=$((failed + 1))
+            rm -rf /tmp/run
+          done
+          echo "$ran eval(s) ran, $failed failed"
+          [ "$ran" -gt 0 ] && [ "$failed" -eq 0 ]   # no evals is a failure, not a pass

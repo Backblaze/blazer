@@ -57,9 +57,14 @@ From: intent.md (<author>). Status: ready for review.
 # Plan: <title>
 
 ## Files that change
+## Reuse
+<existing code this extends (file and symbol), and why anything new is needed>
 ## Order of work
-1. <step> (R1).
+1. Test first: <test> fails because <reason>. Then: <smallest change> (R1).
 ## Risks
-## Proof
-- R1: <test name, and whether it fails when the change is reverted>
+## Test plan
+- R1: <test name, extended or new, and whether it fails when the change is reverted>
+- Edge cases: <empty, limits, errors, retries, concurrency> and the test for each.
+## Critique
+<what the `plan-critic` agent found and what changed in response>
 ```

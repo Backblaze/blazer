@@ -10,8 +10,8 @@ Requirements and design happen in one session instead of two hand-offs. The prod
 ## Before you start
 
 - Locate `intent/<slug>/intent.md` and confirm it is approved (ask if unclear). No intent, run `sdlc-intent` first.
-- List the policy skills available (`.claude/skills/`, plugins) for brand, security, compliance and UX, and apply every one that is relevant. If none exist, say so, because the spec will rest on stated constraints only.
-- Read `CLAUDE.md` and the parts of the codebase the intent touches so the design integrates with what exists.
+- List the policy skills available (the assistant's skills folder, such as `.claude/skills/` for Claude Code, and plugins; other assistants: `references/ai-assistants.md`) for brand, security, compliance and UX, and apply every one that is relevant. If none exist, say so, because the spec will rest on stated constraints only.
+- Read `AGENTS.md` and the parts of the codebase the intent touches so the design integrates with what exists.
 
 ## Produce `intent/<slug>/spec.md`
 
@@ -21,7 +21,7 @@ From: intent.md (<author>). Status: ready for product owner review.
 Skills applied: <skill names>.
 
 ## Requirements
-- R1. <testable statement>
+- R1. <testable statement>. Test: given <state>, when <action>, then <observable result>.
 - R2. ...
 
 ## Design
@@ -42,7 +42,7 @@ Skills applied: <skill names>.
 ## Rules
 
 - Number every requirement (R1, R2, ...). The plan and the review cite these numbers.
-- Make requirements testable: observable behavior, a measurable limit, an exact field set.
+- Make requirements testable: observable behavior, a measurable limit, an exact field set. Give each a `Test:` line (given, when, then) that the build writes as a failing test first (`sdlc-feedback-loop`). A requirement you cannot write a test for is not ready.
 - Every constraint in the intent must appear in the coverage table. If one cannot be met, it becomes a concern, not a silent omission.
 - When two policies conflict, do not pick a winner. Describe the clash, propose a resolution, name the owner.
 - Carry unanswered intent questions forward as concerns with an owner; never guess.

@@ -1,0 +1,10 @@
+{
+  "default_tier": "medium",
+  "large_diff_lines": 800,
+  "trusted_authors": ["owning-team-member-login"],
+  "low_paths": ["docs/**", "**/*.md", "README*", "LICENSE"],
+  "medium_paths": ["src/**", "app/**", "lib/**", "tests/**"],
+  "high_paths": ["**/auth/**", "**/billing/**", "**/migrations/**", "infra/**", "**/installer/**"],
+  "always_human_paths": [".github/**", "CODEOWNERS", "docs/CODEOWNERS", "**/auth/**", "**/billing/**", "**/migrations/**", "infra/**", "**/installer/**", "**/CLAUDE.md", "**/AGENTS.md", "**/AGENTS.override.md", "**/CLAUDE.local.md", "**/GEMINI.md", "**/REVIEW.md", "**/.claude/**", "**/.codex/**", "**/.gemini/**", "**/.agents/**", "**/.mcp.json", "**/risk-tiers.json", "**/classify.py", "evals/**"],
+  "always_human_keywords": ["auth", "billing", "payment", "secret", "credential", "migration", "installer"]
+}
