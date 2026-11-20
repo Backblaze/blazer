@@ -118,6 +118,12 @@ func TestReaderVerify(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := newSHA1WireBucket(t)
 			srv.Handle(tc.name, downloadResponse(tc.body, tc.sha1))
+			srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+				if id := req.Query.Get("fileId"); id != "file-"+tc.name {
+					t.Errorf("download ID = %q, want file-%s", id, tc.name)
+				}
+				return downloadResponse(tc.body, tc.sha1)(req)
+			})
 
 			object := bucket.Object(tc.name)
 			var reader *Reader

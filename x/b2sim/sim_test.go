@@ -102,7 +102,7 @@ func TestPublicClientSendsB2WireRequests(t *testing.T) {
 	if err != nil || string(got) != "content" {
 		t.Fatalf("read = %q, %v", got, err)
 	}
-	want := map[string]bool{"GET /b2api/v4/b2_authorize_account": false, "POST /b2api/v4/b2_create_bucket": false, "POST /b2api/v4/b2_get_upload_url": false, "POST /upload/file/": false, "GET /file/wire/object.txt": false}
+	want := map[string]bool{"GET /b2api/v4/b2_authorize_account": false, "POST /b2api/v4/b2_create_bucket": false, "POST /b2api/v4/b2_get_upload_url": false, "POST /upload/file/": false, "GET /b2api/v4/b2_download_file_by_id": false}
 	for _, request := range recorder.snapshot() {
 		path := request.path
 		if strings.HasPrefix(path, "/upload/file/") {
@@ -1090,7 +1090,7 @@ func TestUnsupportedOperationFailsLoudly(t *testing.T) {
 	sim := New()
 	for _, tc := range []struct{ method, operation string }{
 		{http.MethodPost, "b2_copy_file"},
-		{http.MethodGet, "b2_download_file_by_id"},
+		{http.MethodPost, "b2_copy_part"},
 	} {
 		t.Run(tc.operation, func(t *testing.T) {
 			req, err := http.NewRequest(tc.method, origin+"/b2api/v4/"+tc.operation, strings.NewReader(`{}`))
@@ -1113,6 +1113,51 @@ func TestUnsupportedOperationFailsLoudly(t *testing.T) {
 			}
 			if resp.StatusCode != http.StatusNotImplemented || failure.Code != "unsupported_operation" || !strings.Contains(failure.Message, tc.operation) {
 				t.Fatalf("unsupported response = status %d code %q message %q", resp.StatusCode, failure.Code, failure.Message)
+			}
+		})
+	}
+}
+
+func TestDownloadByIDKeepsHistoricalVersion(t *testing.T) {
+	sim := New()
+	bucketID := sim.Seed("versions")
+	sim.buckets[bucketID].versions = []*version{
+		{id: "old-id", name: "same-name", data: []byte("oldbytes"), contentType: "text/plain"},
+		{id: "new-id", name: "same-name", data: []byte("newbytes"), contentType: "text/plain"},
+	}
+	for _, tc := range []struct {
+		name, method, id, auth, byteRange, body string
+		status                                  int
+	}{
+		{"historical", "GET", "old-id", "b2sim-token", "", "oldbytes", 200},
+		{"current", "GET", "new-id", "b2sim-token", "", "newbytes", 200},
+		{"head", "HEAD", "old-id", "b2sim-token", "", "", 200},
+		{"range", "GET", "old-id", "b2sim-token", "bytes=1-3", "ldb", 206},
+		{"past EOF", "GET", "old-id", "b2sim-token", "bytes=8-9", "", 416},
+		{"missing", "GET", "missing-id", "b2sim-token", "", "", 404},
+		{"unauthorized", "GET", "old-id", "wrong-token", "", "", 401},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, origin+"/b2api/v4/b2_download_file_by_id?fileId="+tc.id, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", tc.auth)
+			req.Header.Set("Range", tc.byteRange)
+			resp, err := sim.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if err != nil || resp.StatusCode != tc.status {
+				t.Fatalf("response status=%d error=%v, want %d, nil", resp.StatusCode, err, tc.status)
+			}
+			if tc.status < 400 && (string(body) != tc.body || resp.Header.Get("X-Bz-File-Id") != tc.id) {
+				t.Fatalf("body=%q ID=%q, want %q, %q", body, resp.Header.Get("X-Bz-File-Id"), tc.body, tc.id)
+			}
+			if tc.method == http.MethodHead && resp.ContentLength != 8 {
+				t.Errorf("HEAD length = %d, want 8", resp.ContentLength)
 			}
 		})
 	}

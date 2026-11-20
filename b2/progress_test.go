@@ -307,6 +307,14 @@ func (b progressGatedBucket) downloadFileByName(ctx context.Context, name string
 	return &progressGatedFileReader{beFileReaderInterface: reader, ctx: ctx, seen: b.seen}, nil
 }
 
+func (b progressGatedBucket) downloadFileByID(ctx context.Context, id string, offset, size int64, head bool, key *SSECKey) (beFileReaderInterface, error) {
+	reader, err := b.beBucketInterface.downloadFileByID(ctx, id, offset, size, head, key)
+	if err != nil {
+		return nil, err
+	}
+	return &progressGatedFileReader{beFileReaderInterface: reader, ctx: ctx, seen: b.seen}, nil
+}
+
 type progressGatedFileReader struct {
 	beFileReaderInterface
 	ctx         context.Context
