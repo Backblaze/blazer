@@ -66,6 +66,24 @@ func TestIssue172SentRequestEvidence(t *testing.T) {
 	}
 }
 
+func TestIssue172CancellationControls(t *testing.T) {
+	for _, method := range []string{"b2_download_file_by_name", "b2_upload_file", "b2_upload_part"} {
+		t.Run(method, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost, "https://example.invalid", nil)
+			req.Header.Set("X-Blazer-Method", method)
+			_, err := makeNetRequest(req.Context(), req, authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
+				if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.WroteHeaders != nil {
+					trace.WroteHeaders()
+				}
+				return nil, context.DeadlineExceeded
+			}))
+			if err != context.DeadlineExceeded || Action(err) != Punt {
+				t.Errorf("deadline error=%v action=%v, want unchanged context deadline and Punt", err, Action(err))
+			}
+		})
+	}
+}
+
 func issue172TransportError(t *testing.T, method string, cause error) error {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/api", nil)
