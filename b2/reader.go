@@ -314,7 +314,9 @@ func (r *Reader) initFunc() {
 		if err == nil {
 			size, _, _, _ := fr.stats()
 			if err := fr.Close(); err == nil {
-				r.fileID = fr.id()
+				if r.fileID == "" {
+					r.fileID = fr.id()
+				}
 				available := size - r.offset
 				if available < 0 {
 					available = 0
@@ -391,12 +393,20 @@ func (r *Reader) status() *ReaderStatus {
 	r.smux.Lock()
 	defer r.smux.Unlock()
 
+	// Responses can arrive out of order. Size by chunk ID, leaving pending
+	// gaps at zero; a nil entry means a chunk actually completed.
+	var count int
+	for id := range r.smap {
+		if id >= count {
+			count = id + 1
+		}
+	}
 	rs := &ReaderStatus{
-		Progress: make([]float64, len(r.smap)),
+		Progress: make([]float64, count),
 	}
 
-	for i := 0; i < len(r.smap); i++ {
-		rs.Progress[i] = r.smap[i].done()
+	for id, meter := range r.smap {
+		rs.Progress[id] = meter.done()
 	}
 
 	return rs
