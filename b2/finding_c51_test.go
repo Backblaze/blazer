@@ -44,45 +44,56 @@ func TestRegression_RevealReportsListingError(t *testing.T) {
 		}
 	})
 
-	for _, tc := range []struct {
-		name           string
-		afterEmptyPage bool
-		wantCalls      int
-	}{
-		{name: "permission error on first page", wantCalls: 1},
-		{name: "permission error after empty page", afterEmptyPage: true, wantCalls: 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, bucket := liveOnlyBucket(t)
-			denied := b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"no listFiles capability"}`}
-			if tc.afterEmptyPage {
-				srv.ReplySequence("b2_list_file_versions", b2wiretest.Response{Status: http.StatusOK, Body: `{"files":[],"nextFileName":"gone","nextFileId":"cursor"}`}, denied)
-			} else {
-				srv.ReplySequence("b2_list_file_versions", denied)
-			}
-			err := bucket.Reveal(context.Background(), "gone")
-			if status, code, message := base.MsgCode(err); status != http.StatusForbidden || code != "access_denied" || message != "no listFiles capability" {
-				t.Errorf("Reveal error = %v (status %d, code %q, message %q), want 403 access_denied: no listFiles capability", err, status, code, message)
-			}
-			if IsNotExist(err) {
-				t.Errorf("refused listing reported not found: %v", err)
-			}
-			calls := srv.Calls("b2_list_file_versions")
-			if len(calls) != tc.wantCalls {
-				t.Fatalf("list calls = %d, want %d", len(calls), tc.wantCalls)
-			}
-			for _, call := range calls {
-				b2wiretest.AssertJSON(t, call, "prefix", "gone")
-			}
-			if tc.afterEmptyPage {
-				b2wiretest.AssertJSON(t, calls[1], "startFileName", "gone")
-				b2wiretest.AssertJSON(t, calls[1], "startFileId", "cursor")
-			}
-			if got := len(srv.Calls("b2_delete_file_version")); got != 0 {
-				t.Errorf("delete calls = %d, want 0", got)
-			}
-		})
-	}
+	// Promoted from TestKnownDefect_RevealReportsListingError.
+	t.Run("permission error on first page", func(t *testing.T) {
+		srv, bucket := liveOnlyBucket(t)
+		forbidden := b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"no listFiles capability"}`}
+		srv.ReplySequence("b2_list_file_names", forbidden)
+		srv.ReplySequence("b2_list_file_versions", forbidden)
+		err := bucket.Reveal(newTestCtx(t), "obj")
+		if err == nil {
+			t.Fatal("Reveal returned nil although the listing was refused")
+		}
+		if IsNotExist(err) {
+			t.Errorf("a refused listing was reported as not-found: %v", err)
+		}
+		calls := srv.Calls("b2_list_file_versions")
+		if len(calls) != 1 {
+			t.Fatalf("b2_list_file_versions calls = %d, want 1", len(calls))
+		}
+		b2wiretest.AssertJSON(t, calls[0], "prefix", "obj")
+		if status, code, message := base.MsgCode(err); status != http.StatusForbidden || code != "access_denied" || message != "no listFiles capability" {
+			t.Errorf("Reveal error = %v (status %d, code %q, message %q), want 403 access_denied: no listFiles capability", err, status, code, message)
+		}
+		if got := len(srv.Calls("b2_delete_file_version")); got != 0 {
+			t.Errorf("delete calls = %d, want 0", got)
+		}
+	})
+
+	t.Run("permission error after empty page", func(t *testing.T) {
+		srv, bucket := liveOnlyBucket(t)
+		forbidden := b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"no listFiles capability"}`}
+		srv.ReplySequence("b2_list_file_versions", b2wiretest.Response{Status: http.StatusOK, Body: `{"files":[],"nextFileName":"gone","nextFileId":"cursor"}`}, forbidden)
+		err := bucket.Reveal(context.Background(), "gone")
+		if status, code, message := base.MsgCode(err); status != http.StatusForbidden || code != "access_denied" || message != "no listFiles capability" {
+			t.Errorf("Reveal error = %v (status %d, code %q, message %q), want 403 access_denied: no listFiles capability", err, status, code, message)
+		}
+		if IsNotExist(err) {
+			t.Errorf("a refused listing was reported as not-found: %v", err)
+		}
+		calls := srv.Calls("b2_list_file_versions")
+		if len(calls) != 2 {
+			t.Fatalf("b2_list_file_versions calls = %d, want 2", len(calls))
+		}
+		for _, call := range calls {
+			b2wiretest.AssertJSON(t, call, "prefix", "gone")
+		}
+		b2wiretest.AssertJSON(t, calls[1], "startFileName", "gone")
+		b2wiretest.AssertJSON(t, calls[1], "startFileId", "cursor")
+		if got := len(srv.Calls("b2_delete_file_version")); got != 0 {
+			t.Errorf("delete calls = %d, want 0", got)
+		}
+	})
 
 	t.Run("empty listing remains not found", func(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
