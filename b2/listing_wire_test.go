@@ -131,6 +131,42 @@ func TestListDefaultPageSizeOnWire(t *testing.T) {
 	}
 }
 
+func TestListPageSizeB2MaximumOnWire(t *testing.T) {
+	// Both file listing APIs document 10,000 as the maximum maxFileCount.
+	// https://www.backblaze.com/apidocs/b2-list-file-names
+	// https://www.backblaze.com/apidocs/b2-list-file-versions
+	for _, endpoint := range []struct {
+		name string
+		call string
+		opts []ListOption
+	}{
+		{"names", "b2_list_file_names", nil},
+		{"versions", "b2_list_file_versions", []ListOption{ListHidden()}},
+	} {
+		for _, tc := range []struct{ given, want int }{
+			{1000, 1000}, {1001, 1001}, {9999, 9999}, {10000, 10000}, {10001, 10000},
+		} {
+			t.Run(fmt.Sprintf("%s/%d", endpoint.name, tc.given), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				srv := b2wiretest.New(t)
+				srv.Reply(endpoint.call, http.StatusOK, `{"files":[],"nextFileName":null,"nextFileId":null}`)
+				bucket := newListingWireBucket(t, ctx, srv)
+				opts := append(append([]ListOption(nil), endpoint.opts...), ListPageSize(tc.given))
+				iter := bucket.List(ctx, opts...)
+				if iter.Next() || iter.Err() != nil {
+					t.Fatalf("empty listing returned an object or error: %v", iter.Err())
+				}
+				calls := srv.Calls(endpoint.call)
+				if len(calls) != 1 {
+					t.Fatalf("%s requests = %d, want 1", endpoint.call, len(calls))
+				}
+				b2wiretest.AssertJSON(t, calls[0], "maxFileCount", tc.want)
+			})
+		}
+	}
+}
+
 func newListingWireBucket(t *testing.T, ctx context.Context, srv *b2wiretest.Server) *Bucket {
 	t.Helper()
 	bucketJSON := strings.Replace(updateBucketJSON, `"bucketName":"n"`, `"bucketName":"bucket"`, 1)
