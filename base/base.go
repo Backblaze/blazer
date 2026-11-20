@@ -79,6 +79,11 @@ func (e b2err) Error() string {
 
 func (e b2err) Unwrap() error { return e.cause }
 
+// Formatting must not expose the raw cause through a struct dump such as %#v.
+func (e b2err) Format(state fmt.State, verb rune) {
+	_, _ = fmt.Fprintf(state, fmt.FormatString(state, verb), e.Error())
+}
+
 func (e b2err) Is(target error) bool {
 	return target == ErrOutcomeUnknown && e.outcomeUnknown()
 }
