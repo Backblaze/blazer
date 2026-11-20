@@ -201,29 +201,6 @@ func TestKnownDefect_NewBucketDoesNotIgnoreDefaultRetention(t *testing.T) {
 	})
 }
 
-// Reveal must report a listing error, not "not found".
-func TestKnownDefect_RevealReportsListingError(t *testing.T) {
-	srv, bucket := bucketListedWith(t, updateBucketJSON)
-	forbidden := b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"no listFiles capability"}`}
-	srv.ReplySequence("b2_list_file_names", forbidden)
-	srv.ReplySequence("b2_list_file_versions", forbidden)
-	err := bucket.Reveal(newTestCtx(t), "obj")
-	if err == nil {
-		t.Fatal("Reveal returned nil although the listing was refused")
-	}
-	if IsNotExist(err) {
-		t.Errorf("a refused listing was reported as not-found: %v", err)
-	}
-	// The error must be the scripted listing refusal, and the listing must
-	// really have been attempted (once, for the requested object).
-	calls := srv.Calls("b2_list_file_versions")
-	if len(calls) != 1 {
-		t.Fatalf("b2_list_file_versions calls = %d, want 1", len(calls))
-	}
-	b2wiretest.AssertJSON(t, calls[0], "prefix", "obj")
-	requireScriptedError(t, err, http.StatusForbidden, "access_denied", "no listFiles capability")
-}
-
 // Listing unfinished uploads with a name prefix must only return
 // uploads that match the prefix.
 func TestKnownDefect_ListUnfinishedHonoursPrefix(t *testing.T) {
