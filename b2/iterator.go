@@ -330,14 +330,15 @@ func (b *Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, c *cur
 	if c == nil {
 		c = &cursor{}
 	}
-	fs, name, err := b.b.listUnfinishedLargeFiles(ctx, count, c.name)
+	fs, name, err := b.b.listUnfinishedLargeFiles(ctx, count, c.name, c.prefix)
 	if err != nil {
 		return nil, nil, err
 	}
 	var next *cursor
 	if name != "" {
 		next = &cursor{
-			name: name,
+			prefix: c.prefix,
+			name:   name,
 		}
 	}
 	var objects []*Object

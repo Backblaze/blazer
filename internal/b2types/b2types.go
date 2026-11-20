@@ -428,6 +428,7 @@ type GetDownloadAuthorizationResponse struct {
 }
 
 type ListUnfinishedLargeFilesRequest struct {
+	NamePrefix   string `json:"namePrefix,omitempty"`
 	BucketID     string `json:"bucketId"`
 	Continuation string `json:"startFileId,omitempty"`
 	Count        int    `json:"maxFileCount,omitempty"`

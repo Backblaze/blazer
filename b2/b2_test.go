@@ -427,7 +427,7 @@ func (t *testBucket) listFileVersions(ctx context.Context, count int, a, b, c, d
 	return x, y, "", z
 }
 
-func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, cont string) ([]b2FileInterface, string, error) {
+func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, cont, prefix string) ([]b2FileInterface, string, error) {
 	return nil, "", fmt.Errorf("testBucket.listUnfinishedLargeFiles(ctx, %d, %q): not implemented", count, cont)
 }
 
