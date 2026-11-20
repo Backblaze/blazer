@@ -111,7 +111,7 @@ func (g *Group) OperateStream(ctx context.Context, name string, f func(io.Reader
 		))
 		withCleanupError := func(err error) error {
 			if cleanupErr != nil {
-				return fmt.Errorf("%w; cancel unfinished upload: %v", err, cleanupErr)
+				return fmt.Errorf("%w; cancel unfinished upload: %w", err, cleanupErr)
 			}
 			return err
 		}
