@@ -24,7 +24,7 @@ import (
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
-func TestFindingC51_RevealReturnsListingError(t *testing.T) {
+func TestRegression_RevealReportsListingError(t *testing.T) {
 	t.Run("cancelled context", func(t *testing.T) {
 		srv, bucket := liveOnlyBucket(t)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -45,24 +45,24 @@ func TestFindingC51_RevealReturnsListingError(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		name      string
-		firstPage bool
-		wantCalls int
+		name           string
+		afterEmptyPage bool
+		wantCalls      int
 	}{
 		{name: "permission error on first page", wantCalls: 1},
-		{name: "permission error after empty page", firstPage: true, wantCalls: 2},
+		{name: "permission error after empty page", afterEmptyPage: true, wantCalls: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, bucket := liveOnlyBucket(t)
-			denied := b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"listing denied"}`}
-			if tc.firstPage {
+			denied := b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"no listFiles capability"}`}
+			if tc.afterEmptyPage {
 				srv.ReplySequence("b2_list_file_versions", b2wiretest.Response{Status: http.StatusOK, Body: `{"files":[],"nextFileName":"gone","nextFileId":"cursor"}`}, denied)
 			} else {
 				srv.ReplySequence("b2_list_file_versions", denied)
 			}
 			err := bucket.Reveal(context.Background(), "gone")
-			if status, code, message := base.MsgCode(err); status != http.StatusForbidden || code != "access_denied" || message != "listing denied" {
-				t.Errorf("Reveal error = %v (status %d, code %q, message %q), want 403 access_denied: listing denied", err, status, code, message)
+			if status, code, message := base.MsgCode(err); status != http.StatusForbidden || code != "access_denied" || message != "no listFiles capability" {
+				t.Errorf("Reveal error = %v (status %d, code %q, message %q), want 403 access_denied: no listFiles capability", err, status, code, message)
 			}
 			if IsNotExist(err) {
 				t.Errorf("refused listing reported not found: %v", err)
@@ -74,7 +74,7 @@ func TestFindingC51_RevealReturnsListingError(t *testing.T) {
 			for _, call := range calls {
 				b2wiretest.AssertJSON(t, call, "prefix", "gone")
 			}
-			if tc.firstPage {
+			if tc.afterEmptyPage {
 				b2wiretest.AssertJSON(t, calls[1], "startFileName", "gone")
 				b2wiretest.AssertJSON(t, calls[1], "startFileId", "cursor")
 			}

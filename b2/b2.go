@@ -944,7 +944,8 @@ func (o *Object) Hide(ctx context.Context) error {
 }
 
 // Reveal unhides (if hidden) the named object.  If there are multiple objects
-// of a given name, it will reveal the most recent.
+// of a given name, it will reveal the most recent. It returns listing errors,
+// including cancellation, and reports not found only after a successful listing.
 func (b *Bucket) Reveal(ctx context.Context, name string) error {
 	iter := b.List(ctx, ListPrefix(name), ListHidden())
 	for iter.Next() {
