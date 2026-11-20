@@ -123,7 +123,7 @@ type beBucketInterface interface {
 	listFileNames(context.Context, int, string, string, string) ([]beFileInterface, string, error)
 	getFileInfoByName(context.Context, string) (beFileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]beFileInterface, string, string, error)
-	listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error)
+	listUnfinishedLargeFiles(context.Context, int, string, string) ([]beFileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool, *SSECKey) (beFileReaderInterface, error)
 	downloadFileByID(context.Context, string, int64, int64, bool, *SSECKey) (beFileReaderInterface, error)
 	hideFile(context.Context, string) (beFileInterface, error)
@@ -617,12 +617,12 @@ func (b *beBucket) listFileVersions(ctx context.Context, count int, nextName, ne
 	return files, name, id, nil
 }
 
-func (b *beBucket) listUnfinishedLargeFiles(ctx context.Context, count int, continuation string) ([]beFileInterface, string, error) {
+func (b *beBucket) listUnfinishedLargeFiles(ctx context.Context, count int, continuation, prefix string) ([]beFileInterface, string, error) {
 	var cont string
 	var files []beFileInterface
 	f := func() error {
 		g := func() error {
-			fs, c, err := b.b2bucket.listUnfinishedLargeFiles(ctx, count, continuation)
+			fs, c, err := b.b2bucket.listUnfinishedLargeFiles(ctx, count, continuation, prefix)
 			if err != nil {
 				return err
 			}

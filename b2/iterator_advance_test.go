@@ -53,14 +53,14 @@ func (b *scriptBucket) listFileNames(ctx context.Context, count int, cont, pfx, 
 	return b.testBucket.listFileNames(ctx, count, cont, pfx, del)
 }
 
-func (b *scriptBucket) listUnfinishedLargeFiles(ctx context.Context, count int, cont string) ([]b2FileInterface, string, error) {
+func (b *scriptBucket) listUnfinishedLargeFiles(ctx context.Context, count int, cont, prefix string) ([]b2FileInterface, string, error) {
 	n := int(atomic.AddInt32(&b.r.calls, 1))
 	if b.r.unfinished != nil {
 		if fs, next, ok := b.r.unfinished(n, cont); ok {
 			return fs, next, nil
 		}
 	}
-	return b.testBucket.listUnfinishedLargeFiles(ctx, count, cont)
+	return b.testBucket.listUnfinishedLargeFiles(ctx, count, cont, prefix)
 }
 
 func scriptedBucket(t *testing.T, root *scriptRoot) (*Bucket, context.Context) {

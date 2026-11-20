@@ -106,6 +106,15 @@ against B2. A failure on `main` opens (or comments on) the issue "Live integrati
 main". Runs are serialized because the tests share bucket names, so rapid merges can share one run; its
 summary lists every commit merged since the last green live run.
 
+`TestListHiddenDelimiterFolderBoundaryLive` creates two versions on each side of a virtual folder,
+then lists versions with a delimiter and page size one. It checks the complete visible version set
+across that boundary; the wire regression separately tests a name-only continuation because a live
+run does not guarantee B2 will return that cursor shape. Run with throwaway live credentials:
+
+```sh
+go test -count=1 -run '^TestListHiddenDelimiterFolderBoundaryLive$' ./b2
+```
+
 ## When a PR needs a live test
 
 Wire tests prove what blazer sends; only a live test proves how B2 answers. Add or extend a live test when

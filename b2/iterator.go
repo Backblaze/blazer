@@ -99,8 +99,13 @@ func (o *ObjectIterator) page(ctx context.Context) error {
 func (o *ObjectIterator) Next() bool {
 	o.init.Do(func() {
 		o.count = o.opts.pageSize
-		if o.count < 0 || o.count > 1000 {
+		if o.count == 0 && !o.opts.unfinished {
+			o.count = 100
+		}
+		if o.count < 0 {
 			o.count = 1000
+		} else if o.count > 10000 {
+			o.count = 10000
 		}
 		switch {
 		case o.opts.unfinished:
@@ -213,11 +218,10 @@ func ListDelimiter(delimiter string) ListOption {
 
 // ListPageSize configures the iterator to request the given number of objects
 // per network round-trip. With no ListPageSize, or ListPageSize(0), object and
-// version listings send maxFileCount 0, so B2 uses its default of 100.
-// Unfinished large-file listings omit maxFileCount, and B2 likewise uses its
-// default of 100.
+// version listings request 100 objects per page. Unfinished large-file listings
+// omit maxFileCount and use B2's default of 100.
 //
-// The SDK limits object and version listings to 1000 objects, and unfinished
+// The SDK limits object and version listings to 10,000 objects, and unfinished
 // large-file listings to 100.
 func ListPageSize(count int) ListOption {
 	return func(o *objectIteratorOptions) {
@@ -264,7 +268,7 @@ func (b *Bucket) listObjects(ctx context.Context, count int, c *cursor) ([]*Obje
 		return nil, nil, err
 	}
 	var next *cursor
-	if name != "" && id != "" {
+	if name != "" {
 		next = &cursor{
 			prefix:    c.prefix,
 			delimiter: c.delimiter,
@@ -330,14 +334,15 @@ func (b *Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, c *cur
 	if c == nil {
 		c = &cursor{}
 	}
-	fs, name, err := b.b.listUnfinishedLargeFiles(ctx, count, c.name)
+	fs, name, err := b.b.listUnfinishedLargeFiles(ctx, count, c.name, c.prefix)
 	if err != nil {
 		return nil, nil, err
 	}
 	var next *cursor
 	if name != "" {
 		next = &cursor{
-			name: name,
+			prefix: c.prefix,
+			name:   name,
 		}
 	}
 	var objects []*Object

@@ -137,6 +137,28 @@ func TestObjectAuthURLWire(t *testing.T) {
 	b2wiretest.AssertNoJSON(t, request, "b2ContentDisposition")
 }
 
+// An empty key page with a cursor is not the end of the listing.
+func TestRegression_ListKeysContinuesPastEmptyPageWithCursor(t *testing.T) {
+	srv, bucket := liveOnlyBucket(t)
+	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[],"nextApplicationKeyId":"next-id"}`)
+	keys, next, err := bucket.c.ListKeys(newTestCtx(t), 10, "")
+	if len(keys) != 0 || !validEmptyKeyPage(next, err) {
+		t.Errorf("ListKeys = (%d keys, next=%q, err=%v), want no keys, the cursor %q and nil error", len(keys), next, err, "next-id")
+		return
+	}
+	srv.Reply("b2_list_keys", http.StatusOK, `{"keys":[{"applicationKeyId":"next-id","keyName":"found","capabilities":[]}],"nextApplicationKeyId":null}`)
+	keys, next, err = bucket.c.ListKeys(newTestCtx(t), 10, next)
+	if len(keys) != 1 || keys[0].ID() != "next-id" || next != "" || err != io.EOF {
+		t.Fatalf("second ListKeys = (%v, next=%q, err=%v), want key next-id, empty cursor, io.EOF", keys, next, err)
+	}
+	calls := srv.Calls("b2_list_keys")
+	if len(calls) != 2 {
+		t.Fatalf("b2_list_keys requests = %d, want 2", len(calls))
+	}
+	b2wiretest.AssertNoJSON(t, calls[0], "startApplicationKeyId")
+	b2wiretest.AssertJSON(t, calls[1], "startApplicationKeyId", "next-id")
+}
+
 // Request and response fields follow https://www.backblaze.com/apidocs/b2-list-keys
 // and https://www.backblaze.com/apidocs/b2-delete-key.
 func TestClientListKeysAndDeleteWire(t *testing.T) {

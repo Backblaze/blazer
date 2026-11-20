@@ -61,7 +61,7 @@ type b2BucketInterface interface {
 	listFileNames(context.Context, int, string, string, string) ([]b2FileInterface, string, error)
 	getFileInfoByName(context.Context, string) (b2FileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]b2FileInterface, string, string, error)
-	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
+	listUnfinishedLargeFiles(context.Context, int, string, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
 	downloadFileByID(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
 	hideFile(context.Context, string) (b2FileInterface, error)
@@ -676,8 +676,8 @@ func (b *b2Bucket) listFileVersions(ctx context.Context, count int, nextName, ne
 	return files, name, id, nil
 }
 
-func (b *b2Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, continuation string) ([]b2FileInterface, string, error) {
-	fs, cont, err := b.b.ListUnfinishedLargeFiles(ctx, count, continuation)
+func (b *b2Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, continuation, prefix string) ([]b2FileInterface, string, error) {
+	fs, cont, err := b.b.ListUnfinishedLargeFilesWithPrefix(ctx, count, continuation, prefix)
 	if err != nil {
 		return nil, "", err
 	}

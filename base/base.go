@@ -1660,8 +1660,14 @@ func (l *LargeFile) FinishLargeFile(ctx context.Context) (*File, error) {
 
 // ListUnfinishedLargeFiles wraps b2_list_unfinished_large_files.
 func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, continuation string) ([]*File, string, error) {
+	return b.ListUnfinishedLargeFilesWithPrefix(ctx, count, continuation, "")
+}
+
+// ListUnfinishedLargeFilesWithPrefix lists unfinished uploads whose names start with prefix.
+func (b *Bucket) ListUnfinishedLargeFilesWithPrefix(ctx context.Context, count int, continuation, prefix string) ([]*File, string, error) {
 	state := b.b2.snapshot()
 	b2req := &b2types.ListUnfinishedLargeFilesRequest{
+		NamePrefix:   prefix,
 		BucketID:     b.ID,
 		Continuation: continuation,
 		Count:        count,
