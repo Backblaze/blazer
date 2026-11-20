@@ -91,6 +91,21 @@ func TestIssue172SentRequestEvidence(t *testing.T) {
 }
 
 func TestIssue172CancellationControls(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run("b2_create_key/pre_send/"+cause.Error(), func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, "https://example.invalid", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("X-Blazer-Method", "b2_create_key")
+			_, err = makeNetRequest(req.Context(), req, authSnapshotTransport(func(*http.Request) (*http.Response, error) {
+				return nil, cause // No WroteHeaders or WroteRequest: nothing was sent.
+			}))
+			if err != cause || Action(err) != Punt || errors.Is(err, ErrOutcomeUnknown) {
+				t.Errorf("pre-send error=%v action=%v unknown=%t; want raw %v, Punt, false", err, Action(err), errors.Is(err, ErrOutcomeUnknown), cause)
+			}
+		})
+	}
 	for _, method := range []string{"b2_download_file_by_name", "b2_upload_file", "b2_upload_part"} {
 		t.Run(method, func(t *testing.T) {
 			req, _ := http.NewRequest(http.MethodPost, "https://example.invalid", nil)
