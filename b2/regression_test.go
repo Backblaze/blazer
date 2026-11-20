@@ -18,6 +18,7 @@ package b2
 // is already correct.
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -395,4 +396,293 @@ func TestRegression_KnownDefectMultipartFixtureUsesValidParts(t *testing.T) {
 			t.Errorf("part %s bytes = %d, want %d", number, got, size)
 		}
 	}
+}
+
+// bytes after the position. The live test in integration_test.go currently
+// expects the whole size (250) for pos 50; that expectation must change
+// together with the fix. This offline test checks the returned count and the
+// payload.
+func TestRegression_PositionedReaderReportsRemainingBytes(t *testing.T) {
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	data := bytes.Repeat([]byte("z"), 250)
+	r := bytes.NewReader(data)
+	if _, err := r.Seek(50, 0); err != nil {
+		t.Fatal(err)
+	}
+	w := bucket.Object("pos").NewWriter(newTestCtx(t))
+	n, err := w.ReadFrom(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n != 200 {
+		t.Errorf("ReadFrom at position 50 of 250 returned n=%d, want 200", n)
+	}
+	if body := stripSHA1Trailer(srv.Last(t, "upload_file").Body); len(body) != 200 {
+		t.Errorf("uploaded %d bytes, want 200", len(body))
+	}
+}
+
+// stripSHA1Trailer removes the 40-char hex SHA-1 that simple uploads append.
+func stripSHA1Trailer(b []byte) []byte {
+	if len(b) >= 40 {
+		return b[:len(b)-40]
+	}
+	return b
+}
+
+// Close after a failed buffer setup must return an error, not panic.
+func TestRegression_CloseAfterBufferSetupFailureDoesNotPanic(t *testing.T) {
+	bucket, _ := newMappingBucket(t, updateBucketJSON)
+	w := bucket.Object("obj").NewWriter(newTestCtx(t))
+	w.UseFileBuffer = true
+	w.FileBufferDir = filepath.Join(t.TempDir(), "does-not-exist")
+	if _, err := w.Write([]byte("hello")); err == nil {
+		t.Fatal("expected buffer-creation error from Write")
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Close panicked: %v", r)
+		}
+	}()
+	if err := w.Close(); err == nil {
+		t.Fatal("Close returned nil after a failed Write")
+	}
+}
+
+// Closing a writer that never received data must remove it from the
+// client's writer list and release its (file) buffer.
+func TestRegression_EmptyWriterCloseDeregistersWriter(t *testing.T) {
+	bucket, _ := newMappingBucket(t, updateBucketJSON)
+	dir := t.TempDir()
+	w := bucket.Object("empty").NewWriter(newTestCtx(t))
+	w.UseFileBuffer = true
+	w.FileBufferDir = dir
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(bucket.c.Status().Writers); got != 0 {
+		t.Errorf("%d writer(s) still listed after Close of an empty writer, want 0", got)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("%d temp file(s) left in buffer dir, want 0", len(entries))
+	}
+}
+
+// Write after Close must be rejected with ErrClosed (small file).
+func TestRegression_WriteAfterCloseIsRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+	}{
+		{"small file", []byte("hello")},
+		{"empty writer", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bucket, _ := newMappingBucket(t, updateBucketJSON)
+			w := bucket.Object("obj").NewWriter(newTestCtx(t))
+			if len(tc.payload) > 0 {
+				if _, err := w.Write(tc.payload); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Write after Close panicked: %v", r)
+				}
+			}()
+			n, err := w.Write([]byte("lost"))
+			if !errors.Is(err, ErrClosed) {
+				t.Fatalf("Write after Close = (%d, %v), want ErrClosed", n, err)
+			}
+		})
+	}
+}
+
+// If the source of ReadFrom fails half way, Close must not save the
+// partial data as a complete object.
+func TestRegression_PartialSourceIsNotCommittedByClose(t *testing.T) {
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	w := bucket.Object("partial").NewWriter(newTestCtx(t))
+	srcErr := errors.New("source failed")
+	if _, err := w.ReadFrom(&failingSourceReader{data: []byte("partial"), err: srcErr}); !errors.Is(err, srcErr) {
+		t.Fatalf("ReadFrom err = %v, want %v", err, srcErr)
+	}
+	closeErr := w.Close()
+	if n := len(srv.Calls("upload_file")); n != 0 {
+		t.Errorf("Close committed %d upload(s) of partial content after the source failed", n)
+	}
+	if closeErr == nil {
+		t.Error("Close returned nil after the source failed half way")
+	}
+}
+
+// When a large upload cannot start (ReadFrom from a seekable
+// source), Close must not save only the first chunk as the whole object.
+func TestRegression_FailedLargeStartIsRecordedAndCloseDoesNotCommitFirstChunk(t *testing.T) {
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	srv.Reply("b2_start_large_file", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"cannot start"}`)
+	w := bucket.Object("large").NewWriter(newTestCtx(t))
+	w.ChunkSize = 10
+	if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat([]byte("x"), 25))); err == nil {
+		t.Fatal("ReadFrom returned nil although b2_start_large_file failed")
+	}
+	closeErr := w.Close()
+	if n := len(srv.Calls("upload_file")); n != 0 {
+		t.Errorf("Close saved %d object(s) (first chunk only) after the large upload failed to start", n)
+	}
+	if closeErr == nil {
+		t.Error("Close returned nil after the large upload failed to start")
+	}
+}
+
+// ReadFrom with a partly read ReadSeeker uploads only the rest.
+func TestRegression_ReadFromHonoursReaderPosition(t *testing.T) {
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	data := []byte("0123456789abcde")
+	r := bytes.NewReader(data)
+	if _, err := r.Seek(8, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	w := bucket.Object("pos").NewWriter(newTestCtx(t))
+	n, err := w.ReadFrom(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body := stripSHA1Trailer(srv.Last(t, "upload_file").Body)
+	if want := data[8:]; !bytes.Equal(body, want) {
+		t.Errorf("uploaded %q (%d bytes), want %q (%d bytes); ReadFrom reported n=%d", body, len(body), want, len(want), n)
+	}
+}
+
+// ReadFrom with an os pipe (not seekable) must not turn into a
+// successful empty object. Either the data is uploaded or an error is reported.
+func TestRegression_PipeSourceDoesNotProduceEmptyObject(t *testing.T) {
+	bucket, srv := newMappingBucket(t, updateBucketJSON)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pr.Close() }()
+	go func() {
+		_, _ = pw.Write([]byte("hello"))
+		_ = pw.Close()
+	}()
+	w := bucket.Object("pipe").NewWriter(newTestCtx(t))
+	_, readErr := w.ReadFrom(pr)
+	closeErr := w.Close()
+	uploads := srv.Calls("upload_file")
+	if readErr == nil && closeErr == nil {
+		if len(uploads) != 1 {
+			t.Fatalf("no error but %d uploads", len(uploads))
+		}
+		if body := stripSHA1Trailer(uploads[0].Body); string(body) != "hello" {
+			t.Errorf("object content %q, want %q", body, "hello")
+		}
+		return
+	}
+	if len(uploads) != 0 {
+		t.Errorf("ReadFrom err=%v, Close err=%v, but %d object(s) were saved", readErr, closeErr, len(uploads))
+	}
+	if closeErr == nil {
+		t.Errorf("ReadFrom failed (%v) but Close returned nil", readErr)
+	}
+}
+
+// Status() on a client built from a saved session (no request
+// made yet) must not panic.
+func TestRegression_StatusBeforeAnyRequestDoesNotPanic(t *testing.T) {
+	store := &InMemoryAccountInfo{}
+	store.Set(sampleAuthData())
+	client, err := NewClient(context.Background(), "key-id", "secret", WithAccountInfo(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Status() panicked before any request: %v", r)
+		}
+	}()
+	si := client.Status()
+	if si == nil {
+		t.Fatal("nil status")
+	}
+}
+
+// The writer's internal context must be cancelled once the writer
+// is closed successfully, so it does not stay attached to a long-lived parent.
+func TestRegression_WriterContextCancelledAfterSuccessfulClose(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int
+	}{{"simple upload", 5}, {"large upload", 25}} {
+		t.Run(tc.name, func(t *testing.T) {
+			bucket, srv := newMappingBucket(t, updateBucketJSON)
+			srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"lid","fileName":"obj"}`)
+			srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"lid","fileName":"obj","action":"upload","uploadTimestamp":1}`)
+			w := bucket.Object("obj").NewWriter(context.Background())
+			w.ChunkSize = 10
+			if _, err := w.Write(bytes.Repeat([]byte("x"), tc.size)); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if w.ctx.Err() == nil {
+				t.Error("writer context still live after successful Close")
+			}
+		})
+	}
+}
+
+type failingSourceReader struct {
+	data []byte
+	err  error
+}
+
+// Reader.Verify before any Read (or after a failed key check)
+// must return (nil, false), not panic.
+func TestRegression_VerifyBeforeReadDoesNotPanic(t *testing.T) {
+	_, bucket := newSHA1WireBucket(t)
+	for _, tc := range []struct {
+		name string
+		mk   func() *Reader
+	}{
+		{"before any Read", func() *Reader { return bucket.Object("o").NewReader(newTestCtx(t)) }},
+		{"after a rejected SSE-C key", func() *Reader {
+			bad := &SSECKey{} // a zero key is rejected by validation
+			r := bucket.Object("o").NewReader(newTestCtx(t), bad)
+			_, _ = r.Read(make([]byte, 1))
+			return r
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.mk()
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("Verify panicked: %v", p)
+				}
+			}()
+			if err, ok := r.Verify(); err != nil || ok {
+				t.Errorf("Verify = (%v, %v), want (nil, false)", err, ok)
+			}
+		})
+	}
+}
+
+func (f *failingSourceReader) Read(p []byte) (int, error) {
+	if len(f.data) == 0 {
+		return 0, f.err
+	}
+	n := copy(p, f.data)
+	f.data = f.data[n:]
+	return n, nil
 }

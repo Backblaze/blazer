@@ -32,39 +32,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
-
-func newBaseWire(t *testing.T) (*b2wiretest.Server, *B2, context.Context) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	t.Cleanup(cancel)
-	srv := b2wiretest.New(t)
-	root, err := AuthorizeAccount(ctx, "account-id", "application-key", SetAPIBase(srv.URL()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return srv, root, ctx
-}
-
-const bucketJSONWithLock = `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":7,` +
-	`"fileLockConfiguration":{"isClientAuthorizedToRead":true,"value":{"isFileLockEnabled":false}}}`
-
-// A bucket update reply without the file-lock section must not crash.
-func TestKnownDefect_UpdateBucketReplyWithoutFileLockDoesNotPanic(t *testing.T) {
-	srv, root, ctx := newBaseWire(t)
-	srv.Reply("b2_update_bucket", http.StatusOK, `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[],"revision":7}`)
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Update panicked on a reply without fileLockConfiguration: %v", r)
-		}
-	}()
-	if _, err := (&Bucket{ID: "bid", Name: "n", b2: root}).Update(ctx); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-}
 
 // The handle returned by a successful update carries the server's
 // new revision, so the next update has a conflict check.

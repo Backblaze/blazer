@@ -40,36 +40,6 @@ import (
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
-// Reader.Verify before any Read (or after a failed key check)
-// must return (nil, false), not panic.
-func TestKnownDefect_VerifyBeforeReadDoesNotPanic(t *testing.T) {
-	_, bucket := newSHA1WireBucket(t)
-	for _, tc := range []struct {
-		name string
-		mk   func() *Reader
-	}{
-		{"before any Read", func() *Reader { return bucket.Object("o").NewReader(newTestCtx(t)) }},
-		{"after a rejected SSE-C key", func() *Reader {
-			bad := &SSECKey{} // a zero key is rejected by validation
-			r := bucket.Object("o").NewReader(newTestCtx(t), bad)
-			_, _ = r.Read(make([]byte, 1))
-			return r
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := tc.mk()
-			defer func() {
-				if p := recover(); p != nil {
-					t.Fatalf("Verify panicked: %v", p)
-				}
-			}()
-			if err, ok := r.Verify(); err != nil || ok {
-				t.Errorf("Verify = (%v, %v), want (nil, false)", err, ok)
-			}
-		})
-	}
-}
-
 // Reader status progress is indexed by chunk id; chunk ids start
 // at 0, so the first chunk must not be dropped and an active chunk must not
 // read as 100%.
