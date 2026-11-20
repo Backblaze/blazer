@@ -110,6 +110,28 @@ func TestReaderStatusIncludesAllocatedChunks(t *testing.T) {
 	}
 }
 
+func TestReaderStatusCompletesEOFProbe(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	serve := downloadResponse([]byte("data"), fmt.Sprintf("%x", sha1.Sum([]byte("data"))))
+	srv.Handle("probe", serve)
+	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+		if id := req.Query.Get("fileId"); id != "file-probe" {
+			t.Errorf("download ID = %q, want file-probe", id)
+		}
+		return serve(req)
+	})
+	reader := bucket.Object("probe").NewReader(newTestCtx(t))
+	reader.ChunkSize, reader.ConcurrentDownloads = 4, 1
+	t.Cleanup(func() { _ = reader.Close() })
+	got, err := io.ReadAll(reader)
+	if err != nil || string(got) != "data" {
+		t.Fatalf("download = %q, %v; want data, nil", got, err)
+	}
+	if got := reader.status().Progress; !reflect.DeepEqual(got, []float64{1, 1}) {
+		t.Fatalf("status after EOF probe = %v, want [1 1]", got)
+	}
+}
+
 func TestReaderStatusWhileResponseIsBlocked(t *testing.T) {
 	for _, blocked := range []string{"bytes=0-3", "bytes=4-7"} {
 		t.Run(blocked, func(t *testing.T) {

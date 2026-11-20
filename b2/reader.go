@@ -209,6 +209,9 @@ func (r *Reader) thread() {
 			pin = false
 			if err == errNoMoreContent {
 				// this read generated a 416 so we are entirely past the end of the object
+				r.smux.Lock()
+				r.smap[chunkID] = nil
+				r.smux.Unlock()
 				r.rmux.Lock()
 				r.readOffEnd = true
 				buf.final = true
@@ -390,12 +393,14 @@ func (r *Reader) Read(p []byte) (int, error) {
 }
 
 func (r *Reader) status() *ReaderStatus {
+	r.rmux.Lock()
+	count := r.chwid
+	r.rmux.Unlock()
 	r.smux.Lock()
 	defer r.smux.Unlock()
 
-	// Responses can arrive out of order. Size by chunk ID, leaving pending
-	// gaps at zero; a nil entry means a chunk actually completed.
-	var count int
+	// Include allocated chunks still waiting for headers. Responses arriving
+	// after the count snapshot may extend it; missing entries stay at zero.
 	for id := range r.smap {
 		if id >= count {
 			count = id + 1
