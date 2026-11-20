@@ -142,8 +142,11 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 // are not available. Matching files are skipped, and cloud objects are never
 // deleted. Symlinks below the root are not followed; a
 // symlinked root is followed. Changed large files are re-uploaded in full,
-// without resuming a previous upload. Per-file failures are returned in
-// Result.Failed along with an aggregate error; other files continue.
+// without resuming a previous upload. A nil option returns a nil result and an
+// error before accessing the local root or making B2 requests. Object names
+// longer than 1024 bytes are per-file failures, including in a dry run.
+// Per-file failures are returned in Result.Failed along with an aggregate
+// error; other files continue.
 // Linux and macOS reject replaced FIFOs without blocking; Windows does not
 // follow a final reparse-point replacement. On other platforms, Sync returns
 // a nil result and an error wrapping errors.ErrUnsupported with GOOS/GOARCH
@@ -161,6 +164,9 @@ func syncWithLocalIO(ctx context.Context, bucket *b2.Bucket, prefix, localRoot s
 	hashFile func(context.Context, string, os.FileInfo) (string, error), opts ...Option) (*Result, error) {
 	settings := options{concurrency: 4}
 	for _, opt := range opts {
+		if opt == nil {
+			return nil, fmt.Errorf("sync: nil option")
+		}
 		opt(&settings)
 	}
 	if settings.err != nil {
@@ -241,11 +247,16 @@ func syncWithLocalIO(ctx context.Context, bucket *b2.Bucket, prefix, localRoot s
 		if err != nil {
 			return err
 		}
-		if failure, ok := destErr[filepath.ToSlash(rel)]; ok {
+		rel = filepath.ToSlash(rel)
+		if len(prefix)+len(rel) > 1024 {
+			recordFailure(path, fmt.Errorf("sync: object name exceeds 1024 bytes"))
+			return nil
+		}
+		if failure, ok := destErr[rel]; ok {
 			recordFailure(path, failure)
 			return nil
 		}
-		local := localFile{path: path, rel: filepath.ToSlash(rel), size: info.Size(), modTime: info.ModTime(), info: info}
+		local := localFile{path: path, rel: rel, size: info.Size(), modTime: info.ModTime(), info: info}
 		if settings.compare == CompareSHA1 {
 			local.sha1, err = hashFile(ctx, path, info)
 			if err != nil {
