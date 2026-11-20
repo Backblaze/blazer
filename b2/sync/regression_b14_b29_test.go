@@ -12,19 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build knowndefect
-
 package sync
-
-// Known-defect tests. Each test asserts the correct behaviour and currently
-// fails because of an open defect, so this file is built only with the
-// knowndefect tag and the default "go test" does not run it:
-//
-//	make known-defects
-//
-// When a defect is fixed, move its test into the regular suite (a file without
-// the build tag, for example regression_test.go in this package) and rename
-// TestKnownDefect_X to TestRegression_X.
 
 import (
 	"context"
@@ -36,7 +24,7 @@ import (
 )
 
 // A nil Option must be rejected with an error, not crash.
-func TestKnownDefect_NilOptionReturnsErrorWithoutPanic(t *testing.T) {
+func TestRegression_NilOptionReturnsErrorWithoutPanic(t *testing.T) {
 	bucket, _ := newSyncWire(t)
 	root := t.TempDir()
 	defer func() {
@@ -51,7 +39,7 @@ func TestKnownDefect_NilOptionReturnsErrorWithoutPanic(t *testing.T) {
 
 // A dry run must report the same failure for a name B2 would
 // reject (over 1024 bytes) as the real run does, not list it as a planned upload.
-func TestKnownDefect_DryRunFlagsNamesB2WouldReject(t *testing.T) {
+func TestRegression_DryRunFlagsNamesB2WouldReject(t *testing.T) {
 	bucket, wire := newSyncWire(t)
 	root := t.TempDir()
 	for _, name := range []string{"a-long-filename.txt", "good.txt"} {
