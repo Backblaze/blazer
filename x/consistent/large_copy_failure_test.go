@@ -20,12 +20,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Backblaze/blazer/b2"
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/x/b2sim"
 )
 
@@ -86,8 +88,19 @@ func TestOperateStreamCancelsUnfinishedLargeUpload(t *testing.T) {
 			if !errors.Is(err, srcErr) {
 				t.Fatalf("OperateStream err = %v, want source error", err)
 			}
-			if tc.failCancel && !strings.Contains(err.Error(), "cleanup rejected") {
-				t.Errorf("OperateStream err = %v, want cleanup failure", err)
+			if tc.failCancel {
+				cleanupErr := findCleanupError(err)
+				if cleanupErr == nil {
+					t.Errorf("OperateStream err = %v, want matchable B2 cleanup failure", err)
+				} else {
+					if !errors.Is(err, cleanupErr) {
+						t.Errorf("errors.Is(%v, cleanup error) = false", err)
+					}
+					target := reflect.New(reflect.TypeOf(cleanupErr)).Interface()
+					if !errors.As(err, target) {
+						t.Errorf("errors.As(%v, cleanup error type) = false", err)
+					}
+				}
 			}
 			if transport.starts.Load() != 1 {
 				t.Fatalf("large uploads started = %d, want 1", transport.starts.Load())
@@ -106,4 +119,26 @@ func TestOperateStreamCancelsUnfinishedLargeUpload(t *testing.T) {
 			}
 		})
 	}
+}
+
+// findCleanupError locates the simulator's specific B2 error in an error tree.
+func findCleanupError(err error) error {
+	if err == nil {
+		return nil
+	}
+	status, code, message := base.MsgCode(err)
+	if status == 400 && code == "bad_request" && message == "cleanup rejected" {
+		return err
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, child := range wrapped.Unwrap() {
+			if match := findCleanupError(child); match != nil {
+				return match
+			}
+		}
+	case interface{ Unwrap() error }:
+		return findCleanupError(wrapped.Unwrap())
+	}
+	return nil
 }
