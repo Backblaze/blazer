@@ -28,7 +28,6 @@ package b2
 
 import (
 	"errors"
-	"io"
 	"io/fs"
 	"net/http"
 	"reflect"
