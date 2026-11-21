@@ -253,6 +253,104 @@ func TestReaderPinsListedVersion(t *testing.T) {
 	}
 }
 
+func TestReaderAfterDeleteOrHideKeepsResolvedVersion(t *testing.T) {
+	for _, operation := range []string{"Delete", "Hide"} {
+		t.Run(operation, func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			ctx := newTestCtx(t)
+			changed := make(chan struct{})
+			notFound := b2wiretest.Response{Status: http.StatusNotFound, Body: `{"status":404,"code":"not_found","message":"file version not found"}`}
+			serve := func(req b2wiretest.Request, body, id string) b2wiretest.Response {
+				if req.Method == http.MethodHead {
+					return b2wiretest.Response{Header: http.Header{"Content-Length": {"8"}, "X-Bz-File-Id": {id}}}
+				}
+				response := b2wiretest.RangeDownload(body, req.Header.Get("Range"))
+				if response.Header == nil {
+					response.Header = make(http.Header)
+				}
+				response.Header.Set("X-Bz-File-Id", id)
+				return response
+			}
+			srv.Handle("versioned", func(req b2wiretest.Request) b2wiretest.Response {
+				select {
+				case <-changed:
+					if operation == "Hide" {
+						return notFound
+					}
+					return serve(req, "oldbytes", "old-id")
+				default:
+					return serve(req, "newbytes", "latest-id")
+				}
+			})
+			srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+				switch id := req.Query.Get("fileId"); id {
+				case "latest-id":
+					if operation == "Delete" {
+						return notFound
+					}
+					return serve(req, "newbytes", id)
+				case "old-id":
+					return serve(req, "oldbytes", id)
+				default:
+					t.Errorf("unexpected download fileId %q", id)
+					return notFound
+				}
+			})
+			call := "b2_delete_file_version"
+			if operation == "Hide" {
+				call = "b2_hide_file"
+			}
+			srv.Handle(call, func(req b2wiretest.Request) b2wiretest.Response {
+				b2wiretest.AssertJSON(t, req, "fileName", "versioned")
+				if operation == "Delete" {
+					b2wiretest.AssertJSON(t, req, "fileId", "latest-id")
+				}
+				close(changed)
+				return b2wiretest.Response{Body: `{"fileId":"latest-id","fileName":"versioned"}`}
+			})
+			object := bucket.Object("versioned")
+			var err error
+			if operation == "Delete" {
+				err = object.Delete(ctx)
+			} else {
+				err = object.Hide(ctx)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if id := object.ID(); id != "latest-id" {
+				t.Fatalf("resolved ID = %q, want latest-id", id)
+			}
+			read := func(obj *Object) ([]byte, error) {
+				reader := obj.NewReader(ctx)
+				reader.ChunkSize = 16
+				defer func() { _ = reader.Close() }()
+				return io.ReadAll(reader)
+			}
+			before := len(srv.Calls("versioned"))
+			body, err := read(object)
+			if operation == "Delete" {
+				if len(body) != 0 || !IsNotExist(err) {
+					t.Fatalf("read deleted pinned version = %q, %v; want no bytes and not-found", body, err)
+				}
+			} else if err != nil || string(body) != "newbytes" {
+				t.Fatalf("read hidden pinned version = %q, %v; want newbytes, nil", body, err)
+			}
+			if after := len(srv.Calls("versioned")); after != before {
+				t.Errorf("resolved read made %d name downloads, want 0", after-before)
+			}
+			body, err = read(bucket.Object("versioned"))
+			if operation == "Delete" {
+				if err != nil || string(body) != "oldbytes" {
+					t.Fatalf("fresh read after Delete = %q, %v; want oldbytes, nil", body, err)
+				}
+			} else if len(body) != 0 || !IsNotExist(err) {
+				t.Fatalf("fresh read after Hide = %q, %v; want no bytes and not-found", body, err)
+			}
+		})
+	}
+}
+
 func TestReaderParallelChunksPinFirstVersion(t *testing.T) {
 	srv, bucket := newSHA1WireBucket(t)
 	var mu sync.Mutex
