@@ -341,8 +341,19 @@ func TestProgressRejectedSimpleUploadWire(t *testing.T) {
 	assertProgressSamples(t, samples, 3, 3, false)
 }
 
+type progressInstantRetryRoot struct {
+	beRootInterface
+	timer *testAfter
+}
+
+func (r progressInstantRetryRoot) retryAfter(d time.Duration) <-chan time.Time {
+	return r.timer.wait(d)
+}
+
 func TestProgressExhaustedMultipartUploadWire(t *testing.T) {
 	srv, bucket := newSHA1WireBucket(t)
+	timer := newTestAfter()
+	bucket.r = progressInstantRetryRoot{beRootInterface: bucket.r, timer: timer}
 	srv.StrictReplySequence("b2_start_large_file", b2wiretest.Response{
 		Body: `{"fileId":"progress-large","fileName":"progress-exhausted","action":"start","fileInfo":{},"contentType":"application/octet-stream","uploadTimestamp":1}`,
 	})
@@ -375,6 +386,9 @@ func TestProgressExhaustedMultipartUploadWire(t *testing.T) {
 	err := writer.Close()
 	if status, code, message := base.MsgCode(err); status != 500 || code != "internal_error" || message != "part rejected after body" {
 		t.Fatalf("Close = %v; want scripted 500/internal_error/part rejected after body", err)
+	}
+	if waits := timer.durations(); len(waits) != 5 {
+		t.Fatalf("retry waits = %v, want 5", waits)
 	}
 	requests := srv.Calls("upload_part")
 	if len(requests) != 8 {
