@@ -132,6 +132,51 @@ func TestReaderStatusCompletesEOFProbe(t *testing.T) {
 	}
 }
 
+func TestReaderStatusIgnoresCancelledEOFProbes(t *testing.T) {
+	for _, length := range []int64{-1, 16} {
+		t.Run(fmt.Sprintf("length=%d", length), func(t *testing.T) {
+			srv, bucket := newSHA1WireBucket(t)
+			ctx := newTestCtx(t)
+			probeEntered, release := make(chan struct{}), make(chan struct{})
+			releaseProbe := sync.OnceFunc(func() { close(release) })
+			srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+				if id := req.Query.Get("fileId"); id != "eof-id" {
+					t.Errorf("download fileId = %q, want eof-id", id)
+				}
+				switch req.Header.Get("Range") {
+				case "bytes=8-11":
+					select {
+					case <-probeEntered:
+					case <-ctx.Done():
+						t.Error("speculative probe did not enter its header wait")
+					}
+				case "bytes=12-15":
+					close(probeEntered)
+					<-release
+				}
+				response := b2wiretest.RangeDownload("abcdefgh", req.Header.Get("Range"))
+				if response.Header == nil {
+					response.Header = make(http.Header)
+				}
+				response.Header.Set("X-Bz-File-Id", "eof-id")
+				return response
+			})
+			object := bucket.Object("eof-status")
+			object.f = bucket.b.file("eof-id", "eof-status")
+			reader := object.NewRangeReader(ctx, 0, length)
+			reader.ChunkSize, reader.ConcurrentDownloads = 4, 4
+			t.Cleanup(func() { releaseProbe(); _ = reader.Close() })
+			body, err := io.ReadAll(reader)
+			if err != nil || string(body) != "abcdefgh" {
+				t.Fatalf("read with speculative probes = %q, %v; want abcdefgh, nil", body, err)
+			}
+			if got := reader.status().Progress; !reflect.DeepEqual(got, []float64{1, 1, 1}) {
+				t.Fatalf("status after cancelling probes past EOF = %v, want [1 1 1]", got)
+			}
+		})
+	}
+}
+
 func TestReaderStatusWhileResponseIsBlocked(t *testing.T) {
 	for _, blocked := range []string{"bytes=0-3", "bytes=4-7"} {
 		t.Run(blocked, func(t *testing.T) {
