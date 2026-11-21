@@ -21,18 +21,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
 
 // Issue #177 R1 requires a shorter resume to fail instead of publishing stale
 // trailing parts. The Native API cannot be assumed to finish a subset of parts.
-func TestRegression_ResumeShorterSourceDropsStaleParts(t *testing.T) {
+func TestRegression_ResumeShorterSourceIsRejected(t *testing.T) {
 	for _, storedParts := range []int{2, 3, 4, 5} {
 		t.Run(fmt.Sprintf("%d_stored_parts", storedParts), func(t *testing.T) {
 			bucket, srv := newMappingBucket(t, updateBucketJSON)
 			srv.Reply("b2_list_unfinished_large_files", http.StatusOK, `{"files":[{"fileId":"unfinished-id","fileName":"resume","action":"start","fileInfo":{}}],"nextFileId":null}`)
 			srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"unfinished-id","fileName":"resume","action":"upload","uploadTimestamp":1}`)
+			srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"unexpected-restart"}`)
 			part := bytes.Repeat([]byte("r"), 5_000_000)
 			digest := fmt.Sprintf("%x", sha1.Sum(part))
 			var parts []map[string]any
@@ -46,16 +48,25 @@ func TestRegression_ResumeShorterSourceDropsStaleParts(t *testing.T) {
 			srv.Reply("b2_list_parts", http.StatusOK, string(body))
 			w := bucket.Object("resume").NewWriter(newTestCtx(t))
 			w.Resume, w.ChunkSize = true, len(part)
+			w.UseFileBuffer, w.FileBufferDir = true, t.TempDir()
 			if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
 				t.Fatal(err)
 			}
+			if entries, readErr := os.ReadDir(w.FileBufferDir); readErr != nil || len(entries) == 0 {
+				t.Fatalf("active file buffers = %v, error = %v; want a buffer before Close", entries, readErr)
+			}
 			err = w.Close()
+			if entries, readErr := os.ReadDir(w.FileBufferDir); readErr != nil || len(entries) != 0 {
+				t.Errorf("file buffers after Close = %v, error = %v; want empty directory", entries, readErr)
+			}
 			if storedParts > 3 {
 				if err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
 					t.Errorf("Close = %v, want shorter-source error", err)
 				}
-				if calls := srv.Calls("b2_finish_large_file"); len(calls) != 0 {
-					t.Errorf("finish calls = %d, want 0 for a shorter source", len(calls))
+				for _, call := range []string{"b2_finish_large_file", "b2_start_large_file", "upload_part"} {
+					if calls := srv.Calls(call); len(calls) != 0 {
+						t.Errorf("%s calls = %d, want 0 for a rejected shorter source", call, len(calls))
+					}
 				}
 				return
 			}
@@ -90,6 +101,7 @@ func TestResumeShorterSourceWithNewFinalPart(t *testing.T) {
 			bucket, srv := newMappingBucket(t, updateBucketJSON)
 			srv.Reply("b2_list_unfinished_large_files", http.StatusOK, `{"files":[{"fileId":"unfinished-id","fileName":"resume","action":"start","fileInfo":{}}],"nextFileId":null}`)
 			srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"unfinished-id","fileName":"resume","action":"upload","uploadTimestamp":1}`)
+			srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"unexpected-restart"}`)
 			part := bytes.Repeat([]byte("r"), 5_000_000)
 			digest := fmt.Sprintf("%x", sha1.Sum(part))
 			var parts []map[string]any
@@ -107,6 +119,7 @@ func TestResumeShorterSourceWithNewFinalPart(t *testing.T) {
 			obj := bucket.Object("resume")
 			w := obj.NewWriter(newTestCtx(t))
 			w.Resume, w.ChunkSize, w.ConcurrentUploads = true, len(part), 3
+			bufferDir := t.TempDir()
 			var n int64
 			switch mode {
 			case "Write":
@@ -117,18 +130,28 @@ func TestResumeShorterSourceWithNewFinalPart(t *testing.T) {
 				n, err = w.ReadFrom(struct{ io.Reader }{bytes.NewReader(payload)})
 			default:
 				if mode == "file buffer" {
-					w.UseFileBuffer, w.FileBufferDir = true, t.TempDir()
+					w.UseFileBuffer, w.FileBufferDir = true, bufferDir
 				}
 				n, err = w.ReadFrom(bytes.NewReader(payload))
 			}
 			if err != nil || n != int64(len(payload)) {
 				t.Fatalf("source copy = %d, %v; want %d, nil", n, err, len(payload))
 			}
-			if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
-				t.Fatalf("Close = %v, want shorter-source error", err)
+			if w.UseFileBuffer {
+				if entries, readErr := os.ReadDir(bufferDir); readErr != nil || len(entries) == 0 {
+					t.Fatalf("active file buffers = %v, error = %v; want a buffer before Close", entries, readErr)
+				}
 			}
-			if calls := srv.Calls("b2_finish_large_file"); len(calls) != 0 {
-				t.Errorf("finish calls = %d, want 0 for a shorter source", len(calls))
+			if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
+				t.Errorf("Close = %v, want shorter-source error", err)
+			}
+			for _, call := range []string{"b2_finish_large_file", "b2_start_large_file"} {
+				if calls := srv.Calls(call); len(calls) != 0 {
+					t.Errorf("%s calls = %d, want 0 for a rejected shorter source", call, len(calls))
+				}
+			}
+			if entries, readErr := os.ReadDir(bufferDir); readErr != nil || len(entries) != 0 {
+				t.Errorf("file buffers after Close = %v, error = %v; want empty directory", entries, readErr)
 			}
 			uploads := srv.Calls("upload_part")
 			if len(uploads) != 1 {
