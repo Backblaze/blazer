@@ -178,7 +178,7 @@ func TestIssue172BackendRequestCounts(t *testing.T) {
 	const fileJSON = `{"fileId":"file-id","fileName":"object","action":"upload","contentLength":0,"contentSha1":"none"}`
 	const keyJSON = `{"accountId":"a","applicationKey":"secret","applicationKeyId":"key-id","keyName":"k","capabilities":["listFiles"]}`
 	for _, method := range methods {
-		for _, failure := range []string{"500", "502", "504", "EOF", "read reset", "429", "503", "dial", "DNS", "TLS handshake", "401"} {
+		for _, failure := range []string{"408", "500", "502", "504", "EOF", "read reset", "429", "503", "dial", "DNS", "TLS handshake", "401"} {
 			t.Run(method+"/"+failure, func(t *testing.T) {
 				wireMethod := method
 				if method == "b2_create_key_multi" {
@@ -249,7 +249,7 @@ func TestIssue172BackendRequestCounts(t *testing.T) {
 					srv.ReplySequence(wireMethod, b2wiretest.Response{Status: status, Body: fmt.Sprintf(`{"status":%d,"code":"scripted","message":"ambiguous or retryable"}`, status)}, b2wiretest.Response{Body: success})
 				}
 				err = issue172Call(ctx, client, bucket, method)
-				unknown := failure == "500" || failure == "502" || failure == "504" || failure == "EOF" || failure == "read reset"
+				unknown := failure == "408" || failure == "500" || failure == "502" || failure == "504" || failure == "EOF" || failure == "read reset"
 				wantAttempts, wantRequests := 2, 2
 				if unknown {
 					wantAttempts, wantRequests = 1, 1

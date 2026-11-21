@@ -70,6 +70,18 @@ func TestIssue172ResponseBodyLoss(t *testing.T) {
 			}
 		})
 	}
+	for _, method := range []string{"b2_list_file_names", "b2_get_upload_url", "b2_upload_file", "b2_upload_part"} {
+		t.Run(method, func(t *testing.T) {
+			opts := &b2Options{transport: authSnapshotTransport(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Request: req, Body: io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))}, nil
+			})}
+			var reply map[string]any
+			err := opts.makeRequest(context.Background(), method, http.MethodPost, "https://example.invalid", nil, &reply, nil, nil)
+			if err != io.ErrUnexpectedEOF || Action(err) != Punt || errors.Is(err, ErrOutcomeUnknown) {
+				t.Errorf("response-body error=%v action=%v unknown=%t; want raw unexpected EOF, Punt, false", err, Action(err), errors.Is(err, ErrOutcomeUnknown))
+			}
+		})
+	}
 }
 
 func TestIssue172SentRequestEvidence(t *testing.T) {
@@ -136,7 +148,7 @@ func issue172TransportError(t *testing.T, method string, cause error) error {
 
 func TestIssue172WritesDoNotRetryAmbiguousReplies(t *testing.T) {
 	for _, method := range issue172Writes {
-		for _, status := range []int{500, 502, 504} {
+		for _, status := range []int{408, 500, 502, 504} {
 			t.Run(fmt.Sprintf("%s/%d", method, status), func(t *testing.T) {
 				err := b2err{method: method, code: status, retry: 7, msg: "lost reply"}
 				if got := Action(err); got == Retry {
@@ -176,7 +188,7 @@ func TestIssue172TransportErrorHasNoZeroStatus(t *testing.T) {
 
 func TestIssue172OutcomeUnknownAPI(t *testing.T) {
 	for _, method := range issue172Writes {
-		for _, status := range []int{500, 502, 504} {
+		for _, status := range []int{408, 500, 502, 504} {
 			for _, retryAfter := range []int{0, 7} {
 				t.Run(fmt.Sprintf("%s/%d/retry-after=%d", method, status, retryAfter), func(t *testing.T) {
 					err := fmt.Errorf("context: %w", b2err{method: method, code: status, retry: retryAfter, msg: "scripted"})
@@ -211,12 +223,15 @@ func TestIssue172RetryControls(t *testing.T) {
 		for _, status := range []int{429, 503, 401, 408} {
 			t.Run(fmt.Sprintf("%s/%d", method, status), func(t *testing.T) {
 				err := b2err{method: method, code: status}
-				want := Retry
-				if status == 401 {
+				want, wantRetries, wantUnknown := Retry, uint(5), false
+				switch status {
+				case 401:
 					want = ReAuthenticate
+				case 408:
+					want, wantRetries, wantUnknown = OutcomeUnknown, 0, true
 				}
-				if Action(err) != want || MaxRetries(err) != 5 || errors.Is(err, ErrOutcomeUnknown) {
-					t.Errorf("action=%v retries=%d unknown=%t; want %v, 5, false", Action(err), MaxRetries(err), errors.Is(err, ErrOutcomeUnknown), want)
+				if Action(err) != want || MaxRetries(err) != wantRetries || errors.Is(err, ErrOutcomeUnknown) != wantUnknown {
+					t.Errorf("action=%v retries=%d unknown=%t; want %v, %d, %t", Action(err), MaxRetries(err), errors.Is(err, ErrOutcomeUnknown), want, wantRetries, wantUnknown)
 				}
 			})
 		}
@@ -240,6 +255,14 @@ func TestIssue172RetryControls(t *testing.T) {
 			}))
 			if Action(err) != Retry || !errors.Is(err, cause) || errors.Is(err, ErrOutcomeUnknown) {
 				t.Errorf("handshake error=%v action=%v; want Retry and retained cause", err, Action(err))
+			}
+		})
+	}
+	for _, method := range []string{"b2_upload_file", "b2_upload_part"} {
+		t.Run(method+"/408", func(t *testing.T) {
+			err := b2err{method: method, code: http.StatusRequestTimeout}
+			if Action(err) != AttemptNewUpload || errors.Is(err, ErrOutcomeUnknown) {
+				t.Errorf("action=%v unknown=%t; want AttemptNewUpload, false", Action(err), errors.Is(err, ErrOutcomeUnknown))
 			}
 		})
 	}
