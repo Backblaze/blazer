@@ -1,0 +1,3 @@
+kind: Fixed
+body: Resuming a large-file upload with a shorter source excludes stored trailing parts from the finished object and its reported size.
+time: 2026-11-20T11:00:00-06:00

@@ -98,6 +98,9 @@ type Writer struct {
 	done        sync.Once
 	file        beLargeFileInterface
 	seen        map[int]string
+	resumeFile  beFileInterface
+	resumeParts map[int]string
+	resumeSize  int64
 	everStarted bool
 	newBuffer   func() (writeBuffer, error)
 
@@ -492,6 +495,8 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 	for id, sha := range seen {
 		w.seen[id] = sha
 	}
+	w.resumeFile = fi
+	w.resumeParts = make(map[int]string)
 	return fi.compileParts(size, seen, w.encryption), nil
 }
 
@@ -640,6 +645,11 @@ func (w *Writer) sendChunk() error {
 		w.wmux.RUnlock()
 	} else {
 		return w.ctx.Err()
+	}
+	// Record source parts before handing the buffer to a worker, which closes it.
+	if w.resumeFile != nil {
+		w.resumeParts[cidx] = ww.Hash()
+		w.resumeSize += completedBytes(ww)
 	}
 	select {
 	case <-w.cdone:
@@ -852,6 +862,10 @@ func (w *Writer) Close() error {
 		err := w.ctx.Err()
 		var f beFileInterface = nil
 		if err == nil {
+			if w.resumeFile != nil {
+				// Stored parts past the new source must not reach the finish request.
+				w.file = w.resumeFile.compileParts(w.resumeSize, w.resumeParts, w.encryption)
+			}
 			f, err = w.file.finishLargeFile(w.ctx)
 		}
 		if err != nil {
