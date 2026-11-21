@@ -60,7 +60,7 @@ func TestAuditC32ResponseReadsAreBounded(t *testing.T) {
 		{"success with decoded reply", http.StatusOK, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var source io.Reader = io.LimitReader(auditRepeatedByte{}, auditResponseLimit+4096)
+			source := io.MultiReader(io.LimitReader(auditRepeatedByte{}, auditResponseLimit+4096))
 			if tc.jsonReply {
 				source = io.MultiReader(strings.NewReader(`{"value":"`), source, strings.NewReader(`"}`))
 			}
