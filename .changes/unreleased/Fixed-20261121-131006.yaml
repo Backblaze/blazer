@@ -1,0 +1,3 @@
+kind: Fixed
+body: '**Breaking:** Object.Hide accepts an optional customer encryption key; method values and interfaces using its previous signature must be adapted. Object.Delete accepts WithDeleteSSECKey to resolve protected objects.'
+time: 2026-11-21T13:10:06.09553-06:00
