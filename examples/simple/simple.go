@@ -103,7 +103,7 @@ func downloadToFile(r io.Reader, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	_, copyErr := io.Copy(f, r)
 	closeErr := f.Close()
 	if copyErr != nil {

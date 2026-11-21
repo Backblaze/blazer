@@ -173,7 +173,7 @@ func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, ds
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	r.ConcurrentDownloads = downloads
 	_, copyErr := io.Copy(f, r)
 	closeErr := f.Close()
