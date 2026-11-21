@@ -2041,7 +2041,7 @@ func TestResumeShorterSourceLive(t *testing.T) {
 		t.Fatalf("finished size = %d, want %d", attrs.Size, len(payload))
 	}
 	r := obj.NewReader(ctx)
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	hash := sha1.New()
 	n, err := io.Copy(hash, r)
 	if err != nil {
