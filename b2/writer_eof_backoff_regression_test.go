@@ -12,22 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build knowndefect
-
 package b2
-
-// Known-defect tests. Each test asserts the correct behaviour and currently
-// fails because of an open defect, so this file is built only with the
-// knowndefect tag and the default "go test" does not run it:
-//
-//	make known-defects
-//
-// When a defect is fixed, move its test into the regular suite (a file without
-// the build tag, for example regression_test.go in this package) and rename
-// TestKnownDefect_X to TestRegression_X.
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -35,7 +24,7 @@ import (
 
 // After a failed upload attempt the retry must wait (backoff),
 // not retry immediately.
-func TestKnownDefect_UploadRetryWaitsBetweenAttempts(t *testing.T) {
+func TestRegression_UploadRetryWaitsBetweenAttempts(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		op    string
@@ -71,10 +60,11 @@ func TestKnownDefect_UploadRetryWaitsBetweenAttempts(t *testing.T) {
 			if len(delays) != 2 {
 				t.Fatalf("%d retry waits recorded, want 2 (one per retry)", len(delays))
 			}
-			for i, d := range delays {
-				if d <= 0 {
-					t.Errorf("retry %d waited %v, want a positive backoff", i+1, d)
-				}
+			if delays[0] < time.Second || delays[0] > 1050*time.Millisecond {
+				t.Errorf("first retry waited %v, want about one second", delays[0])
+			}
+			if delays[1] <= delays[0] {
+				t.Errorf("retry delays %v did not grow", delays)
 			}
 		})
 	}
@@ -82,7 +72,7 @@ func TestKnownDefect_UploadRetryWaitsBetweenAttempts(t *testing.T) {
 
 // A part upload that fails with a bare io.EOF must surface as an
 // error from Write/Close, not stall or silently succeed.
-func TestKnownDefect_BareEOFFromPartUploadIsReported(t *testing.T) {
+func TestRegression_BareEOFFromPartUploadIsReported(t *testing.T) {
 	root := &testRoot{
 		bucketMap: make(map[string]map[string]string),
 		errs: &errCont{errMap: map[string]map[int]error{
@@ -106,8 +96,8 @@ func TestKnownDefect_BareEOFFromPartUploadIsReported(t *testing.T) {
 	}()
 	select {
 	case r := <-done:
-		if r.werr == nil && r.cerr == nil {
-			t.Error("part upload failed with io.EOF but neither Write nor Close reported an error")
+		if !errors.Is(r.werr, io.ErrUnexpectedEOF) && !errors.Is(r.cerr, io.ErrUnexpectedEOF) {
+			t.Errorf("Write error = %v, Close error = %v; want io.ErrUnexpectedEOF", r.werr, r.cerr)
 		}
 	case <-time.After(5 * time.Second):
 		cancelParent() // release the stuck goroutine
