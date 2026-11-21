@@ -75,21 +75,40 @@ package main
 import (
     "bytes"
     "context"
+    "errors"
     "fmt"
     "io"
+    "net/http"
     "os"
     "path/filepath"
+    "runtime"
+    "strings"
+    "sync/atomic"
     "testing"
+    "testing/iotest"
     "time"
 
     "github.com/Backblaze/blazer/b2"
     "github.com/Backblaze/blazer/x/b2sim"
 )
 
+type faultTransport struct { next http.RoundTripper; fail atomic.Bool }
+func (tr *faultTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+    resp, err := tr.next.RoundTrip(req)
+    if err == nil && tr.fail.Load() && req.Method == http.MethodGet &&
+        (strings.HasPrefix(req.URL.Path, "/file/") || strings.HasSuffix(req.URL.Path, "/b2_download_file_by_id")) &&
+        (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
+        _ = resp.Body.Close()
+        resp.Body = io.NopCloser(io.MultiReader(strings.NewReader("downloaded fixture\n"), iotest.ErrReader(errors.New("injected read failure"))))
+    }
+    return resp, err
+}
+
 func TestReadmeDownload(t *testing.T) {
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
-    client, err := b2.NewClient(ctx, "test-id", "test-key", b2.Transport(b2sim.New()))
+    tr := &faultTransport{next: b2sim.New()}
+    client, err := b2.NewClient(ctx, "test-id", "test-key", b2.Transport(tr))
     if err != nil { t.Fatal(err) }
     bucket, err := client.NewBucket(ctx, "readme-check", nil)
     if err != nil { t.Fatal(err) }
@@ -101,6 +120,7 @@ func TestReadmeDownload(t *testing.T) {
     dst := filepath.Join(dir, "destination")
     const original = "existing local data"
     if err := os.WriteFile(dst, []byte(original), 0600); err != nil { t.Fatal(err) }
+    if runtime.GOOS != "windows" { if err := os.Chmod(dst, 0640); err != nil { t.Fatal(err) } }
     if err := downloadFile(ctx, bucket, 1, "missing", dst); err == nil {
         t.Error("missing-object download returned nil")
     }
@@ -108,18 +128,33 @@ func TestReadmeDownload(t *testing.T) {
     if err != nil || string(got) != original {
         t.Fatalf("failed download changed destination: got %q, err=%v; want %q", got, err, original)
     }
-    if err := os.Remove(dst); err != nil { t.Fatal(err) }
     const payload = "downloaded fixture\n"
-    if err := putReadmeFixture(ctx, bucket, payload); err != nil { t.Fatal(err) }
+    if err := putReadmeFixture(ctx, bucket, "present", payload); err != nil { t.Fatal(err) }
+    tr.fail.Store(true)
+    if err := downloadFile(ctx, bucket, 1, "present", dst); err == nil { t.Error("interrupted download returned nil") }
+    tr.fail.Store(false)
+    got, err = os.ReadFile(dst)
+    if err != nil || string(got) != original { t.Fatalf("interrupted download changed destination: got %q, err=%v", got, err) }
     if err := downloadFile(ctx, bucket, 1, "present", dst); err != nil { t.Fatal(err) }
     got, err = os.ReadFile(dst)
     if err != nil || string(got) != payload {
         t.Fatalf("successful download: got %q, err=%v; want %q", got, err, payload)
     }
+    if err := putReadmeFixture(ctx, bucket, "empty", ""); err != nil { t.Fatal(err) }
+    if err := downloadFile(ctx, bucket, 1, "empty", dst); err != nil { t.Fatal(err) }
+    got, err = os.ReadFile(dst)
+    if err != nil || len(got) != 0 { t.Fatalf("empty download: got %q, err=%v", got, err) }
+    if runtime.GOOS != "windows" {
+        info, err := os.Stat(dst)
+        if err != nil { t.Fatal(err) }
+        if got := info.Mode().Perm(); got != 0640 { t.Fatalf("destination mode = %04o, want 0640", got) }
+    }
+    entries, err := os.ReadDir(dir)
+    if err != nil || len(entries) != 1 { t.Fatalf("temporary files left behind: %v, err=%v", entries, err) }
 }
 
-func putReadmeFixture(ctx context.Context, bucket *b2.Bucket, payload string) error {
-    w := bucket.Object("present").NewWriter(ctx)
+func putReadmeFixture(ctx context.Context, bucket *b2.Bucket, name, payload string) error {
+    w := bucket.Object(name).NewWriter(ctx)
     _, copyErr := io.Copy(w, bytes.NewBufferString(payload))
     closeErr := w.Close()
     if copyErr != nil { return fmt.Errorf("fixture upload: %w", copyErr) }
@@ -173,8 +208,8 @@ example_variables_match() {
   [ "$a" = "$b" ] || { echo "     legacy secret variable differs: example '$a' vs b2keys '$b'"; return 1; }
 }
 
-PASSING="upgrade-createbucket"
-KNOWN_DEFECTS="changelog-base-functions readme-examples readme-download upgrade-sync-before upgrade-breaking-claim example-exit-status"
+PASSING="upgrade-createbucket readme-download"
+KNOWN_DEFECTS="changelog-base-functions readme-examples upgrade-sync-before upgrade-breaking-claim example-exit-status"
 ids=("$@")
 if [ ${#ids[@]} -eq 0 ]; then
   ids=($PASSING)
