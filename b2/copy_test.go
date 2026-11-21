@@ -3,11 +3,14 @@ package b2
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Backblaze/blazer/base"
 )
 
 // copyFixture serves two buckets, "a" and "b", and records every b2_copy_file
@@ -114,14 +117,18 @@ func TestCopyToBucketSendsThatBucketID(t *testing.T) {
 	}
 }
 
-func TestCopyRetriesRequestTimeout(t *testing.T) {
+func TestCopyRequestTimeoutHasUnknownOutcome(t *testing.T) {
 	f := newCopyFixture(t)
 	f.copyFailStatus = http.StatusRequestTimeout
-	if _, err := f.bucket("b").Copy(context.Background(), "src", "dst"); err != nil {
-		t.Fatal(err)
+	_, err := f.bucket("b").Copy(context.Background(), "src", "dst")
+	if !errors.Is(err, base.ErrOutcomeUnknown) || base.Action(err) != base.OutcomeUnknown || base.MaxRetries(err) != 0 {
+		t.Fatalf("Copy error = %v, action = %v, retries = %d; want OutcomeUnknown and zero retries", err, base.Action(err), base.MaxRetries(err))
 	}
-	if got := len(f.copies); got != 2 {
-		t.Fatalf("b2_copy_file calls = %d, want 2 after one 408", got)
+	if status, message := base.Code(err); status != http.StatusRequestTimeout || message != "retry copy" {
+		t.Fatalf("Copy error status = %d, message = %q; want 408 and retry copy", status, message)
+	}
+	if got := len(f.copies); got != 1 {
+		t.Fatalf("b2_copy_file calls = %d, want 1 after one 408", got)
 	}
 }
 
