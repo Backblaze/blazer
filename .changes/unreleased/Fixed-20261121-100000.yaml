@@ -1,0 +1,3 @@
+kind: Fixed
+body: Bucket.GetFileInfoByName errors now support errors.Is for the underlying not-found error.
+time: 2026-11-21T10:00:00-06:00

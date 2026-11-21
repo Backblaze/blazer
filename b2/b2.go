@@ -425,6 +425,8 @@ func (e b2err) Error() string {
 	return e.err.Error()
 }
 
+func (e b2err) Unwrap() error { return e.err }
+
 // IsNotExist reports whether a given error indicates that an object or bucket
 // does not exist.
 func IsNotExist(err error) bool {
