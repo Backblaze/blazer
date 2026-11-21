@@ -1,0 +1,3 @@
+kind: Fixed
+body: Remove the local-only module replacement from b2keys, allowing versioned installation when the command module has a release tag.
+time: 2026-11-21T13:02:00-06:00
