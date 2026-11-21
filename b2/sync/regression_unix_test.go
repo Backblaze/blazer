@@ -104,7 +104,10 @@ func TestRegression_NonRegularFilesAreSkippedAndRegularFilesUploaded(t *testing.
 func TestHelperProcess_SyncWithFIFO(t *testing.T) {
 	root := os.Getenv(fifoHelperEnv)
 	if root == "" {
-		t.Skip("helper for TestRegression_NonRegularFilesAreSkippedAndRegularFilesUploaded; run only by that test")
+		// Not the child process (the parent sets fifoHelperEnv). Return rather than
+		// t.Skip: the live-test gate forbids skipped tests, and this helper is not a
+		// live test of its own.
+		return
 	}
 	bucket, wire := newSyncWire(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

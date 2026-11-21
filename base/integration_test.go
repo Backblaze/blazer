@@ -132,6 +132,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket // carry the new revision so the next update isn't rejected with 409
 	if sse := newBucket.DefaultServerSideEncryption; sse == nil || sse.Mode != "SSE-B2" || sse.Algorithm != "AES256" {
 		t.Errorf("%s: DefaultServerSideEncryption = %+v, want SSE-B2/AES256", bucket.Name, sse)
 	}
@@ -144,6 +145,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if !newBucket.FileLockEnabled {
 		t.Errorf("%s: bucket fileLockEnabled was false, wanted true", bucket.Name)
 		return
@@ -163,6 +165,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if newBucket.DefaultRetention == nil {
 		t.Errorf("%s: bucket defaultRetention was nil, wanted %v", bucket.Name, bucket.DefaultRetention)
 		return
@@ -179,6 +182,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if newBucket.DefaultRetention != nil {
 		t.Errorf("%s: bucket defaultRetention was %v, wanted nil", bucket.Name, bucket.DefaultRetention)
 		return
@@ -209,6 +213,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if len(newBucket.CORSRules) != 1 {
 		t.Errorf("%s: CORS rules: got %d rules, wanted 1", bucket.Name, len(bucket.CORSRules))
 		return
@@ -250,6 +255,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if newBucket.ReplicationConfiguration == nil {
 		t.Logf("newBucket: %v", newBucket)
 		t.Errorf("%s: bucket replicationConfiguration was nil, wanted %v", bucket.Name, bucket.ReplicationConfiguration)
