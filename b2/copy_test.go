@@ -64,7 +64,7 @@ func newCopyFixture(t *testing.T) *copyFixture {
 		}
 	}))
 	t.Cleanup(f.srv.Close)
-	c, err := NewClient(context.Background(), "account", "key", APIBase(f.srv.URL))
+	c, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(f.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

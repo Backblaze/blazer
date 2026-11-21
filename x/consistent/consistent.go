@@ -311,9 +311,6 @@ func (g *Group) info(ctx context.Context) (*consistentInfo, error) {
 	}
 	g.ba = attrs
 	imap := attrs.Info
-	if imap == nil {
-		return nil, nil
-	}
 	enc, ok := imap[metaKey+"-"+g.name]
 	if !ok {
 		return &consistentInfo{

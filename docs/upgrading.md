@@ -5,7 +5,20 @@ changes. This guide highlights changes callers should consider when upgrading, i
 breaking changes, a security fix, and a new feature. [`CHANGELOG.md`](../CHANGELOG.md)
 remains the full record.
 
-Covered releases: v0.10.0 and v0.9.0.
+Covered changes: unreleased custom-endpoint migration, v0.10.0, and v0.9.0.
+
+## Unreleased: custom HTTP endpoints
+
+`APIBase` now accepts HTTPS URLs only (or an empty URL for the default B2 endpoint).
+Existing HTTPS configurations and clients using the default endpoint need no change.
+For a trusted HTTP test, localhost, or self-hosted endpoint, explicitly opt in:
+
+```go
+client, err := b2.NewClient(ctx, id, key, b2.InsecureAPIBase("http://127.0.0.1:8080"))
+```
+
+`InsecureAPIBase` accepts HTTP and HTTPS. HTTP transmits credentials and data without
+encryption; use HTTPS whenever the endpoint supports it.
 
 ## Upgrading to v0.10.0
 

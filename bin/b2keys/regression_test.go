@@ -12,19 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build knowndefect
-
 package main
-
-// Known-defect tests. Each test asserts the correct behaviour and currently
-// fails because of an open defect, so this file is built only with the
-// knowndefect tag and the default "go test" does not run it:
-//
-//	make known-defects
-//
-// When a defect is fixed, move its test into the regular suite (a file without
-// the build tag, for example regression_test.go in this package) and rename
-// TestKnownDefect_X to TestRegression_X.
 
 import (
 	"bytes"
@@ -61,7 +49,7 @@ func runCreate(t *testing.T, args ...string) (subcommands.ExitStatus, string) {
 }
 
 // The "must be set" message must end with a newline.
-func TestKnownDefect_MissingCredentialsMessageEndsWithNewline(t *testing.T) {
+func TestRegression_MissingCredentialsMessageEndsWithNewline(t *testing.T) {
 	for _, name := range []string{"B2_APPLICATION_KEY_ID", "B2_APPLICATION_KEY", "B2_ACCOUNT_ID", "B2_SECRET_KEY"} {
 		t.Setenv(name, "")
 	}

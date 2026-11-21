@@ -155,7 +155,7 @@ func (w *downloadByIDWire) requestCount() int {
 
 func (w *downloadByIDWire) publicBucket(t *testing.T) *Bucket {
 	t.Helper()
-	client, err := NewClient(context.Background(), "account", "key", APIBase(w.srv.URL))
+	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(w.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

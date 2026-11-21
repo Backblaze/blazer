@@ -53,7 +53,7 @@ func TestRegression_NewBucketDoesNotIgnoreDefaultRetention(t *testing.T) {
 		return b2wiretest.Response{Body: with}
 	})
 	ctx := context.Background()
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

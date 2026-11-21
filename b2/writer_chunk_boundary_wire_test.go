@@ -50,7 +50,7 @@ func TestWriterChunkBoundaryWire(t *testing.T) {
 					srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"large-id","fileName":"object","action":"upload"}`)
 
 					ctx := context.Background()
-					client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+					client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
 					if err != nil {
 						t.Fatal(err)
 					}

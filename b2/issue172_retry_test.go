@@ -60,7 +60,7 @@ func bucketListedWith(t *testing.T, listJSON string) (*b2wiretest.Server, *Bucke
 	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[`+listJSON+`]}`)
 	srv.Reply("b2_update_bucket", http.StatusOK, listJSON)
 	ctx := newTestCtx(t)
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestIssue172BackendRequestCounts(t *testing.T) {
 					return resp, err
 				})
 				ctx := newTestCtx(t)
-				client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()), Transport(transport))
+				client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()), Transport(transport))
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -215,7 +215,7 @@ func (w *ssecPublicWire) hasKey(headers http.Header) bool {
 
 func (w *ssecPublicWire) newBucket(t *testing.T) *Bucket {
 	t.Helper()
-	c, err := NewClient(context.Background(), "account", "key", APIBase(w.srv.URL))
+	c, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(w.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -808,11 +808,11 @@ func TestSSECReadRejectsExplicitNilKeyBeforeRequest(t *testing.T) {
 
 func TestSSECKeyCannotBeClientWriterDefault(t *testing.T) {
 	wire := newSSECPublicWire(t)
-	_, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL), DefaultWriterOptions(WithSSECKey(wire.key)))
+	_, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL), DefaultWriterOptions(WithSSECKey(wire.key)))
 	if err == nil || !strings.Contains(err.Error(), "SSE-C") {
 		t.Fatalf("NewClient with SSE-C writer default error = %v, want rejection", err)
 	}
-	_, err = NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL), DefaultWriterOptions(WithSSECKey(nil)))
+	_, err = NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL), DefaultWriterOptions(WithSSECKey(nil)))
 	if err == nil || !strings.Contains(err.Error(), "SSE-C") {
 		t.Fatalf("NewClient with nil SSE-C writer default error = %v, want rejection", err)
 	}
@@ -936,7 +936,7 @@ func TestZeroSSECKeyRejectedByPublicOperations(t *testing.T) {
 
 func TestOrdinaryWriterOptionRemainsDefaultable(t *testing.T) {
 	wire := newSSECPublicWire(t)
-	c, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL), DefaultWriterOptions(WithAttrsOption(&Attrs{ContentType: "text/plain"})))
+	c, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL), DefaultWriterOptions(WithAttrsOption(&Attrs{ContentType: "text/plain"})))
 	if err != nil {
 		t.Fatal(err)
 	}

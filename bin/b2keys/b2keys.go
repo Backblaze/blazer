@@ -55,7 +55,7 @@ func (c *create) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{})
 		key = os.Getenv(legacyAPIKey)
 	}
 	if id == "" || key == "" {
-		fmt.Fprintf(os.Stderr, "both %s and %s must be set in the environment", apiID, apiKey)
+		fmt.Fprintf(os.Stderr, "both %s and %s must be set in the environment\n", apiID, apiKey)
 		return subcommands.ExitUsageError
 	}
 

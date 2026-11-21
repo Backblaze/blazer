@@ -13,7 +13,7 @@ const endpointVar = "B2_ENDPOINT"
 // endpointOpts returns the ClientOption that aims a test client at $B2_ENDPOINT.
 func endpointOpts() []ClientOption {
 	if u := os.Getenv(endpointVar); u != "" {
-		return []ClientOption{APIBase(u)}
+		return []ClientOption{InsecureAPIBase(u)}
 	}
 	return nil
 }

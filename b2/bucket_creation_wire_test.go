@@ -69,7 +69,7 @@ func TestNewBucketAttributesWire(t *testing.T) {
 			)
 			srv.Reply("b2_create_bucket", http.StatusOK, test.response)
 			ctx := context.Background()
-			client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+			client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -152,7 +152,7 @@ func TestNewBucketDefaultEncryptionWire(t *testing.T) {
 			)
 			srv.Reply("b2_create_bucket", http.StatusOK, bucketJSON)
 			ctx := context.Background()
-			client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+			client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
 			if err != nil {
 				t.Fatal(err)
 			}

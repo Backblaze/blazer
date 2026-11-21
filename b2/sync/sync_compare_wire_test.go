@@ -56,7 +56,7 @@ func TestSyncComparisonModesIgnoreOtherMetadata(t *testing.T) {
 			// A regression must fail promptly rather than retry an unscripted upload.
 			srv.Reply("upload_file", http.StatusBadRequest,
 				`{"status":400,"code":"bad_request","message":"unexpected upload of unchanged file"}`)
-			client, err := b2.NewClient(ctx, "a", "k", b2.APIBase(srv.URL()))
+			client, err := b2.NewClient(ctx, "a", "k", b2.InsecureAPIBase(srv.URL()))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -235,7 +235,7 @@ func (w *composeWire) addCall(call string) {
 
 func (w *composeWire) bucket(t *testing.T) *Bucket {
 	t.Helper()
-	client, err := NewClient(context.Background(), "account", "key", APIBase(w.srv.URL))
+	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(w.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestComposeAccepts10000PartsValidation(t *testing.T) {
 	wire.Reply("b2_create_bucket", http.StatusOK, noReplicationBucketJSON)
 	// Stop after validation, avoiding 10000 network copies in this boundary test.
 	wire.Reply("b2_start_large_file", http.StatusBadRequest, `{"status":400,"code":"bad_request","message":"validated 10000 parts"}`)
-	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.URL()))
+	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

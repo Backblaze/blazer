@@ -57,7 +57,7 @@ func TestSmallUploadFetchesNewURLAfterConnectionFault(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL))
+	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestSmallUploadKeepsURLOnRetryAfter(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL))
+	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

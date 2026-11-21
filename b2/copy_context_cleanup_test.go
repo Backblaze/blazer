@@ -34,7 +34,7 @@ func TestWriterCloseWaitsForCancelDeadline(t *testing.T) {
 		}
 		return http.DefaultTransport.RoundTrip(r)
 	})
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()), Transport(transport))
+	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()), Transport(transport))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestWriterReadFromCancellationCancelsStartLargeFile(t *testing.T) {
 				}
 				return http.DefaultTransport.RoundTrip(r)
 			})
-			client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()), Transport(transport))
+			client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()), Transport(transport))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -249,7 +249,7 @@ func TestWriterReadFromCancellationDoesNotWaitForCleanup(t *testing.T) {
 					}
 					return http.DefaultTransport.RoundTrip(r)
 				})
-				client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()), Transport(transport))
+				client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()), Transport(transport))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -357,7 +357,7 @@ func TestWriterCloseWaitsForErrorCallback(t *testing.T) {
 		<-cancelRelease
 		return b2wiretest.Response{Status: http.StatusBadRequest, Body: `{"status":400,"code":"bad_request","message":"cleanup failed"}`}
 	})
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}
