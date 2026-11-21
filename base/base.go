@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"math"
 	"net"
 	"net/http"
@@ -206,21 +205,35 @@ const (
 	OutcomeUnknown
 )
 
+// maxAPIResponseBytes bounds buffered API response bodies, excluding downloads.
+const maxAPIResponseBytes int64 = 64 << 20
+
+var errAPIResponseTooLarge = fmt.Errorf("API response exceeds %d bytes", maxAPIResponseBytes)
+
+func readAPIResponse(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxAPIResponseBytes+1))
+	if err == nil && int64(len(data)) > maxAPIResponseBytes {
+		return data[:maxAPIResponseBytes], errAPIResponseTooLarge
+	}
+	return data, err
+}
+
 func mkErr(resp *http.Response) error {
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := readAPIResponse(resp.Body)
 	var msgBody string
 	if err != nil {
 		msgBody = fmt.Sprintf("couldn't read message body: %v", err)
 	}
 	logResponse(resp, data)
 	msg := &b2types.ErrorMessage{}
-	if err := json.Unmarshal(data, msg); err != nil {
-		if msgBody != "" {
-			msgBody = fmt.Sprintf("couldn't read message body: %v", err)
-		}
+	if json.Unmarshal(data, msg) != nil && msgBody == "" {
+		msgBody = string(data)
 	}
 	if msgBody == "" {
 		msgBody = msg.Msg
+		if msgBody == "" {
+			msgBody = string(data)
+		}
 	}
 	if isDownloadByIDRequest(resp.Request) {
 		// Server error text may echo the file ID.
@@ -535,6 +548,27 @@ type AuthData struct {
 	AllowedCapabilities []string
 }
 
+// String returns the authorization state with its token redacted.
+func (a AuthData) String() string {
+	type printableAuthData AuthData
+	a.AuthToken = "[redacted]"
+	return fmt.Sprintf("%+v", printableAuthData(a))
+}
+
+// GoString returns a Go-syntax representation with its token redacted.
+func (a AuthData) GoString() string {
+	type printableAuthData AuthData
+	a.AuthToken = "[redacted]"
+	return fmt.Sprintf("%#v", printableAuthData(a))
+}
+
+// Format prevents other formatting verbs from exposing the token.
+func (a AuthData) Format(state fmt.State, verb rune) {
+	type printableAuthData AuthData
+	a.AuthToken = "[redacted]"
+	_, _ = fmt.Fprintf(state, fmt.FormatString(state, verb), printableAuthData(a))
+}
+
 // AuthData returns a detached snapshot of the current authorization state.
 func (b *B2) AuthData() AuthData {
 	state := b.snapshot()
@@ -770,9 +804,14 @@ func (o *b2Options) makeRequest(ctx context.Context, method, verb, uri string, b
 	var replyArgs []byte
 	if b2resp != nil {
 		rbuf := &bytes.Buffer{}
-		r := io.TeeReader(resp.Body, rbuf)
+		limited := &io.LimitedReader{R: resp.Body, N: maxAPIResponseBytes + 1}
+		r := io.TeeReader(limited, rbuf)
 		decoder := json.NewDecoder(r)
-		if err := decoder.Decode(b2resp); err != nil {
+		decodeErr := decoder.Decode(b2resp)
+		if limited.N == 0 {
+			decodeErr = errAPIResponseTooLarge
+		}
+		if err := decodeErr; err != nil {
 			if !Idempotent(method) && method != "b2_upload_file" && method != "b2_upload_part" {
 				return requestError(req, err, false)
 			}
@@ -780,7 +819,13 @@ func (o *b2Options) makeRequest(ctx context.Context, method, verb, uri string, b
 		}
 		replyArgs = rbuf.Bytes()
 	} else {
-		ra, err := ioutil.ReadAll(resp.Body)
+		ra, err := readAPIResponse(resp.Body)
+		if errors.Is(err, errAPIResponseTooLarge) {
+			if !Idempotent(method) && method != "b2_upload_file" && method != "b2_upload_part" {
+				return requestError(req, err, false)
+			}
+			return err
+		}
 		if err != nil {
 			blog.V(1).Infof("%s: couldn't read response body", method)
 		}
