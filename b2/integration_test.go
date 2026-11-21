@@ -2086,9 +2086,21 @@ func TestResumeShorterSourceLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// startLiveTest enables FailSomeUploads testmode, so B2 rejects some uploads
+	// with a 503. The high-level writer retries those; this raw setup path has no
+	// retry layer, so retry here with a fresh part URL before giving up.
 	for number := 1; number <= 5; number++ {
-		if _, err := url.uploadPart(ctx, newResetter(part), digest, len(part), number); err != nil {
-			t.Fatal(err)
+		var perr error
+		for attempt := 0; attempt < 8; attempt++ {
+			if _, perr = url.uploadPart(ctx, newResetter(part), digest, len(part), number); perr == nil {
+				break
+			}
+			if url, err = large.getUploadPartURL(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if perr != nil {
+			t.Fatalf("upload part %d: %v", number, perr)
 		}
 	}
 	iter := bucket.List(ctx, ListUnfinished(), ListPrefix(name))
