@@ -171,6 +171,14 @@ func (w *Writer) setErr(err error) {
 	w.errf(w.file.cancel(w.ctxf()))
 }
 
+// A worker EOF is an upload failure, not the clean end of a source stream.
+func (w *Writer) setWorkerErr(err error) {
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	w.setErr(err)
+}
+
 func (w *Writer) getErr() error {
 	w.emux.RLock()
 	defer w.emux.RUnlock()
@@ -198,7 +206,7 @@ func (w *Writer) thread() {
 		id := atomic.AddInt32(&gid, 1)
 		fc, err := w.file.getUploadPartURL(w.ctx)
 		if err != nil {
-			w.setErr(err)
+			w.setWorkerErr(err)
 			return
 		}
 		for {
@@ -213,7 +221,7 @@ func (w *Writer) thread() {
 			blog.V(2).Infof("thread %d handling chunk %d", id, cnk.id)
 			fc, err = w.uploadChunk(cnk, fc)
 			if err != nil {
-				w.setErr(err)
+				w.setWorkerErr(err)
 				return
 			}
 			blog.V(2).Infof("chunk %d handled", cnk.id)
@@ -407,6 +415,7 @@ func (w *Writer) simpleWriteFile() error {
 			}
 			return attempts
 		}),
+		retry.Delay(500*time.Millisecond),
 		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
 			return retry.Backoff(delay)
 		}),
@@ -1072,6 +1081,7 @@ func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, roo
 			}
 			return attempts
 		}),
+		retry.Delay(500*time.Millisecond),
 		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
 			return retry.Backoff(delay)
 		}),
