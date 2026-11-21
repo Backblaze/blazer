@@ -16,6 +16,8 @@ package base
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,8 +76,8 @@ func TestAuditC32ResponseReadsAreBounded(t *testing.T) {
 			if body.read > auditResponseLimit+1 {
 				t.Errorf("response consumed %d bytes, want at most %d", body.read, auditResponseLimit+1)
 			}
-			if err == nil {
-				t.Error("oversized response returned nil error")
+			if err == nil || !strings.Contains(err.Error(), "exceeds") {
+				t.Errorf("oversized response error = %v, want explicit size error", err)
 			}
 			if !body.closed {
 				t.Error("response body was not closed")
@@ -96,6 +98,14 @@ func TestAuditB26AuthDataFormattingRedactsToken(t *testing.T) {
 	if data.AuthToken != token {
 		t.Fatal("formatting changed the usable AuthToken")
 	}
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored AuthData
+	if err := json.Unmarshal(encoded, &restored); err != nil || restored.AuthToken != token {
+		t.Fatalf("JSON session round trip lost token: error %v", err)
+	}
 }
 
 func TestAuditC45NonJSONErrorMessage(t *testing.T) {
@@ -109,5 +119,29 @@ func TestAuditC45NonJSONErrorMessage(t *testing.T) {
 	code, got := Code(err)
 	if code != http.StatusBadRequest || got != message || !strings.Contains(err.Error(), message) {
 		t.Fatalf("Code/error = (%d, %q), %v; want raw body %q", code, got, err, message)
+	}
+}
+
+func TestAuditC32NonIdempotentOversizeIsOutcomeUnknown(t *testing.T) {
+	body := &auditCountingBody{Reader: io.LimitReader(auditRepeatedByte{}, auditResponseLimit+4096)}
+	opts := &b2Options{transport: logRoundTrip(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Request: req, Body: body}, nil
+	})}
+	err := opts.makeRequest(context.Background(), "b2_create_bucket", http.MethodPost, "https://example.invalid", nil, nil, nil, nil)
+	if err == nil || !errors.Is(err, ErrOutcomeUnknown) || Action(err) != OutcomeUnknown {
+		t.Fatalf("oversized non-idempotent response = %v, action %v; want unknown outcome", err, Action(err))
+	}
+}
+
+func TestAuditC45StructuredMessageIsPreserved(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "https://example.invalid", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Blazer-Method", "b2_list_buckets")
+	err = mkErr(&http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Request: req, Body: io.NopCloser(strings.NewReader(`{"status":400,"code":"bad_request","message":"structured detail"}`))})
+	status, code, message := MsgCode(err)
+	if status != 400 || code != "bad_request" || message != "structured detail" {
+		t.Fatalf("structured error = %d, %q, %q", status, code, message)
 	}
 }
