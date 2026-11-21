@@ -105,3 +105,23 @@ func TestRegression_BareEOFFromPartUploadIsReported(t *testing.T) {
 		t.Error("Write/Close blocked after a part upload failed with io.EOF")
 	}
 }
+
+type eofPartURL struct{ beLargeFileInterface }
+
+func (eofPartURL) getUploadPartURL(context.Context) (beFileChunkInterface, error) {
+	return nil, io.EOF
+}
+
+func TestRegression_BareEOFFromPartURLIsReported(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	w := &Writer{ctx: ctx, cancel: cancel, file: eofPartURL{}}
+	w.thread()
+	w.wg.Wait()
+	if err := w.getErr(); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("worker error = %v, want io.ErrUnexpectedEOF", err)
+	}
+	if !errors.Is(context.Cause(ctx), io.ErrUnexpectedEOF) {
+		t.Errorf("worker context cause = %v, want io.ErrUnexpectedEOF", context.Cause(ctx))
+	}
+}
