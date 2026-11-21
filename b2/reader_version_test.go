@@ -177,6 +177,16 @@ func TestReaderStatusIgnoresCancelledEOFProbes(t *testing.T) {
 	}
 }
 
+func TestReaderStatusKeepsFailuresBeforeEOFIncomplete(t *testing.T) {
+	reader := &Reader{
+		chwid: 6, readOffEnd: true, eofChunk: 2,
+		smap: map[int]*meteredReader{0: nil, 2: nil, 4: nil},
+	}
+	if got := reader.status().Progress; !reflect.DeepEqual(got, []float64{1, 0, 1}) {
+		t.Fatalf("incomplete chunk before EOF = %v, want [1 0 1]", got)
+	}
+}
+
 func TestReaderStatusWhileResponseIsBlocked(t *testing.T) {
 	for _, blocked := range []string{"bytes=0-3", "bytes=4-7"} {
 		t.Run(blocked, func(t *testing.T) {

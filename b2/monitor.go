@@ -108,6 +108,7 @@ type ReaderStatus struct {
 	// Progress is a slice of completion ratios indexed by zero-based chunk ID.
 	// Gaps for chunks awaiting a response are zero; completed chunks are one.
 	// Chunks waiting to retry and failed chunks are zero. Check read errors for success.
+	// Speculative probes beyond the earliest confirmed EOF are omitted.
 	Progress []float64
 }
 
