@@ -28,28 +28,57 @@ import (
 // Issue #177 R1 requires a shorter resume to fail instead of publishing stale
 // trailing parts. The Native API cannot be assumed to finish a subset of parts.
 func TestRegression_ResumeShorterSourceDropsStaleParts(t *testing.T) {
-	bucket, srv := newMappingBucket(t, updateBucketJSON)
-	srv.Reply("b2_list_unfinished_large_files", http.StatusOK, `{"files":[{"fileId":"unfinished-id","fileName":"resume","action":"start","fileInfo":{}}],"nextFileId":null}`)
-	srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"unfinished-id","fileName":"resume","action":"upload","uploadTimestamp":1}`)
-	part := bytes.Repeat([]byte("r"), 5_000_000)
-	digest := fmt.Sprintf("%x", sha1.Sum(part))
-	var parts []map[string]any
-	for n := 1; n <= 5; n++ {
-		parts = append(parts, map[string]any{"partNumber": n, "contentLength": 5_000_000, "contentSha1": digest})
-	}
-	body, _ := json.Marshal(map[string]any{"parts": parts, "nextPartNumber": nil})
-	srv.Reply("b2_list_parts", http.StatusOK, string(body))
-	w := bucket.Object("resume").NewWriter(newTestCtx(t))
-	w.Resume = true
-	w.ChunkSize = 5_000_000
-	if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
-		t.Fatalf("Close = %v, want shorter-source error", err)
-	}
-	if calls := srv.Calls("b2_finish_large_file"); len(calls) != 0 {
-		t.Errorf("finish calls = %d, want 0 for a shorter source", len(calls))
+	for _, storedParts := range []int{2, 3, 4, 5} {
+		t.Run(fmt.Sprintf("%d_stored_parts", storedParts), func(t *testing.T) {
+			bucket, srv := newMappingBucket(t, updateBucketJSON)
+			srv.Reply("b2_list_unfinished_large_files", http.StatusOK, `{"files":[{"fileId":"unfinished-id","fileName":"resume","action":"start","fileInfo":{}}],"nextFileId":null}`)
+			srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"unfinished-id","fileName":"resume","action":"upload","uploadTimestamp":1}`)
+			part := bytes.Repeat([]byte("r"), 5_000_000)
+			digest := fmt.Sprintf("%x", sha1.Sum(part))
+			var parts []map[string]any
+			for number := 1; number <= storedParts; number++ {
+				parts = append(parts, map[string]any{"partNumber": number, "contentLength": len(part), "contentSha1": digest})
+			}
+			body, err := json.Marshal(map[string]any{"parts": parts, "nextPartNumber": nil})
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv.Reply("b2_list_parts", http.StatusOK, string(body))
+			w := bucket.Object("resume").NewWriter(newTestCtx(t))
+			w.Resume, w.ChunkSize = true, len(part)
+			if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
+				t.Fatal(err)
+			}
+			err = w.Close()
+			if storedParts > 3 {
+				if err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
+					t.Errorf("Close = %v, want shorter-source error", err)
+				}
+				if calls := srv.Calls("b2_finish_large_file"); len(calls) != 0 {
+					t.Errorf("finish calls = %d, want 0 for a shorter source", len(calls))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := srv.Calls("b2_finish_large_file")
+			if len(calls) != 1 {
+				t.Fatalf("finish calls = %d, want 1", len(calls))
+			}
+			hashes, ok := calls[0].JSON["partSha1Array"].([]any)
+			if !ok || len(hashes) != 3 {
+				t.Fatalf("finished hashes = %v, want 3 source hashes", calls[0].JSON["partSha1Array"])
+			}
+			for index, hash := range hashes {
+				if hash != digest {
+					t.Errorf("part %d hash = %v, want %s", index+1, hash, digest)
+				}
+			}
+			if got, want := len(srv.Calls("upload_part")), 3-storedParts; got != want {
+				t.Errorf("part uploads = %d, want %d", got, want)
+			}
+		})
 	}
 }
 
