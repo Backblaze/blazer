@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -93,6 +94,11 @@ func TestSimpleDownloadProcess(t *testing.T) {
 			if err := os.WriteFile(dst, []byte("original"), 0600); err != nil {
 				t.Fatal(err)
 			}
+			if runtime.GOOS != "windows" {
+				if err := os.Chmod(dst, 0640); err != nil {
+					t.Fatal(err)
+				}
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSimpleDownloadProcess$")
@@ -110,6 +116,15 @@ func TestSimpleDownloadProcess(t *testing.T) {
 			got, err := os.ReadFile(dst)
 			if err != nil || string(got) != tc.want {
 				t.Errorf("destination = %q, %v; want %q", got, err, tc.want)
+			}
+			if runtime.GOOS != "windows" {
+				info, err := os.Stat(dst)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := info.Mode().Perm(); got != 0640 {
+					t.Errorf("destination mode = %04o, want 0640", got)
+				}
 			}
 			entries, err := os.ReadDir(dir)
 			if err != nil || len(entries) != 1 {

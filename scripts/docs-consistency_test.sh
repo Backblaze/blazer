@@ -81,6 +81,7 @@ import (
     "net/http"
     "os"
     "path/filepath"
+    "runtime"
     "strings"
     "sync/atomic"
     "testing"
@@ -119,6 +120,7 @@ func TestReadmeDownload(t *testing.T) {
     dst := filepath.Join(dir, "destination")
     const original = "existing local data"
     if err := os.WriteFile(dst, []byte(original), 0600); err != nil { t.Fatal(err) }
+    if runtime.GOOS != "windows" { if err := os.Chmod(dst, 0640); err != nil { t.Fatal(err) } }
     if err := downloadFile(ctx, bucket, 1, "missing", dst); err == nil {
         t.Error("missing-object download returned nil")
     }
@@ -142,6 +144,11 @@ func TestReadmeDownload(t *testing.T) {
     if err := downloadFile(ctx, bucket, 1, "empty", dst); err != nil { t.Fatal(err) }
     got, err = os.ReadFile(dst)
     if err != nil || len(got) != 0 { t.Fatalf("empty download: got %q, err=%v", got, err) }
+    if runtime.GOOS != "windows" {
+        info, err := os.Stat(dst)
+        if err != nil { t.Fatal(err) }
+        if got := info.Mode().Perm(); got != 0640 { t.Fatalf("destination mode = %04o, want 0640", got) }
+    }
     entries, err := os.ReadDir(dir)
     if err != nil || len(entries) != 1 { t.Fatalf("temporary files left behind: %v, err=%v", entries, err) }
 }
