@@ -43,15 +43,17 @@ func printObjects() {
 	fmt.Println(iterator.Object().Name())
 }
 func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, dst string) error {
-	obj := bucket.Object(src)
-	if _, err := obj.Attrs(ctx); err != nil { return err }
-	r := obj.NewReader(ctx)
+	r := bucket.Object(src).NewReader(ctx)
 	r.ConcurrentDownloads = downloads
 	defer r.Close()
-	f, err := os.Create(dst)
+	f, err := os.CreateTemp(filepath.Dir(dst), "download-*")
 	if err != nil { return err }
-	if _, err := io.Copy(f, r); err != nil { _ = f.Close(); return err }
-	return f.Close()
+	defer os.Remove(f.Name())
+	_, copyErr := io.Copy(f, r)
+	closeErr := f.Close()
+	if copyErr != nil { return copyErr }
+	if closeErr != nil { return closeErr }
+	return os.Rename(f.Name(), dst)
 }
 EOF
 cp "$tmp/README.md" "$tmp/readme-complete"
