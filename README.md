@@ -94,12 +94,12 @@ key := os.Getenv("B2_APPLICATION_KEY")
 ctx := context.Background()
 
 // b2_authorize_account
-b2, err := b2.NewClient(ctx, id, key)
+client, err := b2.NewClient(ctx, id, key)
 if err != nil {
 	log.Fatalln(err)
 }
 
-buckets, err := b2.ListBuckets(ctx)
+buckets, err := client.ListBuckets(ctx)
 if err != nil {
 	log.Fatalln(err)
 }
@@ -202,7 +202,7 @@ can fail if the destination is open.
 func printObjects(ctx context.Context, bucket *b2.Bucket) error {
 	iterator := bucket.List(ctx)
 	for iterator.Next() {
-		fmt.Println(iterator.Object())
+		fmt.Println(iterator.Object().Name())
 	}
 	return iterator.Err()
 }

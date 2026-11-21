@@ -1,15 +1,15 @@
 # Upgrading Blazer
 
 Blazer follows semantic versioning. Before 1.0, a minor release may include breaking
-changes. This guide lists **only what callers must change** for each release, with
-before/after code. [`CHANGELOG.md`](../CHANGELOG.md) remains the full record; every item
-here corresponds to a `**Breaking:**` changelog entry.
+changes. This guide highlights changes callers should consider when upgrading, including
+breaking changes, a security fix, and a new feature. [`CHANGELOG.md`](../CHANGELOG.md)
+remains the full record.
 
 Covered releases: v0.10.0 and v0.9.0.
 
 ## Upgrading to v0.10.0
 
-v0.10.0 adds the parity capabilities and includes twelve breaking changes. **Three require a
+v0.10.0 adds the parity capabilities and includes breaking changes. **Three require a
 source change** (they cause compile errors); the rest change runtime behavior for specific
 call patterns — mostly turning a previously silent, risky behavior into an explicit error
 ("fail closed"). If you do not use the call patterns below, nothing changes for you.
@@ -131,22 +131,6 @@ attrs.ReplicationConfig = nil
 _, err = client.NewBucket(ctx, "new-bucket", attrs)
 ```
 
-#### `sync`: default comparison and platform support
-
-- The default comparison and `CompareModTime` now use modification times alone, at
-  millisecond resolution. To detect size or content changes when times are unchanged, pass
-  `WithCompare(CompareSize)` or `WithCompare(CompareSHA1)`.
-- `Sync` supports Linux, macOS, and Windows. On other targets it returns an error wrapping
-  `errors.ErrUnsupported` (with `GOOS/GOARCH`) before touching the filesystem or B2; those
-  targets still build.
-
-```go
-// Before: the default comparison also considered size.
-// After: ask for size or content detection explicitly.
-res, err := b2sync.Sync(ctx, bucket, "prefix/", "/local/root",
-    b2sync.WithCompare(b2sync.CompareSHA1))
-```
-
 #### `NewRangeReader` with length 0 reads nothing
 
 ```go
@@ -171,9 +155,26 @@ bound `errf`.
 
 ### Logging changes
 
-- **Upload retry log text changed.** Verbose upload-part retry logs now record the error
-  type and HTTP status without the server's error message. Code matching the old log text
-  should match on the status/type instead.
+- **Security fix (#199): upload retry log text changed.** Verbose upload-part retry logs
+  record the error type and HTTP status without the server's error message. Code matching
+  the old log text should match on the status/type instead.
+
+### New in v0.10.0
+
+#### `sync`: comparison and platform support
+
+The `b2/sync` package is new in v0.10.0. Its default comparison and `CompareModTime` use
+modification times alone at millisecond resolution. To detect size or content changes when
+times are unchanged, pass `WithCompare(CompareSize)` or `WithCompare(CompareSHA1)`.
+
+`Sync` supports Linux, macOS, and Windows. On other targets it returns an error wrapping
+`errors.ErrUnsupported` (with `GOOS/GOARCH`) before touching the filesystem or B2; those
+targets still build.
+
+```go
+res, err := b2sync.Sync(ctx, bucket, "prefix/", "/local/root",
+    b2sync.WithCompare(b2sync.CompareSHA1))
+```
 
 ## Upgrading to v0.9.0
 
