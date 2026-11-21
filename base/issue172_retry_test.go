@@ -148,7 +148,7 @@ func issue172TransportError(t *testing.T, method string, cause error) error {
 
 func TestIssue172WritesDoNotRetryAmbiguousReplies(t *testing.T) {
 	for _, method := range issue172Writes {
-		for _, status := range []int{408, 500, 502, 504} {
+		for _, status := range []int{500, 502, 504} {
 			t.Run(fmt.Sprintf("%s/%d", method, status), func(t *testing.T) {
 				err := b2err{method: method, code: status, retry: 7, msg: "lost reply"}
 				if got := Action(err); got == Retry {
@@ -179,6 +179,21 @@ func TestIssue172TransportCauseIsRetained(t *testing.T) {
 	}
 }
 
+func TestIssue172ProxyDialIsPreSendRetry(t *testing.T) {
+	// net/http wraps a proxied dial failure as *net.OpError{Op:"proxyconnect"}
+	// around the inner dial error; the request never reached B2, so it must retry,
+	// not be reported as an unknown outcome.
+	for _, method := range issue172Writes {
+		t.Run(method, func(t *testing.T) {
+			cause := &net.OpError{Op: "proxyconnect", Err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}}
+			err := issue172TransportError(t, method, cause)
+			if errors.Is(err, ErrOutcomeUnknown) || Action(err) != Retry {
+				t.Errorf("proxy dial: action=%v unknown=%t; want Retry and not OutcomeUnknown", Action(err), errors.Is(err, ErrOutcomeUnknown))
+			}
+		})
+	}
+}
+
 func TestIssue172TransportErrorHasNoZeroStatus(t *testing.T) {
 	err := b2err{method: "b2_create_key", msg: "EOF"}
 	if got := err.Error(); strings.Contains(got, ": 0:") || !strings.Contains(got, "b2_create_key") || !strings.Contains(got, "EOF") {
@@ -188,7 +203,7 @@ func TestIssue172TransportErrorHasNoZeroStatus(t *testing.T) {
 
 func TestIssue172OutcomeUnknownAPI(t *testing.T) {
 	for _, method := range issue172Writes {
-		for _, status := range []int{408, 500, 502, 504} {
+		for _, status := range []int{500, 502, 504} {
 			for _, retryAfter := range []int{0, 7} {
 				t.Run(fmt.Sprintf("%s/%d/retry-after=%d", method, status, retryAfter), func(t *testing.T) {
 					err := fmt.Errorf("context: %w", b2err{method: method, code: status, retry: retryAfter, msg: "scripted"})
@@ -227,8 +242,6 @@ func TestIssue172RetryControls(t *testing.T) {
 				switch status {
 				case 401:
 					want = ReAuthenticate
-				case 408:
-					want, wantRetries, wantUnknown = OutcomeUnknown, 0, true
 				}
 				if Action(err) != want || MaxRetries(err) != wantRetries || errors.Is(err, ErrOutcomeUnknown) != wantUnknown {
 					t.Errorf("action=%v retries=%d unknown=%t; want %v, %d, %t", Action(err), MaxRetries(err), errors.Is(err, ErrOutcomeUnknown), want, wantRetries, wantUnknown)

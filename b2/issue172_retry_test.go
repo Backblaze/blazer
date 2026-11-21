@@ -249,7 +249,7 @@ func TestIssue172BackendRequestCounts(t *testing.T) {
 					srv.ReplySequence(wireMethod, b2wiretest.Response{Status: status, Body: fmt.Sprintf(`{"status":%d,"code":"scripted","message":"ambiguous or retryable"}`, status)}, b2wiretest.Response{Body: success})
 				}
 				err = issue172Call(ctx, client, bucket, method)
-				unknown := failure == "408" || failure == "500" || failure == "502" || failure == "504" || failure == "EOF" || failure == "read reset"
+				unknown := failure == "500" || failure == "502" || failure == "504" || failure == "EOF" || failure == "read reset"
 				wantAttempts, wantRequests := 2, 2
 				if unknown {
 					wantAttempts, wantRequests = 1, 1

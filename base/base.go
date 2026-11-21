@@ -109,7 +109,7 @@ func (e b2err) outcomeUnknown() bool {
 		return false
 	}
 	switch e.code {
-	case 0, http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+	case 0, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
 		return true
 	}
 	return false
@@ -646,11 +646,24 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 			return nil, err
 		}
 
-		var dialErr *net.OpError
 		var dnsErr *net.DNSError
-		notSent := !sent.Load() && (handshakeFailed.Load() || (errors.As(err, &dialErr) && dialErr.Op == "dial") || errors.As(err, &dnsErr))
+		notSent := !sent.Load() && (handshakeFailed.Load() || isDialFailure(err) || errors.As(err, &dnsErr))
 		return nil, requestError(req, err, notSent)
 	}
+}
+
+// isDialFailure reports whether err, anywhere in its chain, is a dial or
+// proxy-connect failure, meaning the request never reached B2 and is safe to
+// retry. net/http wraps a proxied dial failure as *net.OpError{Op:"proxyconnect"}
+// around the inner *net.OpError{Op:"dial"}, and errors.As stops at the first
+// match, so walk the whole chain.
+func isDialFailure(err error) bool {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if op, ok := e.(*net.OpError); ok && (op.Op == "dial" || op.Op == "proxyconnect") {
+			return true
+		}
+	}
+	return false
 }
 
 func requestError(req *http.Request, err error, notSent bool) b2err {
