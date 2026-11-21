@@ -240,7 +240,11 @@ func (r *Reader) thread() {
 			reported = mr.reported.Load()
 			_ = fr.Close()
 			r.smux.Lock()
-			r.smap[chunkID] = nil
+			if i < rsize || err != nil {
+				delete(r.smap, chunkID)
+			} else {
+				r.smap[chunkID] = nil
+			}
 			r.smux.Unlock()
 			if i < rsize || err == io.ErrUnexpectedEOF {
 				// Probably the network connection was closed early.  Retry.

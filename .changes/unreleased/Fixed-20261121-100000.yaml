@@ -1,0 +1,3 @@
+kind: Fixed
+body: Reader status now keeps retrying and failed chunks incomplete instead of reporting them as finished before a successful download.
+time: 2026-11-21T10:00:00-06:00
