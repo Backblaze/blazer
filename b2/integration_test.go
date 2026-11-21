@@ -1992,8 +1992,8 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 	}
 }
 
-// TestResumeShorterSourceLive checks that B2 finishes only the prefix selected
-// by the shorter source, even when later parts are already stored remotely.
+// TestResumeShorterSourceLive checks that a shorter source cannot publish an
+// older upload's trailing parts. The unfinished upload remains available.
 func TestResumeShorterSourceLive(t *testing.T) {
 	bucket, done := startLiveTest(context.Background(), t)
 	defer done()
@@ -2020,35 +2020,26 @@ func TestResumeShorterSourceLive(t *testing.T) {
 		t.Fatalf("unfinished upload missing: %v", iter.Err())
 	}
 	unfinishedID := iter.Object().ID()
-	obj := bucket.Object(name)
-	w := obj.NewWriter(ctx)
+	w := bucket.Object(name).NewWriter(ctx)
 	w.Resume, w.ChunkSize, w.ConcurrentUploads = true, len(part), 2
-	payload := bytes.Repeat(part, 3)
-	if _, err := w.ReadFrom(bytes.NewReader(payload)); err != nil {
+	if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
+	if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
+		t.Fatalf("Close = %v, want shorter-source error", err)
+	}
+	iter = bucket.List(ctx, ListPrefix(name))
+	if iter.Next() {
+		t.Fatalf("shorter resume published object %q", iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if obj.ID() != unfinishedID {
-		t.Fatalf("finished file ID = %q, want resumed %q", obj.ID(), unfinishedID)
+	iter = bucket.List(ctx, ListUnfinished(), ListPrefix(name))
+	if !iter.Next() {
+		t.Fatalf("unfinished upload missing after rejection: %v", iter.Err())
 	}
-	attrs, err := obj.Attrs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if attrs.Size != int64(len(payload)) {
-		t.Fatalf("finished size = %d, want %d", attrs.Size, len(payload))
-	}
-	r := obj.NewReader(ctx)
-	defer func() { _ = r.Close() }()
-	hash := sha1.New()
-	n, err := io.Copy(hash, r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantHash := sha1.Sum(payload)
-	if n != int64(len(payload)) || !bytes.Equal(hash.Sum(nil), wantHash[:]) {
-		t.Fatalf("downloaded %d bytes with SHA1 %x, want %d bytes with SHA1 %x", n, hash.Sum(nil), len(payload), wantHash)
+	if got := iter.Object().ID(); got != unfinishedID {
+		t.Fatalf("unfinished ID = %q, want %q", got, unfinishedID)
 	}
 }

@@ -21,13 +21,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
-
-	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
-// Resuming with a shorter source must finish with only the parts
-// the new source has (no stale leftover parts).
+// Issue #177 R1 requires a shorter resume to fail instead of publishing stale
+// trailing parts. The Native API cannot be assumed to finish a subset of parts.
 func TestRegression_ResumeShorterSourceDropsStaleParts(t *testing.T) {
 	bucket, srv := newMappingBucket(t, updateBucketJSON)
 	srv.Reply("b2_list_unfinished_large_files", http.StatusOK, `{"files":[{"fileId":"unfinished-id","fileName":"resume","action":"start","fileInfo":{}}],"nextFileId":null}`)
@@ -46,17 +45,16 @@ func TestRegression_ResumeShorterSourceDropsStaleParts(t *testing.T) {
 	if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close = %v", err)
+	if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
+		t.Fatalf("Close = %v, want shorter-source error", err)
 	}
-	hashes, _ := srv.Last(t, "b2_finish_large_file").JSON["partSha1Array"].([]any)
-	if len(hashes) != 3 {
-		t.Errorf("finish sent %d part hashes for a 3-chunk source, want 3", len(hashes))
+	if calls := srv.Calls("b2_finish_large_file"); len(calls) != 0 {
+		t.Errorf("finish calls = %d, want 0 for a shorter source", len(calls))
 	}
 }
 
 // A shortened source can reuse some parts and upload others. Only its parts and
-// bytes may be included in the final file, regardless of how the source is read.
+// bytes may be accepted; stale trailing parts must prevent finishing.
 func TestResumeShorterSourceWithNewFinalPart(t *testing.T) {
 	for _, mode := range []string{"ReadFrom", "non-seekable", "Write", "file buffer"} {
 		t.Run(mode, func(t *testing.T) {
@@ -97,20 +95,18 @@ func TestResumeShorterSourceWithNewFinalPart(t *testing.T) {
 			if err != nil || n != int64(len(payload)) {
 				t.Fatalf("source copy = %d, %v; want %d, nil", n, err, len(payload))
 			}
-			if err := w.Close(); err != nil {
-				t.Fatal(err)
+			if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
+				t.Fatalf("Close = %v, want shorter-source error", err)
 			}
-			wantHashes := []string{digest, digest, fmt.Sprintf("%x", sha1.Sum(final))}
-			b2wiretest.AssertJSON(t, srv.Last(t, "b2_finish_large_file"), "partSha1Array", wantHashes)
+			if calls := srv.Calls("b2_finish_large_file"); len(calls) != 0 {
+				t.Errorf("finish calls = %d, want 0 for a shorter source", len(calls))
+			}
 			uploads := srv.Calls("upload_part")
 			if len(uploads) != 1 {
 				t.Fatalf("part uploads = %d, want only new part 3", len(uploads))
 			}
 			if uploads[0].Header.Get("X-Bz-Part-Number") != "3" || !bytes.Equal(uploads[0].Body, final) {
 				t.Fatalf("uploaded part %s with %d bytes, want part 3 with the new final bytes", uploads[0].Header.Get("X-Bz-Part-Number"), len(uploads[0].Body))
-			}
-			if got := obj.f.size(); got != int64(len(payload)) {
-				t.Errorf("finished size = %d, want %d", got, len(payload))
 			}
 		})
 	}
