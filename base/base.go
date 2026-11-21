@@ -109,7 +109,7 @@ func (e b2err) outcomeUnknown() bool {
 		return false
 	}
 	switch e.code {
-	case 0, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+	case 0, http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
 		return true
 	}
 	return false
