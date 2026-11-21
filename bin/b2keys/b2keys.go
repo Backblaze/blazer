@@ -67,6 +67,8 @@ func (c *create) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{})
 	name := args[0]
 	caps := args[1:]
 
+	// B2 requires a positive duration when supplied; do not silently omit negatives.
+	// https://www.backblaze.com/apidocs/b2-create-key
 	if *c.d < 0 {
 		fmt.Fprintln(os.Stderr, "duration must not be negative")
 		return subcommands.ExitUsageError
