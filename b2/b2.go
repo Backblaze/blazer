@@ -830,10 +830,13 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 // callback, a finite range reports the available byte count when a HEAD
 // request can determine it; otherwise the progress total is -1.
 //
-// If the Object already identifies a version after an upload, listing or Attrs,
-// the reader downloads that version by ID. Otherwise it resolves the name once
-// and uses that ID for subsequent chunks and retries. Use a fresh
-// bucket.Object(name) handle to read the latest version.
+// An Object with a resolved ID reads that version. Uploads, Copy, Compose,
+// listings, Attrs, Delete, Hide, Cancel, UpdateFileRetention and
+// UpdateFileLegalHold can resolve the ID, even if a subsequent request fails.
+// A deleted pinned version returns a not-found error; Hide leaves the pinned
+// content readable by ID. Use a fresh bucket.Object(name) handle to read the
+// latest visible version. Fresh handles resolve the name once, then use the ID
+// for subsequent chunks and retries.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys ...*SSECKey) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	key, err := optionalSSECKey(keys)
@@ -866,10 +869,13 @@ func readerProgressTotal(length int64) int64 {
 // object was encrypted with a customer-managed key; the key is not retained by
 // the Object, Bucket or Client.
 //
-// An Object resolved by an upload, listing or Attrs reads that version by ID.
-// Use a fresh bucket.Object(name) handle to read the latest version. A fresh
-// handle resolves the name once, then downloads subsequent chunks and retries
-// by that ID.
+// An Object with a resolved ID reads that version. Uploads, Copy, Compose,
+// listings, Attrs, Delete, Hide, Cancel, UpdateFileRetention and
+// UpdateFileLegalHold can resolve the ID, even if a subsequent request fails.
+// A deleted pinned version returns a not-found error; Hide leaves the pinned
+// content readable by ID. Use a fresh bucket.Object(name) handle to read the
+// latest visible version. Fresh handles resolve the name once, then use the ID
+// for subsequent chunks and retries.
 func (o *Object) NewReader(ctx context.Context, keys ...*SSECKey) *Reader {
 	return o.NewRangeReader(ctx, 0, -1, keys...)
 }

@@ -4,11 +4,151 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
+
+type readerStatusTimerRoot struct {
+	beRootInterface
+	after func(time.Duration) <-chan time.Time
+}
+
+func (r readerStatusTimerRoot) retryAfter(d time.Duration) <-chan time.Time {
+	return r.after(d)
+}
+
+func assertSingleReaderProgress(t *testing.T, bucket *Bucket, want float64) {
+	t.Helper()
+	readers := bucket.c.Status().Readers
+	if len(readers) != 1 {
+		t.Fatalf("active readers = %d, want 1", len(readers))
+	}
+	for _, status := range readers {
+		if got := status.Progress; len(got) != 1 || got[0] != want {
+			t.Fatalf("reader progress = %v, want [%g]", got, want)
+		}
+	}
+}
+
+func TestReaderStatusDuringRetry(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	ctx := newTestCtx(t)
+	waiting, retryHeaders := make(chan struct{}), make(chan struct{})
+	tick, headers := make(chan time.Time), make(chan struct{})
+	releaseTick := sync.OnceFunc(func() { close(tick) })
+	releaseHeaders := sync.OnceFunc(func() { close(headers) })
+	backoffEntered := sync.OnceFunc(func() { close(waiting) })
+	bucket.r = readerStatusTimerRoot{bucket.r, func(time.Duration) <-chan time.Time {
+		backoffEntered()
+		return tick
+	}}
+	srv.ReplySequence("retry-status", b2wiretest.Response{
+		Header: http.Header{"Content-Length": {"8"}, "X-Bz-File-Id": {"retry-id"}}, Body: "abcd",
+	})
+	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+		if id := req.Query.Get("fileId"); id != "retry-id" {
+			t.Errorf("retry fileId = %q, want retry-id", id)
+		}
+		close(retryHeaders)
+		<-headers
+		return b2wiretest.Response{Header: http.Header{"X-Bz-File-Id": {"retry-id"}}, Body: "abcdefgh"}
+	})
+	reader := bucket.Object("retry-status").NewRangeReader(ctx, 0, 8)
+	reader.ChunkSize, reader.ConcurrentDownloads = 8, 1
+	t.Cleanup(func() { releaseTick(); releaseHeaders(); _ = reader.Close() })
+	type result struct {
+		body []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() { body, err := io.ReadAll(reader); done <- result{body, err} }()
+	select {
+	case <-waiting:
+	case <-ctx.Done():
+		t.Fatal("truncated download did not enter retry backoff")
+	}
+	assertSingleReaderProgress(t, bucket, 0)
+	releaseTick()
+	select {
+	case <-retryHeaders:
+	case <-ctx.Done():
+		t.Fatal("retry did not reach its response-header wait")
+	}
+	assertSingleReaderProgress(t, bucket, 0)
+	releaseHeaders()
+	select {
+	case got := <-done:
+		if got.err != nil || string(got.body) != "abcdefgh" {
+			t.Fatalf("retried read = %q, %v; want abcdefgh, nil", got.body, got.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("retried download did not complete")
+	}
+	assertSingleReaderProgress(t, bucket, 1)
+	if names, ids := len(srv.Calls("retry-status")), len(srv.Calls("b2_download_file_by_id")); names != 1 || ids != 1 {
+		t.Errorf("download calls by name/ID = %d/%d, want 1/1", names, ids)
+	}
+}
+
+func TestReaderStatusAfterRetryExhaustion(t *testing.T) {
+	srv, bucket := newSHA1WireBucket(t)
+	ready := make(chan time.Time)
+	close(ready)
+	bucket.r = readerStatusTimerRoot{bucket.r, func(time.Duration) <-chan time.Time { return ready }}
+	short := b2wiretest.Response{Header: http.Header{"Content-Length": {"8"}, "X-Bz-File-Id": {"retry-id"}}, Body: "abcd"}
+	srv.ReplySequence("retry-exhausted", short)
+	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+		if id := req.Query.Get("fileId"); id != "retry-id" {
+			t.Errorf("retry fileId = %q, want retry-id", id)
+		}
+		return short
+	})
+	reader := bucket.Object("retry-exhausted").NewRangeReader(newTestCtx(t), 0, 8)
+	reader.ChunkSize, reader.ConcurrentDownloads = 8, 1
+	t.Cleanup(func() { _ = reader.Close() })
+	body, err := io.ReadAll(reader)
+	if len(body) != 0 || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("exhausted read = %q, %v; want no bytes and unexpected EOF", body, err)
+	}
+	if calls := len(srv.Calls("retry-exhausted")) + len(srv.Calls("b2_download_file_by_id")); calls != maxShortReadAttempts {
+		t.Errorf("download attempts = %d, want %d", calls, maxShortReadAttempts)
+	}
+	assertSingleReaderProgress(t, bucket, 0)
+}
+
+type readerStatusFaultBody struct{ err error }
+
+func (r readerStatusFaultBody) Read(p []byte) (int, error) {
+	return copy(p, "abcdefgh"), r.err
+}
+
+type readerStatusFaultBucket struct {
+	beBucketInterface
+	err error
+}
+
+func (b readerStatusFaultBucket) downloadFileByName(context.Context, string, int64, int64, bool, *SSECKey) (beFileReaderInterface, error) {
+	return &testFileReader{b: io.NopCloser(readerStatusFaultBody{b.err}), s: 8, n: "failed-id"}, nil
+}
+
+func TestReaderStatusAfterBodyError(t *testing.T) {
+	bucket := newProgressReviewBucket(t)
+	want := errors.New("download body failed")
+	bucket.b = readerStatusFaultBucket{bucket.b, want}
+	reader := bucket.Object("failed").NewRangeReader(newTestCtx(t), 0, 8)
+	t.Cleanup(func() { _ = reader.Close() })
+	body, err := io.ReadAll(reader)
+	if len(body) != 0 || !errors.Is(err, want) {
+		t.Fatalf("failed read = %q, %v; want no bytes and the body error", body, err)
+	}
+	assertSingleReaderProgress(t, bucket, 0)
+}
 
 // truncRoot serves a download one byte short of the size it reports, the shape
 // of a connection reset just before the body completes. The first truncate

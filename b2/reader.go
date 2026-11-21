@@ -81,6 +81,7 @@ type Reader struct {
 	chunks     map[int]*rchunk
 	vrfy       hash.Hash
 	readOffEnd bool
+	eofChunk   int // first confirmed EOF probe, guarded by rmux
 	sha1       string
 
 	progressTotal int64
@@ -213,6 +214,9 @@ func (r *Reader) thread() {
 				r.smap[chunkID] = nil
 				r.smux.Unlock()
 				r.rmux.Lock()
+				if !r.readOffEnd || chunkID < r.eofChunk {
+					r.eofChunk = chunkID
+				}
 				r.readOffEnd = true
 				buf.final = true
 				r.chunks[chunkID] = buf
@@ -240,7 +244,11 @@ func (r *Reader) thread() {
 			reported = mr.reported.Load()
 			_ = fr.Close()
 			r.smux.Lock()
-			r.smap[chunkID] = nil
+			if i < rsize || err != nil {
+				delete(r.smap, chunkID)
+			} else {
+				r.smap[chunkID] = nil
+			}
 			r.smux.Unlock()
 			if i < rsize || err == io.ErrUnexpectedEOF {
 				// Probably the network connection was closed early.  Retry.
@@ -395,14 +403,18 @@ func (r *Reader) Read(p []byte) (int, error) {
 func (r *Reader) status() *ReaderStatus {
 	r.rmux.Lock()
 	count := r.chwid
+	atEOF := r.readOffEnd
+	if atEOF {
+		count = r.eofChunk + 1
+	}
 	r.rmux.Unlock()
 	r.smux.Lock()
 	defer r.smux.Unlock()
 
-	// Include allocated chunks still waiting for headers. Responses arriving
-	// after the count snapshot may extend it; missing entries stay at zero.
+	// Include allocated chunks waiting for headers, but omit speculative probes
+	// beyond the first confirmed EOF. Missing entries within the file stay zero.
 	for id := range r.smap {
-		if id >= count {
+		if !atEOF && id >= count {
 			count = id + 1
 		}
 	}
@@ -411,7 +423,9 @@ func (r *Reader) status() *ReaderStatus {
 	}
 
 	for id, meter := range r.smap {
-		rs.Progress[id] = meter.done()
+		if id < count {
+			rs.Progress[id] = meter.done()
+		}
 	}
 
 	return rs
