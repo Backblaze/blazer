@@ -49,10 +49,11 @@ func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, ds
 	f, err := os.CreateTemp(filepath.Dir(dst), "download-*")
 	if err != nil { return err }
 	defer os.Remove(f.Name())
-	_, copyErr := io.Copy(f, r)
-	closeErr := f.Close()
-	if copyErr != nil { return copyErr }
-	if closeErr != nil { return closeErr }
+	if _, err := io.Copy(f, r); err != nil { _ = f.Close(); return err }
+	if info, err := os.Stat(dst); err == nil {
+		if err := f.Chmod(info.Mode().Perm()); err != nil { _ = f.Close(); return err }
+	} else if !os.IsNotExist(err) { _ = f.Close(); return err }
+	if err := f.Close(); err != nil { return err }
 	return os.Rename(f.Name(), dst)
 }
 EOF
@@ -116,10 +117,11 @@ func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, ds
 	r := bucket.Object(src).NewReader(ctx)
 	r.ConcurrentDownloads = downloads
 	defer r.Close()
-	_, copyErr := io.Copy(f, r)
-	closeErr := f.Close()
-	if copyErr != nil { return copyErr }
-	if closeErr != nil { return closeErr }
+	if _, err := io.Copy(f, r); err != nil { _ = f.Close(); return err }
+	if info, err := os.Stat(dst); err == nil {
+		if err := f.Chmod(info.Mode().Perm()); err != nil { _ = f.Close(); return err }
+	} else if !os.IsNotExist(err) { _ = f.Close(); return err }
+	if err := f.Close(); err != nil { return err }
 	return os.Rename(f.Name(), dst)
 }
 EOF

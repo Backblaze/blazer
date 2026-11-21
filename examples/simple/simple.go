@@ -103,14 +103,19 @@ func downloadToFile(r io.Reader, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(f.Name()) }()
-	_, copyErr := io.Copy(f, r)
-	closeErr := f.Close()
-	if copyErr != nil {
-		return copyErr
+	defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
+	if _, err := io.Copy(f, r); err != nil {
+		return err
 	}
-	if closeErr != nil {
-		return closeErr
+	if info, err := os.Stat(dst); err == nil {
+		if err := f.Chmod(info.Mode().Perm()); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
 	}
 	return os.Rename(f.Name(), dst)
 }
