@@ -1,3 +1,3 @@
 kind: Fixed
-body: Bucket.GetFileInfoByName errors now support errors.Is for the underlying not-found error.
+body: Wrapped b2 errors now expose their underlying causes to errors.Is, errors.As, and base error inspection helpers.
 time: 2026-11-21T10:00:00-06:00
