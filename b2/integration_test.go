@@ -1991,3 +1991,64 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 		}
 	}
 }
+
+// TestResumeShorterSourceLive checks that B2 finishes only the prefix selected
+// by the shorter source, even when later parts are already stored remotely.
+func TestResumeShorterSourceLive(t *testing.T) {
+	bucket, done := startLiveTest(context.Background(), t)
+	defer done()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	const name = "resume-shorter-source"
+	part := bytes.Repeat([]byte("r"), 5_000_000)
+	digest := fmt.Sprintf("%x", sha1.Sum(part))
+	large, err := bucket.b.startLargeFile(ctx, name, "application/octet-stream", nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := large.getUploadPartURL(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for number := 1; number <= 5; number++ {
+		if _, err := url.uploadPart(ctx, newResetter(part), digest, len(part), number); err != nil {
+			t.Fatal(err)
+		}
+	}
+	iter := bucket.List(ctx, ListUnfinished(), ListPrefix(name))
+	if !iter.Next() {
+		t.Fatalf("unfinished upload missing: %v", iter.Err())
+	}
+	unfinishedID := iter.Object().ID()
+	obj := bucket.Object(name)
+	w := obj.NewWriter(ctx)
+	w.Resume, w.ChunkSize, w.ConcurrentUploads = true, len(part), 2
+	payload := bytes.Repeat(part, 3)
+	if _, err := w.ReadFrom(bytes.NewReader(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if obj.ID() != unfinishedID {
+		t.Fatalf("finished file ID = %q, want resumed %q", obj.ID(), unfinishedID)
+	}
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Size != int64(len(payload)) {
+		t.Fatalf("finished size = %d, want %d", attrs.Size, len(payload))
+	}
+	r := obj.NewReader(ctx)
+	defer r.Close()
+	hash := sha1.New()
+	n, err := io.Copy(hash, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHash := sha1.Sum(payload)
+	if n != int64(len(payload)) || !bytes.Equal(hash.Sum(nil), wantHash[:]) {
+		t.Fatalf("downloaded %d bytes with SHA1 %x, want %d bytes with SHA1 %x", n, hash.Sum(nil), len(payload), wantHash)
+	}
+}
