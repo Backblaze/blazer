@@ -47,6 +47,15 @@ const (
 	largeFileName    = "BigBytes"
 )
 
+// uniqueSuffix returns a short token so live-test bucket names are unique per
+// run. B2 bucket names must be globally unique, so a fixed name makes concurrent
+// CI runs on the same account contend on one bucket, which B2 rejects with a 409
+// "simultaneous updates" conflict (and duplicate-name create failures).
+func uniqueSuffix() string {
+	h := sha1.Sum([]byte(fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())))
+	return fmt.Sprintf("%x", h)[:6]
+}
+
 type zReader struct{}
 
 func (zReader) Read(p []byte) (int, error) {
@@ -77,7 +86,7 @@ func TestStorage(t *testing.T) {
 			DaysNewUntilHidden: 5,
 		},
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", m, rules, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +215,7 @@ func TestStorage(t *testing.T) {
 	}
 
 	// Need a real bucket ID etc. to create a replication rule
-	targetName := id + "-" + targetBucketName
+	targetName := id + "-" + targetBucketName + "-" + uniqueSuffix()
 	targetBucket, err := b2.CreateBucket(ctx, targetName, "", m, rules, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -450,7 +459,7 @@ func TestUploadAuthAfterConnectionHang(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -513,7 +522,7 @@ func TestCancelledContextCancelsHTTPRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -559,7 +568,7 @@ func TestDeadlineExceededContextCancelsHTTPRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -781,7 +790,7 @@ func TestUploadDownloadFilenameEscaping(t *testing.T) {
 	}
 
 	// b2_create_bucket
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
