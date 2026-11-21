@@ -67,6 +67,11 @@ func (c *create) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{})
 	name := args[0]
 	caps := args[1:]
 
+	if *c.d < 0 {
+		fmt.Fprintln(os.Stderr, "duration must not be negative")
+		return subcommands.ExitUsageError
+	}
+
 	var opts []b2.KeyOption
 	if *c.d > 0 {
 		opts = append(opts, b2.Lifetime(*c.d))
