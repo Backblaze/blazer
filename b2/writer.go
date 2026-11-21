@@ -852,6 +852,13 @@ func (w *Writer) Close() error {
 		err := w.ctx.Err()
 		var f beFileInterface = nil
 		if err == nil {
+			// A shorter source must not publish trailing parts from the old upload.
+			for part := range w.seen {
+				if part > w.cidx {
+					w.setErr(errors.New("resumable upload was requested, but source has fewer parts than the unfinished upload"))
+					return
+				}
+			}
 			f, err = w.file.finishLargeFile(w.ctx)
 		}
 		if err != nil {

@@ -1991,3 +1991,55 @@ func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
 		}
 	}
 }
+
+// TestResumeShorterSourceLive checks that a shorter source cannot publish an
+// older upload's trailing parts. The unfinished upload remains available.
+func TestResumeShorterSourceLive(t *testing.T) {
+	bucket, done := startLiveTest(context.Background(), t)
+	defer done()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	const name = "resume-shorter-source"
+	part := bytes.Repeat([]byte("r"), 5_000_000)
+	digest := fmt.Sprintf("%x", sha1.Sum(part))
+	large, err := bucket.b.startLargeFile(ctx, name, "application/octet-stream", nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := large.getUploadPartURL(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for number := 1; number <= 5; number++ {
+		if _, err := url.uploadPart(ctx, newResetter(part), digest, len(part), number); err != nil {
+			t.Fatal(err)
+		}
+	}
+	iter := bucket.List(ctx, ListUnfinished(), ListPrefix(name))
+	if !iter.Next() {
+		t.Fatalf("unfinished upload missing: %v", iter.Err())
+	}
+	unfinishedID := iter.Object().ID()
+	w := bucket.Object(name).NewWriter(ctx)
+	w.Resume, w.ChunkSize, w.ConcurrentUploads = true, len(part), 2
+	if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
+		t.Fatalf("Close = %v, want shorter-source error", err)
+	}
+	iter = bucket.List(ctx, ListPrefix(name))
+	if iter.Next() {
+		t.Fatalf("shorter resume published object %q", iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	iter = bucket.List(ctx, ListUnfinished(), ListPrefix(name))
+	if !iter.Next() {
+		t.Fatalf("unfinished upload missing after rejection: %v", iter.Err())
+	}
+	if got := iter.Object().ID(); got != unfinishedID {
+		t.Fatalf("unfinished ID = %q, want %q", got, unfinishedID)
+	}
+}

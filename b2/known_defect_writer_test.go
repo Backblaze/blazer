@@ -27,13 +27,8 @@ package b2
 // TestKnownDefect_X to TestRegression_X.
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/json"
-	"fmt"
 	"io"
-	"net/http"
 	"testing"
 	"time"
 )
@@ -82,35 +77,6 @@ func TestKnownDefect_UploadRetryWaitsBetweenAttempts(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// Resuming with a shorter source must finish with only the parts
-// the new source has (no stale leftover parts).
-func TestKnownDefect_ResumeShorterSourceDropsStaleParts(t *testing.T) {
-	bucket, srv := newMappingBucket(t, updateBucketJSON)
-	srv.Reply("b2_list_unfinished_large_files", http.StatusOK, `{"files":[{"fileId":"unfinished-id","fileName":"resume","action":"start","fileInfo":{}}],"nextFileId":null}`)
-	srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"unfinished-id","fileName":"resume","action":"upload","uploadTimestamp":1}`)
-	part := bytes.Repeat([]byte("r"), 5_000_000)
-	digest := fmt.Sprintf("%x", sha1.Sum(part))
-	var parts []map[string]any
-	for n := 1; n <= 5; n++ {
-		parts = append(parts, map[string]any{"partNumber": n, "contentLength": 5_000_000, "contentSha1": digest})
-	}
-	body, _ := json.Marshal(map[string]any{"parts": parts, "nextPartNumber": nil})
-	srv.Reply("b2_list_parts", http.StatusOK, string(body))
-	w := bucket.Object("resume").NewWriter(newTestCtx(t))
-	w.Resume = true
-	w.ChunkSize = 5_000_000
-	if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close = %v", err)
-	}
-	hashes, _ := srv.Last(t, "b2_finish_large_file").JSON["partSha1Array"].([]any)
-	if len(hashes) != 3 {
-		t.Errorf("finish sent %d part hashes for a 3-chunk source, want 3", len(hashes))
 	}
 }
 

@@ -1,0 +1,3 @@
+kind: Fixed
+body: Writer.Close rejects a resumed large-file upload when the source has fewer parts than the unfinished upload, instead of publishing stale trailing data.
+time: 2026-11-20T11:00:00-06:00
