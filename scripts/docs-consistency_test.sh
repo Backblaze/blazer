@@ -201,8 +201,8 @@ example_variables_match() {
   [ "$a" = "$b" ] || { echo "     legacy secret variable differs: example '$a' vs b2keys '$b'"; return 1; }
 }
 
-PASSING="upgrade-createbucket"
-KNOWN_DEFECTS="changelog-base-functions readme-examples readme-download upgrade-sync-before upgrade-breaking-claim example-exit-status"
+PASSING="upgrade-createbucket readme-download"
+KNOWN_DEFECTS="changelog-base-functions readme-examples upgrade-sync-before upgrade-breaking-claim example-exit-status"
 ids=("$@")
 if [ ${#ids[@]} -eq 0 ]; then
   ids=($PASSING)

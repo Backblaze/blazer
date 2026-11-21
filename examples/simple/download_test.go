@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/Backblaze/blazer/b2"
 	"github.com/Backblaze/blazer/x/b2sim"
@@ -56,7 +57,7 @@ func TestSimpleDownloadProcess(t *testing.T) {
 		}
 		if mode != "missing" {
 			w := bucket.Object("object").NewWriter(context.Background())
-			if mode == "midstream" {
+			if mode == "midstream" || mode == "present" {
 				_, err = io.WriteString(w, "a sufficiently long payload")
 			}
 			if err != nil {
@@ -78,10 +79,13 @@ func TestSimpleDownloadProcess(t *testing.T) {
 		return
 	}
 	for _, tc := range []struct {
-		mode, want string
-		fail       bool
+		mode, want, failureMessage string
+		fail                       bool
 	}{
-		{"missing", "original", true}, {"midstream", "original", true}, {"empty", "", false},
+		{"missing", "original", "file not found", true},
+		{"midstream", "original", "injected read failure", true},
+		{"empty", "", "", false},
+		{"present", "a sufficiently long payload", "", false},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			dir := t.TempDir()
@@ -89,11 +93,16 @@ func TestSimpleDownloadProcess(t *testing.T) {
 			if err := os.WriteFile(dst, []byte("original"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(os.Args[0], "-test.run=^TestSimpleDownloadProcess$")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSimpleDownloadProcess$")
 			cmd.Env = append(os.Environ(), "B11_HELPER_MODE="+tc.mode, "B11_DEST="+dst)
 			out, err := cmd.CombinedOutput()
-			if tc.fail && err == nil {
-				t.Errorf("failed download exited zero: %s", out)
+			if tc.fail {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 || !strings.Contains(string(out), tc.failureMessage) {
+					t.Errorf("failed download exit = %v, output = %s; want status 1 and %q", err, out, tc.failureMessage)
+				}
 			}
 			if !tc.fail && err != nil {
 				t.Errorf("download failed: %v: %s", err, out)

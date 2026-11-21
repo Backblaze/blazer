@@ -169,18 +169,26 @@ func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, ds
 	r := bucket.Object(src).NewReader(ctx)
 	defer r.Close()
 
-	f, err := os.Create(dst)
+	f, err := os.CreateTemp(filepath.Dir(dst), ".download-*")
 	if err != nil {
 		return err
 	}
+	defer os.Remove(f.Name())
 	r.ConcurrentDownloads = downloads
-	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
-		return err
+	_, copyErr := io.Copy(f, r)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return copyErr
 	}
-	return f.Close()
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(f.Name(), dst)
 }
 ```
+
+The temporary file is created in the destination directory so a failed download leaves the destination
+untouched. On Windows, replacement can fail if the destination is open.
 
 ### List all objects in a bucket
 

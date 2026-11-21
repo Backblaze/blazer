@@ -1,0 +1,3 @@
+kind: Fixed
+body: Preserve existing local files in the README and simple download examples when a download fails.
+time: 2026-11-20T18:00:00-06:00
