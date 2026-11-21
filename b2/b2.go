@@ -173,7 +173,7 @@ func apiBase(rawURL string, allowHTTP bool) ClientOption {
 	return func(o *clientOptions) {
 		if rawURL != "" {
 			u, err := url.Parse(rawURL)
-			if err != nil || (u.Scheme != "https" && !(allowHTTP && u.Scheme == "http")) {
+			if err != nil || (u.Scheme != "https" && (!allowHTTP || u.Scheme != "http")) {
 				o.optionErr = errors.New("b2: APIBase requires HTTPS; use InsecureAPIBase to allow HTTP")
 				return
 			}

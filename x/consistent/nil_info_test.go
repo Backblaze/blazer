@@ -40,7 +40,7 @@ func (n nullInfoTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		return resp, err
 	}
 	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		return nil, err
 	}
