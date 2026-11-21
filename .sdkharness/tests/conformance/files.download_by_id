@@ -136,7 +136,7 @@ func runCheck(ctx context.Context, target *string) error {
 		return err
 	}
 	audit := &downloadAudit{}
-	client, err := b2.NewClient(ctx, keyID, key, b2.APIBase(origin), b2.Transport(audit))
+	client, err := b2.NewClient(ctx, keyID, key, b2.InsecureAPIBase(origin), b2.Transport(audit))
 	if err != nil {
 		return classify("authenticate", err)
 	}
@@ -522,7 +522,7 @@ func newClient(ctx context.Context, target string) (*b2.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
+	client, err := b2.NewClient(ctx, id, key, b2.InsecureAPIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
 	if err != nil {
 		return nil, classify("authenticate", err)
 	}

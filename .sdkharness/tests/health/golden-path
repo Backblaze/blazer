@@ -157,7 +157,7 @@ func run(ctx context.Context) (err error) {
 	if apiBase == "" {
 		return fail("configuration", fmt.Errorf("HEALTHCHECK_REALM_URL is required: this check runs only against the loopback simulator"))
 	}
-	client, err := b2.NewClient(ctx, keyID, key, b2.APIBase(apiBase), b2.UserAgent("sdkharness-health-check/blazer"))
+	client, err := b2.NewClient(ctx, keyID, key, b2.InsecureAPIBase(apiBase), b2.UserAgent("sdkharness-health-check/blazer"))
 	if err != nil {
 		return fail("authenticate", err)
 	}

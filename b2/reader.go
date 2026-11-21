@@ -283,6 +283,13 @@ func (r *Reader) thread() {
 func (r *Reader) curChunk() (*rchunk, error) {
 	ch := make(chan *rchunk)
 	go func() {
+		stop := context.AfterFunc(r.ctx, func() {
+			// Hold the waiter's lock so cancellation cannot race entering Wait.
+			r.rmux.Lock()
+			r.rcond.Broadcast()
+			r.rmux.Unlock()
+		})
+		defer stop()
 		r.rmux.Lock()
 		defer r.rmux.Unlock()
 		for r.chunks[r.chrid] == nil && r.getErr() == nil && r.ctx.Err() == nil {

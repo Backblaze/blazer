@@ -155,10 +155,30 @@ func UserAgent(agent string) ClientOption {
 	}
 }
 
-// APIBase returns a ClientOption specifying the URL root of API requests.
-func APIBase(url string) ClientOption {
+// APIBase returns a ClientOption specifying the HTTPS URL root of API requests.
+// An empty URL uses the default B2 endpoint. For an HTTP test or self-hosted
+// endpoint, use InsecureAPIBase instead.
+func APIBase(rawURL string) ClientOption {
+	return apiBase(rawURL, false)
+}
+
+// InsecureAPIBase is APIBase with an explicit opt-in to plain HTTP as well as
+// HTTPS. HTTP sends credentials and data without encryption; use it only for
+// trusted test or self-hosted endpoints.
+func InsecureAPIBase(rawURL string) ClientOption {
+	return apiBase(rawURL, true)
+}
+
+func apiBase(rawURL string, allowHTTP bool) ClientOption {
 	return func(o *clientOptions) {
-		o.apiBase = url
+		if rawURL != "" {
+			u, err := url.Parse(rawURL)
+			if err != nil || (u.Scheme != "https" && !(allowHTTP && u.Scheme == "http")) {
+				o.optionErr = errors.New("b2: APIBase requires HTTPS; use InsecureAPIBase to allow HTTP")
+				return
+			}
+		}
+		o.apiBase = rawURL
 	}
 }
 

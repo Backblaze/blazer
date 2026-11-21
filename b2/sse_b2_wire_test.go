@@ -180,7 +180,7 @@ func (w *sseB2Wire) serveDownload(rw http.ResponseWriter, r *http.Request) {
 
 func (w *sseB2Wire) bucket(t *testing.T) *Bucket {
 	t.Helper()
-	client, err := NewClient(context.Background(), "account", "key", APIBase(w.srv.URL))
+	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(w.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

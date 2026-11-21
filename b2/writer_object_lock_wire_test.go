@@ -35,7 +35,7 @@ func newObjectLockWire(t *testing.T) (*b2wiretest.Server, *Bucket) {
 	srv.Reply("b2_finish_large_file", http.StatusOK, writerObjectLockLargeFileJSON)
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "a", "k", APIBase(srv.URL()))
+	client, err := NewClient(ctx, "a", "k", InsecureAPIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

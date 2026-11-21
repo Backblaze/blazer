@@ -162,7 +162,7 @@ func run(ctx context.Context) error {
 	if base == "" {
 		return fmt.Errorf("simulator URL is unset")
 	}
-	client, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.APIBase(base))
+	client, err := b2.NewClient(ctx, "test-key-id", "test-key", b2.InsecureAPIBase(base))
 	if err != nil {
 		return fmt.Errorf("authenticate: %w", err)
 	}

@@ -81,7 +81,7 @@ func TestRegression_CachedSessionWithWrongSecretFailsAtReauthorization(t *testin
 	store.Set(data)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client, err := NewClient(ctx, "key-id", "wrong-secret", APIBase(srv.URL), WithAccountInfo(store))
+	client, err := NewClient(ctx, "key-id", "wrong-secret", InsecureAPIBase(srv.URL), WithAccountInfo(store))
 	if err != nil {
 		t.Fatalf("NewClient with a cached session: %v", err)
 	}

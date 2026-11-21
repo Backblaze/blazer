@@ -94,7 +94,7 @@ func (w *lockWire) object(t *testing.T) *Object {
 
 func (w *lockWire) publicBucket(t *testing.T) *Bucket {
 	t.Helper()
-	client, err := NewClient(context.Background(), "a", "k", APIBase(w.srv.URL))
+	client, err := NewClient(context.Background(), "a", "k", InsecureAPIBase(w.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

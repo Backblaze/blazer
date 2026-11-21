@@ -366,7 +366,7 @@ func newClient(ctx context.Context, target string) (*b2.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
+	client, err := b2.NewClient(ctx, id, key, b2.InsecureAPIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
 	if err != nil {
 		return nil, classify("authenticate", err)
 	}

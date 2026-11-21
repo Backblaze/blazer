@@ -57,8 +57,11 @@ Out of scope:
   and in JSON request bodies on large-file start (`serverSideEncryption`) and server-side copy
   (`sourceServerSideEncryption`, `destinationServerSideEncryption`). They are not persisted. If you log
   requests, redact both headers and bodies.
-- **Transport**: all B2 API traffic uses HTTPS. Certificate verification failures stop retries and
-  return the original error; they are never treated as retryable.
+- **Transport**: `b2.NewClient` uses HTTPS by default, and `b2.APIBase` requires HTTPS.
+  `b2.InsecureAPIBase` explicitly allows HTTP for trusted test or self-hosted endpoints;
+  HTTP transmits credentials and data without encryption. The lower-level `base.SetAPIBase`
+  accepts a caller-supplied endpoint without this scheme check. Certificate verification
+  failures stop retries and return the original error; they are never treated as retryable.
 - **Tests and CI**: live tests read `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` from the
   environment; CI keeps them in repository secrets used only by `test-live.yml`. The `.sdkharness`
   checks refuse any non-loopback endpoint and drop ambient `B2_*` variables.

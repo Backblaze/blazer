@@ -1,0 +1,3 @@
+kind: Fixed
+body: Add a newline to missing-credential errors in b2keys, initialize consistent-group metadata when bucket info is absent, and wake download chunk waiters on cancellation.
+time: 2026-11-21T12:00:00-06:00

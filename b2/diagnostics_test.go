@@ -18,7 +18,7 @@ import (
 func TestClientStatusRPCWindows(t *testing.T) {
 	srv := b2wiretest.New(t)
 	srv.Reply("b2_authorize_account", http.StatusOK, fmt.Sprintf(updateAuthJSON, srv.URL()))
-	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))
+	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

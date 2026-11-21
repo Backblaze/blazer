@@ -382,7 +382,7 @@ func assertFreshURLRetry(entries []entry, faulted func(entry) bool, what string)
 
 func newClient(ctx context.Context, extra ...b2.ClientOption) (*b2.Client, error) {
 	opts := append([]b2.ClientOption{
-		b2.APIBase(os.Getenv("RESILIENCE_SIMULATOR_URL")),
+		b2.InsecureAPIBase(os.Getenv("RESILIENCE_SIMULATOR_URL")),
 		b2.UserAgent("sdkharness-resilience/blazer"),
 	}, extra...)
 	client, err := b2.NewClient(ctx, "test-key-id", "test-key", opts...)
