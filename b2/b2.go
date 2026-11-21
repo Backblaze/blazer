@@ -425,6 +425,8 @@ func (e b2err) Error() string {
 	return e.err.Error()
 }
 
+func (e b2err) Unwrap() error { return e.err }
+
 // IsNotExist reports whether a given error indicates that an object or bucket
 // does not exist.
 func IsNotExist(err error) bool {
@@ -910,6 +912,7 @@ func (o *Object) ensure(ctx context.Context, keys ...*SSECKey) error {
 
 type deleteOptions struct {
 	bypassGovernance bool
+	ssecKeys         []*SSECKey
 }
 
 // DeleteOption configures Delete.
@@ -926,6 +929,14 @@ func BypassGovernance() DeleteOption {
 	}
 }
 
+// WithDeleteSSECKey supplies a customer-managed key for resolving an object
+// before deletion. The key is not retained by the object.
+func WithDeleteSSECKey(key *SSECKey) DeleteOption {
+	return func(opts *deleteOptions) {
+		opts.ssecKeys = append(opts.ssecKeys, key)
+	}
+}
+
 // Delete removes the given object, if it is a regular file or hide marker.
 // A nil DeleteOption returns an error before any request is sent.
 // For the v0.9.0 method-type migration, see
@@ -938,7 +949,7 @@ func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
 		}
 		opt(options)
 	}
-	if err := o.ensure(ctx); err != nil {
+	if err := o.ensure(ctx, options.ssecKeys...); err != nil {
 		return err
 	}
 	status := o.f.status()
@@ -968,9 +979,10 @@ func (o *Object) Cancel(ctx context.Context) error {
 	}
 }
 
-// Hide hides the object from name-based listing.
-func (o *Object) Hide(ctx context.Context) error {
-	if err := o.ensure(ctx); err != nil {
+// Hide hides the object from name-based listing. Pass an SSE-C key to resolve
+// a customer-key-encrypted object; the key is not retained by the object.
+func (o *Object) Hide(ctx context.Context, keys ...*SSECKey) error {
+	if err := o.ensure(ctx, keys...); err != nil {
 		return err
 	}
 	_, err := o.b.b.hideFile(ctx, o.name)
