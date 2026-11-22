@@ -176,8 +176,16 @@ func apiBase(rawURL string, allowHTTP bool) ClientOption {
 	return func(o *clientOptions) {
 		if rawURL != "" {
 			u, err := url.Parse(rawURL)
-			loopback := err == nil && (u.Hostname() == "localhost" || net.ParseIP(u.Hostname()).IsLoopback())
-			if err != nil || (u.Scheme != "https" && (u.Scheme != "http" || (!allowHTTP && !loopback))) {
+			if err != nil {
+				o.optionErr = errors.New("b2: invalid APIBase URL")
+				return
+			}
+			if u.Scheme != "https" && u.Scheme != "http" {
+				o.optionErr = errors.New("b2: unsupported APIBase URL scheme; use HTTP or HTTPS")
+				return
+			}
+			loopback := strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()).IsLoopback()
+			if u.Scheme == "http" && !allowHTTP && !loopback {
 				o.optionErr = errors.New("b2: APIBase requires HTTPS except for loopback hosts; use InsecureAPIBase to allow non-loopback HTTP")
 				return
 			}
