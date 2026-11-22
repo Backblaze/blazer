@@ -79,6 +79,8 @@ func TestAPIBaseSchemePolicy(t *testing.T) {
 	}{
 		{name: "ipv4_loopback", endpoint: "http://127.0.0.1:8080"},
 		{name: "localhost", endpoint: "http://localhost:8080"},
+		{name: "localhost_upper", endpoint: "http://LOCALHOST:8080"},
+		{name: "localhost_mixed", endpoint: "http://LocalHost:8080"},
 		{name: "ipv6_loopback", endpoint: "http://[::1]:8080"},
 		{name: "remote_http", endpoint: "http://example.com", wantErr: true},
 		{name: "https", endpoint: "https://api.backblazeb2.com"},
@@ -127,7 +129,15 @@ func TestAPIBaseSchemePolicy(t *testing.T) {
 				if err == nil || client != nil || calls != 0 {
 					t.Fatalf("rejected endpoint: client=%v, err=%v, requests=%d; want rejection before sending credentials", client != nil, err, calls)
 				}
-				if !strings.Contains(err.Error(), "InsecureAPIBase") {
+				if strings.HasPrefix(test.name, "unsupported_scheme") {
+					if !strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "InsecureAPIBase") {
+						t.Errorf("error %q should describe the unsupported scheme without suggesting InsecureAPIBase", err)
+					}
+				} else if strings.HasPrefix(test.name, "malformed") {
+					if !strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "InsecureAPIBase") {
+						t.Errorf("error %q should describe the invalid URL without suggesting InsecureAPIBase", err)
+					}
+				} else if !strings.Contains(err.Error(), "InsecureAPIBase") {
 					t.Errorf("error %q does not explain the HTTP opt-in", err)
 				}
 				return
