@@ -30,7 +30,7 @@ func TestSyncListsOnlyTheDestinationPrefix(t *testing.T) {
 	})
 	srv.Reply("upload_file", http.StatusOK,
 		`{"fileId":"uploaded-id","fileName":"p/a.txt","action":"upload","contentLength":5,"contentSha1":"aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d","contentType":"text/plain","fileInfo":{"src_last_modified_millis":"1700000000000"},"uploadTimestamp":1700000000000}`)
-	client, err := b2.NewClient(ctx, "a", "k", b2.InsecureAPIBase(srv.URL()))
+	client, err := b2.NewClient(ctx, "a", "k", b2.APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

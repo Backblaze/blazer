@@ -61,7 +61,7 @@ func TestNewBucketCORSAndFileLock(t *testing.T) {
 		b2wiretest.Response{Body: `{"buckets":[]}`},
 		b2wiretest.Response{Body: `{"buckets":[` + lockedJSON + `,` + plainJSON + `]}`})
 	srv.ReplySequence("b2_create_bucket", b2wiretest.Response{Body: lockedJSON}, b2wiretest.Response{Body: plainJSON})
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,7 +54,7 @@ func TestAttrsPublicMetadataPathsKeepFileInfoIndependent(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,7 +41,7 @@ func TestNewBucketRetentionUpdateDenied(t *testing.T) {
 			srv.Reply("b2_update_bucket", http.StatusForbidden, `{"status":403,"code":"access_denied","message":"retention denied"}`)
 			srv.Reply("b2_delete_bucket", tc.deleteStatus, tc.deleteBody)
 			ctx := context.Background()
-			client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
+			client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +74,7 @@ func TestNewBucketRetentionCleanupAfterCancellation(t *testing.T) {
 		cancel()
 		return b2wiretest.Response{Status: http.StatusForbidden, Body: `{"status":403,"code":"access_denied","message":"retention denied"}`}
 	})
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestNewBucketRetentionCleanupAfterCancellation(t *testing.T) {
 func TestNewBucketRetentionDoesNotUpdateExistingBucket(t *testing.T) {
 	srv := b2wiretest.New(t)
 	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate"}]}`)
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestNewBucketWithoutRetentionDoesNotUpdate(t *testing.T) {
 	srv := b2wiretest.New(t)
 	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
 	srv.Reply("b2_create_bucket", http.StatusOK, updateBucketJSON)
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

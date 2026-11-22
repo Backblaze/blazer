@@ -162,7 +162,7 @@ func TestAccountInfoFileRejectsUnsafeReadPermissions(t *testing.T) {
 			if errors.Is(store.Err(), ErrInvalidAccountInfo) {
 				t.Fatalf("unsafe permissions were classified as a recoverable cache miss: %v", store.Err())
 			}
-			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err == nil {
+			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err == nil {
 				t.Fatal("NewClient accepted unsafe cached session")
 			}
 			wire.mu.Lock()
@@ -198,7 +198,7 @@ func TestNewClientReauthorizesIncompleteSession(t *testing.T) {
 			if err := store.Err(); err != nil {
 				t.Fatal(err)
 			}
-			client, err := NewClient(context.Background(), "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
+			client, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -445,7 +445,7 @@ func TestNewClientFallsBackFromUnavailableSession(t *testing.T) {
 				}
 			}
 			store := NewAccountInfoFile(path)
-			client, err := NewClient(context.Background(), "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(store))
+			client, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store))
 			if err != nil {
 				t.Fatalf("NewClient: %v", err)
 			}
@@ -576,7 +576,7 @@ func newAccountInfoWire(t *testing.T) *accountInfoWire {
 
 func TestNewClientDefaultsToInMemoryAccountInfo(t *testing.T) {
 	wire := newAccountInfoWire(t)
-	client, err := NewClient(context.Background(), "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL))
+	client, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +598,7 @@ func TestAccountInfoFileResumeAndClearOn401(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "account.json")
 	store := NewAccountInfoFile(path)
 	ctx := context.Background()
-	if _, err := NewClient(ctx, "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(store)); err != nil {
+	if _, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store)); err != nil {
 		t.Fatal(err)
 	}
 	data, ok := store.AuthData()
@@ -619,7 +619,7 @@ func TestAccountInfoFileResumeAndClearOn401(t *testing.T) {
 			}
 		}
 	}
-	client, err := NewClient(ctx, "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
+	client, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func TestAccountInfoFileResumeAndClearOn401(t *testing.T) {
 	if err := corrupt.Err(); err != nil {
 		t.Fatal(err)
 	}
-	stale, err := NewClient(ctx, "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
+	stale, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +692,7 @@ func TestDefaultAccountInfoWireMatchesExplicitInMemory(t *testing.T) {
 	for _, explicit := range []bool{false, true} {
 		wire := newAccountInfoWire(t)
 		recorder := &recordingTransport{next: http.DefaultTransport}
-		opts := []ClientOption{InsecureAPIBase(wire.server.URL), Transport(recorder)}
+		opts := []ClientOption{APIBase(wire.server.URL), Transport(recorder)}
 		if explicit {
 			opts = append(opts, WithAccountInfo(&InMemoryAccountInfo{}))
 		}
@@ -727,7 +727,7 @@ func TestWithAccountInfoRejectsNilAndConflictingStores(t *testing.T) {
 		{name: "conflicting", opts: []ClientOption{WithAccountInfo(&InMemoryAccountInfo{}), WithAccountInfo(&InMemoryAccountInfo{})}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := append([]ClientOption{InsecureAPIBase(wire.server.URL)}, tc.opts...)
+			opts := append([]ClientOption{APIBase(wire.server.URL)}, tc.opts...)
 			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", opts...); err == nil || !strings.Contains(err.Error(), "account info") {
 				t.Fatalf("NewClient error = %v, want account info option rejection", err)
 			}
@@ -752,7 +752,7 @@ func (m nilMapAccountInfo) Clear() { delete(m, "session") }
 func TestAccountInfoSharedClientConcurrency(t *testing.T) {
 	wire := newAccountInfoWire(t)
 	store := NewAccountInfoFile(filepath.Join(t.TempDir(), "private", "account.json"))
-	client, err := NewClient(context.Background(), "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(store))
+	client, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -787,10 +787,10 @@ func TestAccountInfoDoesNotReuseAnotherKeyID(t *testing.T) {
 	wire := newAccountInfoWire(t)
 	path := filepath.Join(t.TempDir(), "private", "account.json")
 	ctx := context.Background()
-	if _, err := NewClient(ctx, "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err != nil {
+	if _, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewClient(ctx, "different-key-id", "different-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err != nil {
+	if _, err := NewClient(ctx, "different-key-id", "different-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err != nil {
 		t.Fatal(err)
 	}
 	wire.mu.Lock()
@@ -808,7 +808,7 @@ func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "account.json")
 	ctx := context.Background()
 	store := NewAccountInfoFile(path)
-	if _, err := NewClient(ctx, "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(store)); err != nil {
+	if _, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(store)); err != nil {
 		t.Fatal(err)
 	}
 	data, ok := store.AuthData()
@@ -818,7 +818,7 @@ func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	if want := []string{"readFiles", "bypassGovernance"}; !slices.Equal(data.AllowedCapabilities, want) {
 		t.Errorf("stored AllowedCapabilities = %q, want %q", data.AllowedCapabilities, want)
 	}
-	fresh, err := NewClient(ctx, "key-id", "application-key-secret", InsecureAPIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
+	fresh, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
 	if err != nil {
 		t.Fatal(err)
 	}

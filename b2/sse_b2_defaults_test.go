@@ -9,7 +9,7 @@ import (
 
 func sseB2DefaultBucket(t *testing.T, wire *ssecPublicWire) *Bucket {
 	t.Helper()
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL), DefaultWriterOptions(WithSSEB2("AES256")))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL), DefaultWriterOptions(WithSSEB2("AES256")))
 	if err != nil {
 		t.Fatal(err)
 	}

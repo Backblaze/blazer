@@ -130,7 +130,7 @@ func replicationCreateConfig() *ReplicationConfiguration {
 
 func TestNewBucketReplicationConfigurationWireRoundTrip(t *testing.T) {
 	wire := newReplicationCreateWire(t)
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestNewBucketReplicationConfigurationUnreadable(t *testing.T) {
 	if wire.response == replicationCreateResponse {
 		t.Fatal("fixture did not mark replication configuration unreadable")
 	}
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestNewBucketReplicationConfigurationUnreadable(t *testing.T) {
 
 func TestNewBucketOmitsUnsetReplicationConfiguration(t *testing.T) {
 	wire := newReplicationCreateWire(t)
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

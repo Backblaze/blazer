@@ -29,7 +29,7 @@ var wireKeyExpirationTime = time.Date(2023, time.November, 14, 22, 13, 20, 12300
 func newKeyExpirationWire(t *testing.T) (*b2wiretest.Server, *Client) {
 	t.Helper()
 	srv := b2wiretest.New(t)
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ func TestReauthPreservesOptionsWire(t *testing.T) {
 		b2wiretest.Response{Body: `{"buckets":[]}`},
 	)
 	recorder := &recordingTransport{next: http.DefaultTransport}
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()), Transport(recorder),
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()), Transport(recorder),
 		UserAgent("first-agent"), UserAgent("second-agent"), FailSomeUploads(), ExpireSomeAuthTokens(), ForceCapExceeded())
 	if err != nil {
 		t.Fatal(err)

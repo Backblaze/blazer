@@ -66,7 +66,7 @@ func TestConcurrent401ReauthorizationWire(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client, err := NewClient(ctx, "id", "secret", InsecureAPIBase(server.URL))
+	client, err := NewClient(ctx, "id", "secret", APIBase(server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

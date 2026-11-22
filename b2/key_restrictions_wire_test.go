@@ -82,7 +82,7 @@ func newKeyRestrictionsWire(t *testing.T) (*Client, *keyRestrictionsWire) {
 	}))
 	t.Cleanup(wire.server.Close)
 
-	client, err := NewClient(context.Background(), "a", "k", InsecureAPIBase(wire.server.URL))
+	client, err := NewClient(context.Background(), "a", "k", APIBase(wire.server.URL))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

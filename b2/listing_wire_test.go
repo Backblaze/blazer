@@ -171,7 +171,7 @@ func newListingWireBucket(t *testing.T, ctx context.Context, srv *b2wiretest.Ser
 	t.Helper()
 	bucketJSON := strings.Replace(updateBucketJSON, `"bucketName":"n"`, `"bucketName":"bucket"`, 1)
 	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[`+bucketJSON+`]}`)
-	client, err := NewClient(ctx, "a", "k", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(ctx, "a", "k", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -34,7 +34,7 @@ func newSHA1WireBucket(t *testing.T) (*b2wiretest.Server, *Bucket) {
 	srv.Reply("b2_create_bucket", http.StatusOK, noReplicationBucketJSON)
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

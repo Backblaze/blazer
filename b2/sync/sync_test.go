@@ -324,7 +324,7 @@ func newSyncWire(t *testing.T, opts ...b2.ClientOption) (*b2.Bucket, *syncWire) 
 	}))
 	t.Cleanup(w.server.Close)
 	ctx := context.Background()
-	clientOpts := append([]b2.ClientOption{b2.InsecureAPIBase(w.server.URL)}, opts...)
+	clientOpts := append([]b2.ClientOption{b2.APIBase(w.server.URL)}, opts...)
 	client, err := b2.NewClient(ctx, "a", "k", clientOpts...)
 	if err != nil {
 		t.Fatal(err)

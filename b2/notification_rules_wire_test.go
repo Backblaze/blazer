@@ -18,7 +18,7 @@ func newNotificationRulesWireBucket(t *testing.T, srv *b2wiretest.Server) *Bucke
 	srv.Reply("b2_list_buckets", http.StatusOK, fmt.Sprintf(`{"buckets":[%s]}`, noReplicationBucketJSON))
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "a", "k", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(ctx, "a", "k", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

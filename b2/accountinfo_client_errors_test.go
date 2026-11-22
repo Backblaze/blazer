@@ -97,7 +97,7 @@ func TestAccountInfoClientPersistenceFailures(t *testing.T) {
 				}
 			}
 			server.StrictReplySequence("b2_list_buckets", replies...)
-			client, err := NewClient(ctx, "key-id", "application-key-secret", InsecureAPIBase(server.URL()), WithAccountInfo(store))
+			client, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(server.URL()), WithAccountInfo(store))
 			if tc.cached {
 				if err != nil {
 					t.Fatalf("restore cached client: %v", err)
@@ -174,7 +174,7 @@ func TestAccountInfoClientReadErrorContract(t *testing.T) {
 				}
 				store.InMemoryAccountInfo.Set(data)
 			}
-			client, err := NewClient(t.Context(), "key-id", "application-key-secret", InsecureAPIBase(server.URL()), WithAccountInfo(store))
+			client, err := NewClient(t.Context(), "key-id", "application-key-secret", APIBase(server.URL()), WithAccountInfo(store))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("NewClient error = %v, want %v", err, tc.wantErr)
 			}
