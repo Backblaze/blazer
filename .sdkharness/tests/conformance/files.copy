@@ -437,7 +437,7 @@ func newClient(ctx context.Context, target string, transport http.RoundTripper) 
 	if err != nil {
 		return nil, err
 	}
-	client, err := b2.NewClient(ctx, id, key, b2.InsecureAPIBase(base), b2.UserAgent("sdkharness-conformance/blazer"), b2.Transport(transport))
+	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"), b2.Transport(transport))
 	if err != nil {
 		return nil, classify("authenticate", err)
 	}

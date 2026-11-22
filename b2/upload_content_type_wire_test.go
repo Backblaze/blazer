@@ -29,7 +29,7 @@ func newUploadContentTypeWire(t *testing.T) uploadContentTypeWire {
 	server.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"large-1","fileName":"large","action":"upload","uploadTimestamp":1}`)
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(server.URL()))
+	client, err := NewClient(ctx, "account", "key", APIBase(server.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

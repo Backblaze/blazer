@@ -206,7 +206,7 @@ func newListReplFixture(t *testing.T, bucketJSON string, canRead bool) (*Client,
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(context.Background(), "a", "k", InsecureAPIBase(srv.URL))
+	client, err := NewClient(context.Background(), "a", "k", APIBase(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -83,7 +83,7 @@ func TestDefaultWriterOptionsDoNotRunWhenAuthorizationFails(t *testing.T) {
 		Body:   `{"status":400,"code":"bad_request","message":"authorization rejected"}`,
 	})
 	calls := 0
-	client, err := NewClient(context.Background(), "offline-id", "offline-key", InsecureAPIBase(server.URL()),
+	client, err := NewClient(context.Background(), "offline-id", "offline-key", APIBase(server.URL()),
 		DefaultWriterOptions(WriterOptionFunc(func(w *Writer) { calls++ })))
 	if client != nil {
 		t.Error("failed authorization returned a client")
@@ -113,7 +113,7 @@ func TestDefaultWriterOptionsRejectWrappedSSECBeforeAuthorization(t *testing.T) 
 			}
 			calls := 0
 			wrapped := struct{ WriterOption }{WithSSECKey(key)}
-			client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(wire.srv.URL),
+			client, err := NewClient(context.Background(), "account", "key", APIBase(wire.srv.URL),
 				DefaultWriterOptions(WriterOptionFunc(func(*Writer) { calls++ }), wrapped))
 			if client != nil || err == nil || err.Error() != "b2: SSE-C key cannot be a default writer option; pass it to NewWriter" {
 				t.Fatalf("wrapped SSE-C default = (%v, %v), want SSE-C default rejection", client, err)
@@ -141,7 +141,7 @@ func TestDefaultWriterOptionsRejectNilBeforeAuthorization(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := b2wiretest.New(t)
-			client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(server.URL()),
+			client, err := NewClient(context.Background(), "account", "key", APIBase(server.URL()),
 				DefaultWriterOptions(tc.option))
 			if client != nil || err == nil || err.Error() != "b2: writer option is nil" {
 				t.Fatalf("nil default = (%v, %v), want nil writer-option error", client, err)

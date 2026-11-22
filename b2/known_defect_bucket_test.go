@@ -95,7 +95,7 @@ func TestKnownDefect_NotFoundErrorUnwrapsToFSErrNotExist(t *testing.T) {
 	srv := b2wiretest.New(t)
 	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
 	ctx := newTestCtx(t)
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

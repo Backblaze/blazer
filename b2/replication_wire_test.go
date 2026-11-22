@@ -75,7 +75,7 @@ func newSetupReplicationWire(t *testing.T, ctx context.Context) (*setupReplicati
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestFailedReplicationUpdateDoesNotPoisonCachedConfig(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -57,8 +57,9 @@ Out of scope:
   and in JSON request bodies on large-file start (`serverSideEncryption`) and server-side copy
   (`sourceServerSideEncryption`, `destinationServerSideEncryption`). They are not persisted. If you log
   requests, redact both headers and bodies.
-- **Transport**: `b2.NewClient` uses HTTPS by default, and `b2.APIBase` requires HTTPS.
-  `b2.InsecureAPIBase` explicitly allows HTTP for trusted test or self-hosted endpoints;
+- **Transport**: `b2.NewClient` uses HTTPS by default. `b2.APIBase` requires HTTPS except
+  for `localhost` or loopback IP addresses, which also accept HTTP without an opt-in.
+  `b2.InsecureAPIBase` explicitly allows non-loopback HTTP for trusted test or self-hosted endpoints;
   HTTP transmits credentials and data without encryption. The lower-level `base.SetAPIBase`
   accepts a caller-supplied endpoint without this scheme check. Certificate verification
   failures stop retries and return the original error; they are never treated as retryable.

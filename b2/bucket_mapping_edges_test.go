@@ -91,7 +91,7 @@ func TestMappingReauthWaiterSurvivesCancelledLeader(t *testing.T) {
 		}
 		return http.DefaultTransport.RoundTrip(r)
 	})
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()), Transport(transport))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()), Transport(transport))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func newMappingBucket(t *testing.T, response string) (*Bucket, *b2wiretest.Serve
 	srv.Reply("b2_update_bucket", http.StatusOK, response)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	client, err := NewClient(ctx, "account", "key", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}

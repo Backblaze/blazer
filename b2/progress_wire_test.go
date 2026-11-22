@@ -88,7 +88,7 @@ func newProgressWire(t *testing.T) (*progressWire, *Bucket) {
 	}))
 	t.Cleanup(w.server.Close)
 	transport := &progressWireTransport{wire: w, next: http.DefaultTransport}
-	client, err := NewClient(context.Background(), "account", "key", InsecureAPIBase(w.server.URL), Transport(transport))
+	client, err := NewClient(context.Background(), "account", "key", APIBase(w.server.URL), Transport(transport))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -236,7 +236,7 @@ func TestObjectCancelWire(t *testing.T) {
 
 func liveOnlyClient(t *testing.T, srv *b2wiretest.Server) *Client {
 	t.Helper()
-	client, err := NewClient(context.Background(), "a", "k", InsecureAPIBase(srv.URL()))
+	client, err := NewClient(context.Background(), "a", "k", APIBase(srv.URL()))
 	if err != nil {
 		t.Fatal(err)
 	}
