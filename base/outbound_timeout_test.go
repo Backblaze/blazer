@@ -42,9 +42,9 @@ func hungServer(t *testing.T) (*httptest.Server, *atomic.Bool) {
 		}
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/b2_authorize_account"):
-			fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
+			_, _ = fmt.Fprint(w, v4AuthJSON(srv.URL, nil, nil, ""))
 		case strings.HasSuffix(r.URL.Path, "/b2_list_buckets"):
-			fmt.Fprintf(w, `{"buckets": [%s]}`, plainBucketJSON)
+			_, _ = fmt.Fprintf(w, `{"buckets": [%s]}`, plainBucketJSON)
 		default:
 			t.Errorf("unexpected request path before hang: %s", r.URL.Path)
 			http.NotFound(w, r)
