@@ -24,12 +24,19 @@ func TestCredentialContainersRedactFormatting(t *testing.T) {
 		{"wire_upload_url", b2types.GetUploadURLResponse{Token: secret}},
 		{"wire_download_auth", b2types.GetDownloadAuthorizationResponse{Token: secret}},
 		{"wire_ssec", b2types.ServerSideEncryption{CustomerKey: secret, CustomerKeyMD5: secret}},
+		{"bucket", &Bucket{b2: account}}, {"file", &File{b2: account}}, {"large_file", &LargeFile{b2: account}},
 		{"account", account}, {"account_value", reflect.ValueOf(account).Elem().Interface()},
 		{"session", AuthData{AuthToken: secret}}, {"key", Key{Secret: secret}}, {"key_pointer", &Key{Secret: secret}},
 		{"upload_url", URL{token: secret}}, {"upload_url_pointer", &URL{token: secret}},
 		{"part", FileChunk{token: secret}}, {"part_pointer", &FileChunk{token: secret}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if strings.HasPrefix(tc.name, "wire_") {
+				raw, err := json.Marshal(tc.value)
+				if err != nil || !strings.Contains(string(raw), secret) {
+					t.Fatal("wire JSON lost explicit credential material")
+				}
+			}
 			for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d"} {
 				got := fmt.Sprintf(verb, tc.value)
 				if strings.Contains(got, secret) || strings.Contains(strings.ToLower(got), fmt.Sprintf("%x", secret)) {

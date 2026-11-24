@@ -3,6 +3,7 @@ package b2
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Backblaze/blazer/x/b2sim"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,11 +14,22 @@ func TestCredentialContainersRedactFormatting(t *testing.T) {
 	data := AuthData{AuthToken: secret}
 	store := &InMemoryAccountInfo{}
 	store.Set(data)
+	sim := b2sim.New()
+	sim.Seed("audit")
+	client, err := NewClient(t.Context(), "id", secret, Transport(sim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.Bucket(t.Context(), "audit")
+	if err != nil {
+		t.Fatal(err)
+	}
 	target := WebhookNotificationTarget{HMACSHA256SigningSecret: secret, CustomHeaders: []NotificationCustomHeader{{Name: "X-Access", Value: secret}}}
 	for _, tc := range []struct {
 		name  string
 		value any
 	}{
+		{"client", client}, {"bucket", bucket}, {"object", bucket.Object("item")},
 		{"session", data}, {"session_pointer", &data}, {"store", store}, {"store_value", reflect.ValueOf(store).Elem().Interface()},
 		{"webhook", target}, {"webhook_pointer", &target}, {"header", target.CustomHeaders[0]},
 		{"nested_exported", struct{ Session AuthData }{data}},
