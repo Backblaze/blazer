@@ -53,10 +53,6 @@ Out of scope:
 
 - **Credentials**: application keys are passed to `b2.NewClient` and sent only to the B2 authorize
   endpoint; the authorization token returned is held in memory and sent in the `Authorization` header.
-  SDK credential containers redact direct diagnostic formatting, including SDK-owned session stores.
-  Public credential string fields and JSON persistence retain their original values. Do not log those
-  fields or serialized credentials. Go can bypass formatting methods inside caller-defined unexported
-  wrapper fields; formatting such wrappers is not protected by the container formatters.
 - **SSE-C keys**: customer-provided encryption keys travel in request headers on uploads and downloads,
   and in JSON request bodies on large-file start (`serverSideEncryption`) and server-side copy
   (`sourceServerSideEncryption`, `destinationServerSideEncryption`). They are not persisted. If you log
@@ -70,6 +66,15 @@ Out of scope:
 - **Tests and CI**: live tests read `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` from the
   environment; CI keeps them in repository secrets used only by `test-live.yml`. The `.sdkharness`
   checks refuse any non-loopback endpoint and drop ambient `B2_*` variables.
+
+## Credential formatting
+
+SDK credential containers redact direct diagnostic formatting, including SDK-owned session stores.
+File and bucket formatters retain non-secret metadata such as names, sizes and IDs. Clients and
+in-memory session stores remain fully redacted. Large-file formatters retain the upload ID.
+Public credential string fields and JSON persistence retain their original values. Do not log those
+fields or serialized credentials. Go can bypass formatting methods inside caller-defined unexported
+wrapper fields; formatting such wrappers is not protected by the container formatters.
 
 ## Best practices for users
 

@@ -3,10 +3,11 @@ package base
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/Backblaze/blazer/internal/b2types"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Backblaze/blazer/internal/b2types"
 )
 
 func TestCredentialContainersRedactFormatting(t *testing.T) {

@@ -16,22 +16,33 @@ package b2
 
 import (
 	"fmt"
-	"io"
+
+	"github.com/Backblaze/blazer/internal/credentialformat"
 )
 
-// Promoted methods avoid copying a container's synchronization primitives.
-type redactedCredentialContainer struct{}
+// Value fallback formatters do not copy synchronization primitives.
+type redactedCredentialContainer = credentialformat.Redacted[InMemoryAccountInfo]
+type redactedClientValue = credentialformat.Redacted[Client]
 
-// String omits credential material from diagnostic output.
-func (redactedCredentialContainer) String() string { return "credentials([redacted])" }
-
-// GoString omits credential material from Go-syntax output.
-func (v redactedCredentialContainer) GoString() string { return v.String() }
-
-// Format omits credential material for every formatting verb.
-func (v redactedCredentialContainer) Format(s fmt.State, _ rune) {
-	_, _ = io.WriteString(s, v.String())
+// String prints cached bucket identity without traversing its client or account.
+func (v Bucket) String() string {
+	var name, id string
+	var kind BucketType
+	if v.b != nil {
+		name, id, kind = v.b.name(), v.b.id(), v.b.btype()
+	}
+	return credentialformat.Sprint("b2.Bucket", struct {
+		Name string
+		Type BucketType
+		ID   string
+	}{name, kind, id})
 }
+
+// GoString returns the same redacted metadata as String.
+func (v Bucket) GoString() string { return v.String() }
+
+// Format keeps every verb on the redacted metadata view.
+func (v Bucket) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credential material from diagnostic output.
 func (WebhookNotificationTarget) String() string { return "b2.WebhookNotificationTarget([redacted])" }
@@ -40,7 +51,7 @@ func (WebhookNotificationTarget) String() string { return "b2.WebhookNotificatio
 func (v WebhookNotificationTarget) GoString() string { return v.String() }
 
 // Format omits credential material for every formatting verb.
-func (v WebhookNotificationTarget) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v WebhookNotificationTarget) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credential material from diagnostic output.
 func (NotificationCustomHeader) String() string { return "b2.NotificationCustomHeader([redacted])" }
@@ -49,4 +60,4 @@ func (NotificationCustomHeader) String() string { return "b2.NotificationCustomH
 func (v NotificationCustomHeader) GoString() string { return v.String() }
 
 // Format omits credential material for every formatting verb.
-func (v NotificationCustomHeader) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v NotificationCustomHeader) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }

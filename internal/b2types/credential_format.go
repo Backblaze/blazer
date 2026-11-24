@@ -16,7 +16,8 @@ package b2types
 
 import (
 	"fmt"
-	"io"
+
+	"github.com/Backblaze/blazer/internal/credentialformat"
 )
 
 // String omits credentials from diagnostic output.
@@ -28,7 +29,7 @@ func (WebhookNotificationTarget) String() string {
 func (v WebhookNotificationTarget) GoString() string { return v.String() }
 
 // Format redacts every formatting verb without affecting JSON encoding.
-func (v WebhookNotificationTarget) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v WebhookNotificationTarget) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credentials from diagnostic output.
 func (NotificationCustomHeader) String() string {
@@ -39,16 +40,18 @@ func (NotificationCustomHeader) String() string {
 func (v NotificationCustomHeader) GoString() string { return v.String() }
 
 // Format redacts every formatting verb without affecting JSON encoding.
-func (v NotificationCustomHeader) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v NotificationCustomHeader) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credentials from diagnostic output.
-func (ServerSideEncryption) String() string { return "b2types.ServerSideEncryption([redacted])" }
+func (v ServerSideEncryption) String() string {
+	return credentialformat.Sprint("b2types.ServerSideEncryption", struct{ Mode, Algorithm string }{v.Mode, v.Algorithm})
+}
 
 // GoString omits credentials from Go-syntax output.
 func (v ServerSideEncryption) GoString() string { return v.String() }
 
 // Format redacts every formatting verb without affecting JSON encoding.
-func (v ServerSideEncryption) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v ServerSideEncryption) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credentials from diagnostic output.
 func (Key) String() string { return "b2types.Key([redacted])" }
@@ -57,7 +60,7 @@ func (Key) String() string { return "b2types.Key([redacted])" }
 func (v Key) GoString() string { return v.String() }
 
 // Format redacts every formatting verb without affecting JSON encoding.
-func (v Key) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v Key) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credentials from diagnostic output.
 func (CreateKeyResponse) String() string { return "b2types.CreateKeyResponse([redacted])" }
@@ -66,7 +69,7 @@ func (CreateKeyResponse) String() string { return "b2types.CreateKeyResponse([re
 func (v CreateKeyResponse) GoString() string { return v.String() }
 
 // Format redacts every formatting verb without affecting JSON encoding.
-func (v CreateKeyResponse) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v CreateKeyResponse) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credentials from diagnostic output.
 func (AuthorizeAccountResponse) String() string {
@@ -77,7 +80,7 @@ func (AuthorizeAccountResponse) String() string {
 func (v AuthorizeAccountResponse) GoString() string { return v.String() }
 
 // Format redacts every formatting verb without affecting JSON encoding.
-func (v AuthorizeAccountResponse) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v AuthorizeAccountResponse) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credentials from diagnostic output.
 func (GetUploadURLResponse) String() string { return "b2types.GetUploadURLResponse([redacted])" }
@@ -86,7 +89,7 @@ func (GetUploadURLResponse) String() string { return "b2types.GetUploadURLRespon
 func (v GetUploadURLResponse) GoString() string { return v.String() }
 
 // Format redacts every formatting verb without affecting JSON encoding.
-func (v GetUploadURLResponse) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+func (v GetUploadURLResponse) Format(s fmt.State, _ rune) { credentialformat.Write(s, v) }
 
 // String omits credentials from diagnostic output.
 func (GetDownloadAuthorizationResponse) String() string {
@@ -98,5 +101,5 @@ func (v GetDownloadAuthorizationResponse) GoString() string { return v.String() 
 
 // Format redacts every formatting verb without affecting JSON encoding.
 func (v GetDownloadAuthorizationResponse) Format(s fmt.State, _ rune) {
-	_, _ = io.WriteString(s, v.String())
+	credentialformat.Write(s, v)
 }
