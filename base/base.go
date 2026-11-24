@@ -1060,6 +1060,7 @@ func (b *Bucket) DeleteBucket(ctx context.Context) error {
 
 // Bucket holds B2 bucket details.
 type Bucket struct {
+	redactedCredentialContainer
 	Name           string
 	Type           string
 	Info           map[string]string
@@ -1327,6 +1328,7 @@ func (b *Bucket) GetUploadURL(ctx context.Context) (*URL, error) {
 
 // File represents a B2 file.
 type File struct {
+	redactedCredentialContainer
 	Name      string
 	Size      int64
 	Status    string
@@ -1495,6 +1497,7 @@ func (f *File) UpdateFileLegalHold(ctx context.Context, legalHold string) error 
 
 // LargeFile holds information necessary to implement B2 large file support.
 type LargeFile struct {
+	redactedCredentialContainer
 	ID string
 	b2 *B2
 

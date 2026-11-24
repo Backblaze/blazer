@@ -46,6 +46,7 @@ import (
 
 // Client is a Backblaze B2 client.
 type Client struct {
+	redactedCredentialContainer
 	backend beRootInterface
 
 	slock    sync.Mutex
@@ -271,6 +272,7 @@ func (ct *clientTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // Bucket is a reference to a B2 bucket.
 type Bucket struct {
+	redactedCredentialContainer
 	b beBucketInterface
 	r beRootInterface
 
