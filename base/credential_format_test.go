@@ -3,6 +3,7 @@ package base
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Backblaze/blazer/internal/b2types"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,6 +16,10 @@ func TestCredentialContainersRedactFormatting(t *testing.T) {
 		name  string
 		value any
 	}{
+		{"wire_webhook", b2types.WebhookNotificationTarget{HMACSHA256SigningSecret: secret}},
+		{"wire_header", b2types.NotificationCustomHeader{Name: "X-Access", Value: secret}},
+		{"wire_key", b2types.Key{Secret: secret}},
+		{"wire_ssec", b2types.ServerSideEncryption{CustomerKey: secret, CustomerKeyMD5: secret}},
 		{"account", account}, {"account_value", reflect.ValueOf(account).Elem().Interface()},
 		{"session", AuthData{AuthToken: secret}}, {"key", Key{Secret: secret}}, {"key_pointer", &Key{Secret: secret}},
 		{"upload_url", URL{token: secret}}, {"upload_url_pointer", &URL{token: secret}},
