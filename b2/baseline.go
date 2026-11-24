@@ -17,6 +17,7 @@ package b2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -31,6 +32,15 @@ import (
 // AuthData is the authorized session snapshot stored by AccountInfo.
 // It excludes the application key secret.
 type AuthData base.AuthData
+
+// String returns the session with its token redacted.
+func (a AuthData) String() string { return base.AuthData(a).String() }
+
+// GoString returns the session with its token redacted.
+func (a AuthData) GoString() string { return base.AuthData(a).GoString() }
+
+// Format delegates all formatting verbs to the redacted base representation.
+func (a AuthData) Format(s fmt.State, verb rune) { base.AuthData(a).Format(s, verb) }
 
 type b2RootInterface interface {
 	authorizeAccount(context.Context, string, string, clientOptions) error

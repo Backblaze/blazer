@@ -518,6 +518,7 @@ func (o *b2Options) getTransport() http.RoundTripper {
 
 // B2 holds account information for Backblaze.
 type B2 struct {
+	redactedCredentialContainer
 	mu                  sync.RWMutex // guards the authorization fields below
 	accountID           string
 	authToken           string
