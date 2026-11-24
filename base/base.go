@@ -518,6 +518,7 @@ func (o *b2Options) getTransport() http.RoundTripper {
 
 // B2 holds account information for Backblaze.
 type B2 struct {
+	redactedCredentialContainer
 	mu                  sync.RWMutex // guards the authorization fields below
 	accountID           string
 	authToken           string
@@ -1496,7 +1497,12 @@ func (f *File) UpdateFileLegalHold(ctx context.Context, legalHold string) error 
 type LargeFile struct {
 	ID string
 	b2 *B2
+	*largeFileState
+}
 
+// Keeping mutable upload state behind a pointer lets diagnostic value receivers
+// copy a handle without copying locks or reading concurrently updated fields.
+type largeFileState struct {
 	mu        sync.Mutex
 	size      int64
 	hashes    map[int]string
@@ -1603,10 +1609,9 @@ func (b *Bucket) StartLargeFileWithSSEC(ctx context.Context, name, contentType s
 		return nil, err
 	}
 	return &LargeFile{
-		ID:        b2resp.ID,
-		b2:        b.b2,
-		hashes:    make(map[int]string),
-		partSizes: make(map[int]int64),
+		ID:             b2resp.ID,
+		b2:             b.b2,
+		largeFileState: &largeFileState{hashes: make(map[int]string), partSizes: make(map[int]int64)},
 	}, nil
 }
 
@@ -1664,11 +1669,9 @@ func (f *File) CompileParts(size int64, seen map[int]string) *LargeFile {
 		s[k] = v
 	}
 	return &LargeFile{
-		ID:        f.ID,
-		b2:        f.b2,
-		size:      size,
-		hashes:    s,
-		partSizes: make(map[int]int64),
+		ID:             f.ID,
+		b2:             f.b2,
+		largeFileState: &largeFileState{size: size, hashes: s, partSizes: make(map[int]int64)},
 	}
 }
 
@@ -2361,10 +2364,9 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 // AsLargeFile return a LargeFile with the same fields as this File
 func (f *File) AsLargeFile() *LargeFile {
 	return &LargeFile{
-		ID:        f.ID,
-		b2:        f.b2,
-		hashes:    make(map[int]string),
-		partSizes: make(map[int]int64),
+		ID:             f.ID,
+		b2:             f.b2,
+		largeFileState: &largeFileState{hashes: make(map[int]string), partSizes: make(map[int]int64)},
 	}
 }
 

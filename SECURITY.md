@@ -67,6 +67,15 @@ Out of scope:
   environment; CI keeps them in repository secrets used only by `test-live.yml`. The `.sdkharness`
   checks refuse any non-loopback endpoint and drop ambient `B2_*` variables.
 
+## Credential formatting
+
+SDK credential containers redact direct diagnostic formatting, including SDK-owned session stores.
+File and bucket formatters retain non-secret metadata such as names, sizes and IDs. Clients and
+in-memory session stores remain fully redacted. Large-file formatters retain the upload ID.
+Public credential string fields and JSON persistence retain their original values. Do not log those
+fields or serialized credentials. Go can bypass formatting methods inside caller-defined unexported
+wrapper fields; formatting such wrappers is not protected by the container formatters.
+
 ## Best practices for users
 
 - Use application keys scoped to specific buckets, prefixes and capabilities.

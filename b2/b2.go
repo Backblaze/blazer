@@ -46,6 +46,7 @@ import (
 
 // Client is a Backblaze B2 client.
 type Client struct {
+	redactedClientValue
 	backend beRootInterface
 
 	slock    sync.Mutex

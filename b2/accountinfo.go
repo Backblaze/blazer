@@ -63,6 +63,7 @@ type AccountInfo interface {
 
 // InMemoryAccountInfo is the default, concurrency-safe session store.
 type InMemoryAccountInfo struct {
+	redactedCredentialContainer
 	mu   sync.Mutex
 	data AuthData
 	ok   bool

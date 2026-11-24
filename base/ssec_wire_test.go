@@ -149,7 +149,7 @@ func TestSSECWireShapes(t *testing.T) {
 	}
 	assertSSECBody(t, (*requests)[len(*requests)-1].body["serverSideEncryption"], "key-base64", "md5-base64")
 
-	chunk := &FileChunk{url: srv.URL + "/part", token: "part-token", file: &LargeFile{b2: b, hashes: map[int]string{}}}
+	chunk := &FileChunk{url: srv.URL + "/part", token: "part-token", file: (&File{b2: b}).AsLargeFile()}
 	if _, err := chunk.UploadPartWithSSEC(ctx, strings.NewReader("x"), "sha1", 1, 1, enc); err != nil {
 		t.Fatal(err)
 	}
