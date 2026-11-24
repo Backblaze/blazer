@@ -59,3 +59,12 @@ func (v FileChunk) GoString() string { return v.String() }
 
 // Format omits credential material for every formatting verb.
 func (v FileChunk) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
+
+// String omits the upload-part token from diagnostics.
+func (getUploadPartURLResponse) String() string { return "base.uploadPartResponse([redacted])" }
+
+// GoString omits the upload-part token from Go-syntax output.
+func (v getUploadPartURLResponse) GoString() string { return v.String() }
+
+// Format redacts all formatting verbs.
+func (v getUploadPartURLResponse) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }

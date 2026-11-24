@@ -100,14 +100,3 @@ func (v GetDownloadAuthorizationResponse) GoString() string { return v.String() 
 func (v GetDownloadAuthorizationResponse) Format(s fmt.State, _ rune) {
 	_, _ = io.WriteString(s, v.String())
 }
-
-// String omits credentials from diagnostic output.
-func (getUploadPartURLResponse) String() string {
-	return "b2types.getUploadPartURLResponse([redacted])"
-}
-
-// GoString omits credentials from Go-syntax output.
-func (v getUploadPartURLResponse) GoString() string { return v.String() }
-
-// Format redacts every formatting verb without affecting JSON encoding.
-func (v getUploadPartURLResponse) Format(s fmt.State, _ rune) { _, _ = io.WriteString(s, v.String()) }
