@@ -22,6 +22,7 @@ func TestCredentialContainersRedactFormatting(t *testing.T) {
 		{"wire_created_key", b2types.CreateKeyResponse{Secret: secret}},
 		{"wire_authorize", b2types.AuthorizeAccountResponse{AuthToken: secret}},
 		{"wire_upload_url", b2types.GetUploadURLResponse{Token: secret}},
+		{"wire_part_url", getUploadPartURLResponse{Token: secret}},
 		{"wire_download_auth", b2types.GetDownloadAuthorizationResponse{Token: secret}},
 		{"wire_ssec", b2types.ServerSideEncryption{CustomerKey: secret, CustomerKeyMD5: secret}},
 		{"bucket", &Bucket{b2: account}}, {"file", &File{b2: account}}, {"large_file", &LargeFile{b2: account}},
