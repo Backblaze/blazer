@@ -23,8 +23,8 @@ fi
 # awk reports the exact match and line while preserving the caller's label.
 printf '%s\n' "$content" | awk -v label="$label" -v file="$mode" '
   BEGIN {
-    key_pattern = "(^|[^[:alnum:]_])(" ENVIRON["TRACKER_KEYS"] ")-[0-9]+([^[:alnum:]_]|$)"
-    host_pattern = "(^|[^[:alnum:]_])(" ENVIRON["INTERNAL_HOSTS"] ")([^[:alnum:]_]|$)"
+    key_pattern = "(^|[^[:alnum:]])(" ENVIRON["TRACKER_KEYS"] ")-[0-9]+([^[:alnum:]]|$)"
+    host_pattern = "(^|[^[:alnum:]])(" ENVIRON["INTERNAL_HOSTS"] ")([^[:alnum:]]|$)"
   }
   function scan(line, pattern, fold,    rest, text, hit) {
     rest = line
@@ -32,8 +32,8 @@ printf '%s\n' "$content" | awk -v label="$label" -v file="$mode" '
       text = fold ? tolower(rest) : rest
       if (!match(text, pattern)) break
       hit = substr(rest, RSTART, RLENGTH)
-      sub(/^[^[:alnum:]_]/, "", hit)
-      sub(/[^[:alnum:]_]$/, "", hit)
+      sub(/^[^[:alnum:]]/, "", hit)
+      sub(/[^[:alnum:]]$/, "", hit)
       if (file == "file") printf "%s:%d: %s\n", label, NR, hit
       else printf "%s: %s\n", label, hit
       found = 1

@@ -4,8 +4,14 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 guard="$root/scripts/internal-reference-guard.sh"
-export TRACKER_KEYS='B2|DEV|DEVDOCS|DOCS|HD'
-export INTERNAL_HOSTS='backblaze\.atlassian\.net|atlassian\.net'
+workflow=${GUARD_TEST_WORKFLOW:-$root/.github/workflows/internal-reference-guard.yml}
+TRACKER_KEYS=$(sed -n "s/^  TRACKER_KEYS: '\(.*\)'$/\1/p" "$workflow")
+INTERNAL_HOSTS=$(sed -n "s/^  INTERNAL_HOSTS: '\(.*\)'$/\1/p" "$workflow")
+if [[ -z $TRACKER_KEYS || -z $INTERNAL_HOSTS ]]; then
+  echo 'FAIL: workflow TRACKER_KEYS and INTERNAL_HOSTS must both be present' >&2
+  exit 1
+fi
+export TRACKER_KEYS INTERNAL_HOSTS
 key='DE''V-12'
 host='atlassian''.net'
 fullhost='backblaze.''atlassian''.net'
@@ -45,4 +51,28 @@ check pass file .github/workflows/internal-reference-guard.yml
 mkdir -p "$tmp/scripts"
 printf '%s\n' "$key" > "$tmp/scripts/internal-reference-guard.sh"
 (cd "$tmp" && check fail file scripts/internal-reference-guard.sh)
+for source in title body commit file; do
+  for sample in "${key%12}4521_large-file-retry" "fix_${key%12}4521" "${fullhost}_x"; do
+    case "$source" in
+      commit) check fail commit abc "$sample" ;;
+      file) printf '%s\n' "$sample" > "$tmp/case"; check fail file "$tmp/case" ;;
+      *) check fail "$source" "$sample" ;;
+    esac
+  done
+  for sample in "NO${key%12}4521" "${key%12}4521abc" 'DEVICE-12' 'atlassianXnet'; do
+    case "$source" in
+      commit) check pass commit abc "$sample" ;;
+      file) printf '%s\n' "$sample" > "$tmp/case"; check pass file "$tmp/case" ;;
+      *) check pass "$source" "$sample" ;;
+    esac
+  done
+done
+if [[ ${GUARD_TEST_NO_LINK:-} != 1 ]]; then
+  sed 's/|DE[V]|/|/' "$workflow" > "$tmp/workflow.yml"
+  status=0
+  GUARD_TEST_WORKFLOW="$tmp/workflow.yml" GUARD_TEST_NO_LINK=1 "$0" > "$tmp/link.out" 2>&1 || status=$?
+  if [[ $status != 1 ]] || ! grep -q 'FAIL: expected fail for file' "$tmp/link.out"; then
+    echo 'FAIL: removing the key from the workflow did not fail the test'; cat "$tmp/link.out"; exit 1
+  fi
+fi
 echo 'internal-reference-guard tests PASS'
