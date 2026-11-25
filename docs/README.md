@@ -5,6 +5,9 @@ reviewers keep finding. The files here hold the detail behind those rules.
 
 | File | Read it when |
 | --- | --- |
+| [design-docs/index.md](design-docs/index.md) | You need recorded design decisions and threat models. |
+| [design-docs/threat-model-credentials.md](design-docs/threat-model-credentials.md) | You review credential flows and controls. |
+| [exec-plans/tech-debt.md](exec-plans/tech-debt.md) | You review known defects. |
 | [writing-style.md](writing-style.md) | You write or edit documentation or godoc. |
 | [b2-contracts.md](b2-contracts.md) | You touch a B2 call, encryption, file info, bucket settings, downloads, retries or large files. It lists what B2 and the reference SDKs do, with sources and the tests that pin each fact. |
 | [testing.md](testing.md) | You write or run tests. It explains the test levels, what each one proves, how to run the repo-owned SDK harness contract and the live tests, and how to show a test pins a fix. |
