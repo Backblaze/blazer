@@ -39,6 +39,8 @@ func TestGuideExamples(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Windows checkouts may use CRLF; gofmt emits LF.
+			data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 			lines := strings.SplitAfter(string(data), "\n")
 			index := 0
 			for i := 0; i < len(lines); i++ {
