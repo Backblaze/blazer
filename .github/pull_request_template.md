@@ -32,6 +32,7 @@ Whether reverting this commit is enough, or whether callers would need to pin th
 - [ ] A fresh-context review (`/code-review`, `/security-review` or a subagent) ran on the diff; findings are fixed or answered below.
 - [ ] A `.changes/unreleased` entry exists (`make changelog-new`), or the PR is labelled `skip-changelog`.
 - [ ] New or changed behavior is pinned by a test that asserts the request sent to B2.
+- [ ] If this PR adds or changes exported API or the request sent to B2, the description says what callers must do and uses `**Breaking:**` for breaking changes.
 - [ ] Behavior that depends on B2 has a live test, or the description says why not.
 - [ ] Godoc, README and `AGENTS.md` are updated if needed.
 - [ ] The description matches the final code.
