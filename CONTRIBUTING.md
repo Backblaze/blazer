@@ -142,9 +142,20 @@ entry; a maintainer can apply the `skip-changelog` label when no entry is warran
 ### Deprecating and removing public API
 
 1. Mark the old symbol with a `// Deprecated: use X.` godoc line naming its replacement.
+   Start that line in its own paragraph, separated from the summary by a blank `//` line.
+   Go tools recognize deprecation notices that begin a paragraph.
+
+   ```go
+   // Old performs the operation.
+   // It remains available during the support window.
+   //
+   // Deprecated: use New.
+   func Old() {}
+   ```
+
 2. Ship the replacement and an example in the same release.
 3. Add a `Deprecated` changelog entry.
-4. Keep the old symbol for at least two minor releases before removal. This window is proposed and needs maintainer confirmation.
+4. Keep the old symbol for at least two minor releases before removal.
 5. Remove it in a later release. Add a `Removed` entry starting with `**Breaking:**` that says what callers must do.
 
 Blazer is pre-1.0, so breaking changes bump the minor version.
