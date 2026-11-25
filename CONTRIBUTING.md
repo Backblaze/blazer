@@ -139,6 +139,17 @@ YAML file with your change. Do not edit `CHANGELOG.md` directly; maintainers reb
 (see [RELEASE.md](RELEASE.md)). The `changelog` check fails on a PR that changes library code without an
 entry; a maintainer can apply the `skip-changelog` label when no entry is warranted.
 
+### Deprecating and removing public API
+
+1. Mark the old symbol with a `// Deprecated: use X.` godoc line naming its replacement.
+2. Ship the replacement and an example in the same release.
+3. Add a `Deprecated` changelog entry.
+4. Keep the old symbol for at least two minor releases before removal. This window is proposed and needs maintainer confirmation.
+5. Remove it in a later release. Add a `Removed` entry starting with `**Breaking:**` that says what callers must do.
+
+Blazer is pre-1.0, so breaking changes bump the minor version.
+The API compatibility check requires a new changelog fragment containing `**Breaking:**` for incompatible changes.
+
 ### Working with coding agents
 
 [AGENTS.md](AGENTS.md) is the map for coding agents (and a quick start for people). Larger changes start
