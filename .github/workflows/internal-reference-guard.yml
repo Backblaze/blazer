@@ -1,3 +1,4 @@
+# Catches accidental references; the PR checkout supplies the script, so this is not tamper-proof.
 name: Internal reference guard
 
 on:
@@ -6,6 +7,11 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # Maintainers add keys or hosts here; changes require a /.github/ code-owner review.
+  TRACKER_KEYS: 'B2|DEV|DEVDOCS|DOCS|HD'
+  INTERNAL_HOSTS: 'backblaze\.atlassian\.net|atlassian\.net'
 
 jobs:
   internal-reference-guard:

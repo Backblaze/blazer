@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Maintainers add tracker keys and hostnames to these two lists.
-TRACKER_KEYS='B2|DEV|DEVDOCS|DOCS|HD'
-INTERNAL_HOSTS='backblaze\.atlassian\.net|atlassian\.net'
-key_pattern="(^|[^[:alnum:]_])($TRACKER_KEYS)-[0-9]+([^[:alnum:]_]|$)"
-host_pattern="(^|[^[:alnum:]_])($INTERNAL_HOSTS)([^[:alnum:]_]|$)"
+if [[ -z ${TRACKER_KEYS:-} || -z ${INTERNAL_HOSTS:-} ]]; then
+  echo 'TRACKER_KEYS and INTERNAL_HOSTS must both be set' >&2
+  exit 2
+fi
 
 mode=${1:?source required}; shift
 case "$mode" in
@@ -16,15 +15,17 @@ case "$mode" in
   *) echo "unknown source: $mode" >&2; exit 2 ;;
 esac
 if [[ $mode == file ]]; then
-  # The guard and its tests contain the patterns by design; do not scan them.
-  case "$input" in scripts/internal-reference-guard.sh|scripts/internal-reference-guard_test.sh) exit 0 ;; esac
   [[ -f $input ]] || { echo "cannot read $input" >&2; exit 2; }
   content=$(cat -- "$input")
 else
   content=${1-}
 fi
 # awk reports the exact match and line while preserving the caller's label.
-printf '%s\n' "$content" | awk -v key_pattern="$key_pattern" -v host_pattern="$host_pattern" -v label="$label" -v file="$mode" '
+printf '%s\n' "$content" | awk -v label="$label" -v file="$mode" '
+  BEGIN {
+    key_pattern = "(^|[^[:alnum:]_])(" ENVIRON["TRACKER_KEYS"] ")-[0-9]+([^[:alnum:]_]|$)"
+    host_pattern = "(^|[^[:alnum:]_])(" ENVIRON["INTERNAL_HOSTS"] ")([^[:alnum:]_]|$)"
+  }
   function scan(line, pattern, fold,    rest, text, hit) {
     rest = line
     while (length(rest) > 0) {
