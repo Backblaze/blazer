@@ -1,0 +1,44 @@
+# Blazer
+
+> Blazer is a Go client library for the Backblaze B2 Native API, maintained by Backblaze.
+
+## Start here
+
+- [README](https://github.com/Backblaze/blazer/blob/main/README.md): Learn about Blazer, its packages and examples.
+- [Install](https://github.com/Backblaze/blazer/blob/main/README.md#install): Install Blazer and check its Go requirements.
+- [Architecture](https://github.com/Backblaze/blazer/blob/main/ARCHITECTURE.md): Review package responsibilities and dependency boundaries.
+- [Contributor instructions](https://github.com/Backblaze/blazer/blob/main/AGENTS.md): Find commands, conventions and review guidance.
+
+## Guides
+
+- [Errors and retries](https://github.com/Backblaze/blazer/blob/main/docs/guides/errors-and-retries.md): Inspect errors and retry behavior.
+- [Keys and sessions](https://github.com/Backblaze/blazer/blob/main/docs/guides/keys-and-sessions.md): Scope application keys and store sessions.
+- [Large and resumable uploads](https://github.com/Backblaze/blazer/blob/main/docs/guides/large-and-resumable-uploads.md): Configure large uploads and resume unfinished files.
+- [Custom transport](https://github.com/Backblaze/blazer/blob/main/docs/guides/custom-transport.md): Pass an HTTP transport to the client.
+- [Debugging](https://github.com/Backblaze/blazer/blob/main/docs/guides/debugging.md): Enable request and response diagnostics.
+
+## Contracts and testing
+
+- [B2 contracts](https://github.com/Backblaze/blazer/blob/main/docs/b2-contracts.md): Review B2 behavior, evidence and tests.
+- [Object Lock](https://github.com/Backblaze/blazer/blob/main/docs/object-lock.md): Set and update file retention and legal hold.
+- [Delete options](https://github.com/Backblaze/blazer/blob/main/docs/delete-options.md): Review governance-bypass deletion.
+- [Testing](https://github.com/Backblaze/blazer/blob/main/docs/testing.md): Choose a test level and check what it proves.
+- [Upgrading](https://github.com/Backblaze/blazer/blob/main/docs/upgrading.md): Review changes that affect callers when upgrading.
+
+## API reference
+
+- [b2](https://pkg.go.dev/github.com/Backblaze/blazer/b2): Use the high-level B2 client.
+- [b2/sync](https://pkg.go.dev/github.com/Backblaze/blazer/b2/sync): Sync a local directory to B2.
+- [base](https://pkg.go.dev/github.com/Backblaze/blazer/base): Use low-level B2 operations.
+- [x/b2sim](https://pkg.go.dev/github.com/Backblaze/blazer/x/b2sim): Use the in-process B2 simulator.
+- [x/consistent](https://pkg.go.dev/github.com/Backblaze/blazer/x/consistent): Use consistency helpers.
+- [x/transport](https://pkg.go.dev/github.com/Backblaze/blazer/x/transport): Use HTTP transport helpers.
+- [x/window](https://pkg.go.dev/github.com/Backblaze/blazer/x/window): Use window counters and accumulators.
+
+## Optional
+
+- [Contributing](https://github.com/Backblaze/blazer/blob/main/CONTRIBUTING.md): Review contribution terms and guidance.
+- [Release process](https://github.com/Backblaze/blazer/blob/main/RELEASE.md): Review the release process.
+- [Security policy](https://github.com/Backblaze/blazer/blob/main/SECURITY.md): Review the security policy.
+- [Writing style](https://github.com/Backblaze/blazer/blob/main/docs/writing-style.md): Write or edit documentation and godoc.
+- [Change intents](https://github.com/Backblaze/blazer/blob/main/docs/product-specs/README.md): Prepare an intent and specification for a change.
