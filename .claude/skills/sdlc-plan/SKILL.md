@@ -1,6 +1,6 @@
 ---
 name: sdlc-plan
-description: Produce and commit a plan.md before any code is written, working in plan mode from the approved spec.md and intent.md. Use when starting implementation of a change, when asked to "plan this", "make an implementation plan", or before editing code for a change that has an intent/spec; also use to keep plan.md in sync when implementation departs from it.
+description: Produce and commit a plan.md before any code is written, working in plan mode from the approved spec.md and intent.md. Use when starting implementation of a change, when asked to "plan this", "make an implementation plan", or before editing code for a change that has an intent and a spec; also use to keep plan.md in sync when implementation departs from it.
 ---
 
 # Plan mode as the default starting point

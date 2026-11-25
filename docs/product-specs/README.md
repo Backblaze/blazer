@@ -1,6 +1,6 @@
 # Change intents
 
-Each non-trivial change gets a folder `docs/product-specs/<change-slug>/` holding its intent and spec. The three files are written in order. A
+Each non-trivial change gets a folder `docs/product-specs/<change-slug>/` holding its intent and spec. The three files are written in order; `plan.md` lives in `docs/exec-plans/active/<change-slug>/plan.md` while in progress and moves to `docs/exec-plans/completed/<change-slug>/plan.md` after merge. A
 human approves each one before the next is written; the approval is a commit or a PR review, not an
 agent's edit to the status line.
 
@@ -8,7 +8,7 @@ agent's edit to the status line.
 | --- | --- | --- | --- |
 | `intent.md` | Originator (with Claude) | Maintainer | Problem, outcome, constraints, open questions. No design. |
 | `spec.md` | Claude, from the intent | Maintainer; area owner for flagged concerns | Numbered requirements R1.., design, constraint table, concerns. |
-| `plan.md` | Claude in plan mode | Engineer doing the work | Files, ordered steps citing R numbers, risks, proof. |
+| `docs/exec-plans/active/<change-slug>/plan.md` (moves to `docs/exec-plans/completed/<change-slug>/plan.md` after merge) | Claude in plan mode | Engineer doing the work | Files, ordered steps citing R numbers, risks, proof. |
 
 Plans live in `docs/exec-plans/active/<change-slug>/` while in progress and `docs/exec-plans/completed/<change-slug>/` after merge.
 
