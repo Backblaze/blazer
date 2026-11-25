@@ -4,7 +4,8 @@ set -euo pipefail
 # Maintainers add tracker keys and hostnames to these two lists.
 TRACKER_KEYS='B2|DEV|DEVDOCS|DOCS|HD'
 INTERNAL_HOSTS='backblaze\.atlassian\.net|atlassian\.net'
-pattern="(^|[^[:alnum:]_])(($TRACKER_KEYS)-[0-9]+|($INTERNAL_HOSTS))([^[:alnum:]_]|$)"
+key_pattern="(^|[^[:alnum:]_])($TRACKER_KEYS)-[0-9]+([^[:alnum:]_]|$)"
+host_pattern="(^|[^[:alnum:]_])($INTERNAL_HOSTS)([^[:alnum:]_]|$)"
 
 mode=${1:?source required}; shift
 case "$mode" in
@@ -23,8 +24,12 @@ else
   content=${1-}
 fi
 # awk reports the exact match and line while preserving the caller's label.
-printf '%s\n' "$content" | awk -v pattern="$pattern" -v label="$label" -v file="$mode" '
-  { rest = $0; while (match(rest, pattern)) {
+printf '%s\n' "$content" | awk -v key_pattern="$key_pattern" -v host_pattern="$host_pattern" -v label="$label" -v file="$mode" '
+  function scan(line, pattern, fold,    rest, text, hit) {
+    rest = line
+    while (length(rest) > 0) {
+      text = fold ? tolower(rest) : rest
+      if (!match(text, pattern)) break
       hit = substr(rest, RSTART, RLENGTH)
       sub(/^[^[:alnum:]_]/, "", hit)
       sub(/[^[:alnum:]_]$/, "", hit)
@@ -33,6 +38,8 @@ printf '%s\n' "$content" | awk -v pattern="$pattern" -v label="$label" -v file="
       found = 1
       rest = substr(rest, RSTART + RLENGTH - 1)
       if (length(rest) <= 1) break
-    } }
+    }
+  }
+  { scan($0, key_pattern, 0); scan($0, host_pattern, 1) }
   END { if (found) exit 1 }
 '
