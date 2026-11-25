@@ -370,6 +370,8 @@ Choose by task:
 - Orchestrate generative AI media pipelines with output provenance: use genblaze.
 - Work with B2 from the command line: use the B2 Command Line Tool.
 
+All projects:
+
 - **[terraform-provider-b2](https://github.com/Backblaze/terraform-provider-b2)** — the Terraform provider for B2 Cloud Storage.
 - **[b2-sdk-java](https://github.com/Backblaze/b2-sdk-java)** — the official Java SDK for B2 storage APIs.
 - **[genblaze](https://github.com/backblaze-labs/genblaze)** — an open source Python SDK for generative AI media pipelines with output provenance.
