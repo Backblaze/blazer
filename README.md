@@ -88,6 +88,7 @@ only the capabilities and buckets your program uses.
 - [Large and resumable uploads](docs/guides/large-and-resumable-uploads.md)
 - [Custom transport](docs/guides/custom-transport.md)
 - [Debugging](docs/guides/debugging.md)
+- [Documentation index](llms.txt)
 
 ## Examples
 
