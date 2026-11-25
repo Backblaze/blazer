@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -939,6 +940,7 @@ func SetAPIBase(url string) AuthOption {
 }
 
 type LifecycleRule struct {
+	// DaysUnfinishedUntilCanceled cancels unfinished large files after this many days; zero omits the field.
 	DaysUnfinishedUntilCanceled int
 	Prefix                      string
 	DaysNewUntilHidden          int
@@ -1031,6 +1033,8 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		})
 	}
 	bucket := &Bucket{
+		rawLifecycleRules:           b2resp.RawLifecycleRules,
+		readLifecycleRules:          append([]LifecycleRule(nil), respRules...),
 		Name:                        name,
 		Info:                        b2resp.Info,
 		LifecycleRules:              respRules,
@@ -1063,13 +1067,15 @@ func (b *Bucket) DeleteBucket(ctx context.Context) error {
 
 // Bucket holds B2 bucket details.
 type Bucket struct {
-	Name           string
-	Type           string
-	Info           map[string]string
-	LifecycleRules []LifecycleRule
-	ID             string
-	rev            int
-	b2             *B2
+	rawLifecycleRules  json.RawMessage
+	readLifecycleRules []LifecycleRule
+	Name               string
+	Type               string
+	Info               map[string]string
+	LifecycleRules     []LifecycleRule
+	ID                 string
+	rev                int
+	b2                 *B2
 
 	// CORSRules are the bucket's rules. Update omits nil, clears the rules for
 	// a non-nil empty slice, and replaces them for a nonempty slice. A listed
@@ -1097,6 +1103,7 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	// Only a non-nil list is sent: nil leaves lifecycle rules unchanged, and an
 	// empty non-nil list removes them all.
 	var rules *[]b2types.LifecycleRule
+	var rawRules json.RawMessage
 	if b.LifecycleRules != nil {
 		rs := make([]b2types.LifecycleRule, 0, len(b.LifecycleRules))
 		for _, rule := range b.LifecycleRules {
@@ -1107,7 +1114,13 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 				Prefix:                      rule.Prefix,
 			})
 		}
-		rules = &rs
+
+		// Preserve unknown server fields only when the entire typed slice is unchanged.
+		if len(b.LifecycleRules) > 0 && b.rawLifecycleRules != nil && slices.Equal(b.LifecycleRules, b.readLifecycleRules) {
+			rawRules = b.rawLifecycleRules
+		} else {
+			rules = &rs
+		}
 	}
 	var info *map[string]string
 	if b.Info != nil {
@@ -1121,10 +1134,11 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		AccountID: state.accountID,
 		BucketID:  b.ID,
 		// Name:           b.Name,
-		Type:           b.Type,
-		Info:           info,
-		LifecycleRules: rules,
-		IfRevisionIs:   b.rev,
+		Type:              b.Type,
+		Info:              info,
+		LifecycleRules:    rules,
+		RawLifecycleRules: rawRules,
+		IfRevisionIs:      b.rev,
 
 		CORSRules:                   corsRules,
 		DefaultRetention:            b.DefaultRetention,
@@ -1149,6 +1163,8 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		})
 	}
 	updated := &Bucket{
+		rawLifecycleRules:           b2resp.RawLifecycleRules,
+		readLifecycleRules:          append([]LifecycleRule(nil), respRules...),
 		Name:                        b.Name,
 		Type:                        b2resp.Type,
 		Info:                        b2resp.Info,
@@ -1270,6 +1286,8 @@ func (b *B2) listBucketsWithState(ctx context.Context, state authState, bucketID
 			})
 		}
 		listed := &Bucket{
+			rawLifecycleRules:           bucket.RawLifecycleRules,
+			readLifecycleRules:          append([]LifecycleRule(nil), rules...),
 			Name:                        bucket.Name,
 			Type:                        bucket.Type,
 			Info:                        bucket.Info,

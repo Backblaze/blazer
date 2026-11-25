@@ -44,7 +44,9 @@ type Writer struct {
 	// buffer for each thread.  Values less than 1 are equivalent to 1.
 	ConcurrentUploads int
 
-	// Resume an upload.  If true, and the upload is a large file, and a file of
+	// Resume an upload. Unfinished large files are billed until finished or canceled;
+	// LifecycleRule.DaysUnfinishedUntilCanceled provides server-side cleanup.
+	// If true, and the upload is a large file, and a file of
 	// the same name was started but not finished, then assume that we are
 	// resuming that file, and don't upload duplicate chunks. SSE-C resume
 	// requires a matching caller-supplied key ID (NewSSECKeyWithID) saved as
@@ -1017,6 +1019,9 @@ func WithSSEB2(algorithm string) WriterOption {
 	})
 }
 
+// Unfinished large files remain billed until finished or canceled.
+// LifecycleRule.DaysUnfinishedUntilCanceled provides server-side cleanup.
+//
 // WithCancelOnError requests the writer, if it has started a large file
 // upload, to call b2_cancel_large_file on any permanent error.  It calls ctxf
 // to obtain a fresh context with which to cancel the file; give that context a
