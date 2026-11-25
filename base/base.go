@@ -1753,8 +1753,9 @@ func (fc *FileChunk) UploadPart(ctx context.Context, r io.Reader, sha1 string, s
 	return fc.UploadPartWithSSEC(ctx, r, sha1, size, index, nil)
 }
 
-// UploadPartWithSSEC works like UploadPart and repeats the SSE-C headers
-// selected by b2_start_large_file.
+// UploadPartWithSSEC works like UploadPart. Pass the same SSE-C configuration
+// used in StartLargeFileWithSSEC. Passing nil omits the SSE-C headers, so B2
+// rejects the part if the large file uses SSE-C.
 func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 string, size, index int, sse *b2types.ServerSideEncryption) (int, error) {
 	previousSize, err := fc.file.previousPartSize(ctx, index)
 	if err != nil {
