@@ -8,22 +8,23 @@ Set `Resume` to reuse matching parts of an unfinished large file with the same n
 package main
 
 import (
-    "context"
-    "io"
-    "github.com/Backblaze/blazer/b2"
+	"context"
+	"io"
+
+	"github.com/Backblaze/blazer/b2"
 )
 
 func upload(ctx context.Context, bucket *b2.Bucket, name string, src io.Reader) error {
-    ctx, cancel := context.WithCancel(ctx)
-    defer cancel()
-    w := bucket.Object(name).NewWriter(ctx)
-    w.Resume = true
-    if _, err := io.Copy(w, src); err != nil {
-        cancel()
-        _ = w.Close()
-        return err
-    }
-    return w.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	w := bucket.Object(name).NewWriter(ctx)
+	w.Resume = true
+	if _, err := io.Copy(w, src); err != nil {
+		cancel()
+		_ = w.Close()
+		return err
+	}
+	return w.Close()
 }
 func main() {}
 ```

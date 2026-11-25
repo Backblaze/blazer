@@ -6,18 +6,19 @@ Pass an `http.RoundTripper` with `b2.Transport`. For example, configure connecti
 package main
 
 import (
-    "context"
-    "net"
-    "net/http"
-    "time"
-    "github.com/Backblaze/blazer/b2"
+	"context"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/Backblaze/blazer/b2"
 )
 
 func connect(ctx context.Context, id, secret string) (*b2.Client, error) {
-    transport := http.DefaultTransport.(*http.Transport).Clone()
-    transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
-    transport.ResponseHeaderTimeout = 30 * time.Second
-    return b2.NewClient(ctx, id, secret, b2.Transport(transport))
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return b2.NewClient(ctx, id, secret, b2.Transport(transport))
 }
 func main() {}
 ```

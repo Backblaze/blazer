@@ -8,16 +8,21 @@ Use an application key with only the capabilities and bucket scope your applicat
 package main
 
 import (
-    "context"
-    "github.com/Backblaze/blazer/b2"
+	"context"
+
+	"github.com/Backblaze/blazer/b2"
 )
 
 func connect(ctx context.Context, id, secret, path string) (*b2.Client, error) {
-    store := b2.NewAccountInfoFile(path)
-    client, err := b2.NewClient(ctx, id, secret, b2.WithAccountInfo(store))
-    if err != nil { return nil, err }
-    if err := store.Err(); err != nil { return nil, err }
-    return client, nil
+	store := b2.NewAccountInfoFile(path)
+	client, err := b2.NewClient(ctx, id, secret, b2.WithAccountInfo(store))
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Err(); err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 func main() {}
 ```
