@@ -17,6 +17,8 @@ package b2
 import (
 	"context"
 	"net/http"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,6 +60,36 @@ func TestObjectAuthURLEscapesSpecialCharactersInName(t *testing.T) {
 			}
 			if want := "/file/n/" + name; u.Path != want {
 				t.Errorf("decoded path = %q, want %q", u.Path, want)
+			}
+		})
+	}
+}
+
+func TestObjectURLsPreservePlus(t *testing.T) {
+	srv, bucket := liveOnlyBucket(t)
+	srv.Reply("b2_get_download_authorization", http.StatusOK, `{"authorizationToken":"download-token"}`)
+	const name = "dir/a+b c/%2B+雪.txt"
+	object := bucket.Object(name)
+	auth, err := object.AuthURL(context.Background(), time.Hour, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, value string }{{"URL", object.URL()}, {"AuthURL", auth.String()}} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := url.Parse(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			escaped := strings.TrimPrefix(u.EscapedPath(), "/file/n/")
+			got, err := url.QueryUnescape(escaped)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != name {
+				t.Errorf("B2-decoded name = %q, want %q (escaped path %q)", got, name, escaped)
+			}
+			if want := "dir/a%2Bb%20c/%252B%2B%E9%9B%AA.txt"; escaped != want {
+				t.Errorf("escaped path = %q, want %q", escaped, want)
 			}
 		})
 	}
