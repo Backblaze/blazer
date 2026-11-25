@@ -119,3 +119,35 @@ func TestLifecycleChangedRulesReplaceUnknownFields(t *testing.T) {
 		t.Fatalf("changed rules = %s, want %v", raw, want)
 	}
 }
+
+func TestLifecycleChangedCancellationUsesTypedUpdate(t *testing.T) {
+	f := newLCFixture(t, map[string]interface{}{"fileNamePrefix": "logs/", "daysFromStartingToCancelingUnfinishedLargeFiles": float64(7), "futurePolicy": float64(3)})
+	ctx := context.Background()
+	bucket, err := f.client.Bucket(ctx, "bucket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := bucket.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attrs.LifecycleRules) != 1 || attrs.LifecycleRules[0].DaysUnfinishedUntilCanceled != 7 {
+		t.Fatalf("read rules = %+v, want cancellation after 7 days", attrs.LifecycleRules)
+	}
+	attrs.LifecycleRules[0].DaysUnfinishedUntilCanceled = 14
+	if err := bucket.Update(ctx, attrs); err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := f.sent(0)
+	if !ok {
+		t.Fatal("missing lifecycleRules")
+	}
+	var got []map[string]interface{}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string]interface{}{{"fileNamePrefix": "logs/", "daysFromStartingToCancelingUnfinishedLargeFiles": float64(14)}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("changed rules = %s, want %v", raw, want)
+	}
+}

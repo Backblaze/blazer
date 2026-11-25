@@ -443,6 +443,9 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	// non-nil slice removes them all.
 	previousRules := b.b.LifecycleRules
 	if attrs.LifecycleRules != nil {
+		// Rebuild typed rules so base.Update can compare them with the rules read:
+		// unchanged rules reuse the saved JSON, including fields unknown to this SDK;
+		// changed rules are re-encoded from the known fields.
 		rules := []base.LifecycleRule{}
 		for _, rule := range attrs.LifecycleRules {
 			rules = append(rules, base.LifecycleRule{
