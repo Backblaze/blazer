@@ -196,7 +196,7 @@ func (car closeAfterReading) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// Writer is an io.ReadCloser.
+// Writer is an io.WriteCloser.
 type Writer struct {
 	ctx    context.Context
 	wc     io.WriteCloser
