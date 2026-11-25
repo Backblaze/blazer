@@ -14,10 +14,8 @@
 # https://www.backblaze.com/apidocs/b2-get-bucket-notification-rules
 # https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules
 #
-# This check is registered while the card remains "no", so the harness reports
-# runner-owned COULD-NOT-RUN (not-claimed) until the implementation lands and
-# an sdk-inspector re-inspection changes the source-grounded card row. It is
-# intentionally never responsible for emitting that amber verdict itself.
+# The central harness owns the capability claim. This check reports observed
+# behavior; registration alone does not establish a passing conformance run.
 #
 # Exercises the checked-out github.com/Backblaze/blazer module through a local Go `replace`; the orchestrator selects the exact clean revision. The scenario semantics came from the fleet card and B2 API documentation.
 set -uo pipefail

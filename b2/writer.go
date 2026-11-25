@@ -44,13 +44,18 @@ type Writer struct {
 	// buffer for each thread.  Values less than 1 are equivalent to 1.
 	ConcurrentUploads int
 
-	// Resume an upload.  If true, and the upload is a large file, and a file of
+	// Resume an upload. Unfinished large files are billed until finished or canceled;
+	// LifecycleRule.DaysUnfinishedUntilCanceled provides server-side cleanup.
+	// If true, and the upload is a large file, and a file of
 	// the same name was started but not finished, then assume that we are
 	// resuming that file, and don't upload duplicate chunks. SSE-C resume
 	// requires a matching caller-supplied key ID (NewSSECKeyWithID) saved as
 	// sse_c_key_id in file info; missing or different IDs are rejected. The ID
 	// must uniquely identify the key: B2 rejects wrong keys on uploaded parts,
 	// but receives no key if every existing part is skipped.
+	// WithFileRetention and WithLegalHold must match the unfinished file when
+	// supplied. Unspecified lock settings keep the unfinished file's settings;
+	// omitting the options does not request removal of existing protection.
 	Resume bool
 
 	// ChunkSize is the size, in bytes, of each individual part, when writing
@@ -59,6 +64,7 @@ type Writer struct {
 	// sent as a single file.  The default is 100M (1e8)  The minimum is
 	// 5M (5e6); values less than this are not an error, but will fail.  The
 	// maximum is 5GB (5e9).
+	// Negative values are rejected before uploading.
 	ChunkSize int
 
 	// UseFileBuffer controls whether to use an in-memory buffer (the default) or
@@ -167,6 +173,14 @@ func (w *Writer) setErr(err error) {
 	w.errf(w.file.cancel(w.ctxf()))
 }
 
+// A worker EOF is an upload failure, not the clean end of a source stream.
+func (w *Writer) setWorkerErr(err error) {
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	w.setErr(err)
+}
+
 func (w *Writer) getErr() error {
 	w.emux.RLock()
 	defer w.emux.RUnlock()
@@ -194,7 +208,7 @@ func (w *Writer) thread() {
 		id := atomic.AddInt32(&gid, 1)
 		fc, err := w.file.getUploadPartURL(w.ctx)
 		if err != nil {
-			w.setErr(err)
+			w.setWorkerErr(err)
 			return
 		}
 		for {
@@ -206,38 +220,42 @@ func (w *Writer) thread() {
 			case <-w.ctx.Done():
 				return
 			}
-			if sha, ok := w.seen[cnk.id]; ok {
-				if sha != cnk.buf.Hash() {
-					w.setErr(errors.New("resumable upload was requested, but chunks don't match"))
-					return
-				}
-				skippedBytes := completedBytes(cnk.buf)
-				cnk.buf.Close()
-				w.reporter.add(skippedBytes)
-				w.completeChunk(cnk.id)
-				blog.V(2).Infof("skipping chunk %d", cnk.id)
-				continue
-			}
 			blog.V(2).Infof("thread %d handling chunk %d", id, cnk.id)
-			r, err := cnk.buf.Reader()
+			fc, err = w.uploadChunk(cnk, fc)
 			if err != nil {
-				w.setErr(err)
+				w.setWorkerErr(err)
 				return
 			}
-			mr := newMeteredReader(r, cnk.buf, w.reporter)
-			w.registerChunk(cnk.id, mr)
-			fc, err = uploadPartWithReupload(w.ctx, w.file, w.o.b.r, fc, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
-			if err != nil {
-				w.setErr(err)
-				w.completeChunk(cnk.id)
-				cnk.buf.Close()
-				return
-			}
-			w.completeChunk(cnk.id)
-			cnk.buf.Close()
 			blog.V(2).Infof("chunk %d handled", cnk.id)
 		}
 	}()
+}
+
+// uploadChunk owns the buffer after the worker receives it, including on a
+// resume mismatch or a failure to open its reader.
+func (w *Writer) uploadChunk(cnk chunk, url beFileChunkInterface) (beFileChunkInterface, error) {
+	defer func() {
+		if err := cnk.buf.Close(); err != nil {
+			blog.V(1).Infof("b2 writer: buffer close failed (%T)", err)
+		}
+	}()
+	if sha, ok := w.seen[cnk.id]; ok {
+		if sha != cnk.buf.Hash() {
+			return url, errors.New("resumable upload was requested, but chunks don't match")
+		}
+		w.reporter.add(completedBytes(cnk.buf))
+		w.completeChunk(cnk.id)
+		blog.V(2).Infof("skipping chunk %d", cnk.id)
+		return url, nil
+	}
+	r, err := cnk.buf.Reader()
+	if err != nil {
+		return url, err
+	}
+	mr := newMeteredReader(r, cnk.buf, w.reporter)
+	w.registerChunk(cnk.id, mr)
+	defer w.completeChunk(cnk.id)
+	return uploadPartWithReupload(w.ctx, w.file, w.o.b.r, url, mr, cnk.buf.Hash(), cnk.buf.Len(), cnk.id)
 }
 
 func (w *Writer) init() {
@@ -249,6 +267,10 @@ func (w *Writer) init() {
 		w.smux.Unlock()
 		w.o.b.c.addWriter(w)
 		w.csize = w.ChunkSize
+		if w.csize < 0 {
+			w.setErr(fmt.Errorf("b2: ChunkSize must not be negative: %d", w.csize))
+			return
+		}
 		if w.csize == 0 {
 			w.csize = 1e8
 		}
@@ -395,6 +417,7 @@ func (w *Writer) simpleWriteFile() error {
 			}
 			return attempts
 		}),
+		retry.Delay(500*time.Millisecond),
 		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
 			return retry.Backoff(delay)
 		}),
@@ -651,14 +674,19 @@ func (w *Writer) sendChunk() error {
 }
 
 // ReadFrom reads all of r into w, returning the first error or no error if r
-// returns io.EOF.  If r is also an io.Seeker, ReadFrom will stream r directly
-// over the wire instead of buffering it locally.  This reduces memory usage.
+// returns io.EOF. If r supports seeking, ReadFrom streams r directly over the
+// wire instead of buffering it locally, reducing memory usage. If seeking fails,
+// as it does for OS pipes, ReadFrom uses the ordinary buffered path.
 //
 // Do not issue multiple calls to ReadFrom, or mix ReadFrom and Write.  If you
 // have multiple readers you want to concatenate into the same B2 object, use
 // an io.MultiReader.
 //
-// Note that io.Copy will automatically choose to use ReadFrom.
+// io.Copy uses ReadFrom unless the source implements io.WriterTo, which takes
+// precedence. When ReadFrom reads the source, a source error is recorded on the
+// writer so Close returns it rather than committing the partial upload. After
+// any io.Copy error, cancel the writer's context before calling Close: a source's
+// WriteTo can bypass ReadFrom and leave partial data buffered.
 //
 // On every path, ReadFrom returns the Writer's error when it cancels itself;
 // caller cancellation returns context.Canceled or context.DeadlineExceeded,
@@ -676,7 +704,18 @@ func (w *Writer) sendChunk() error {
 // With Resume, ReadFrom uses the ordinary buffered path; if r is seekable,
 // its remaining length supplies the progress total.
 func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
+	w.closeWrite.RLock()
+	closed := w.closed
+	w.closeWrite.RUnlock()
+	if closed {
+		return 0, ErrClosed
+	}
 	defer func() {
+		// A cancelled copy already prevents finalization; do not start error
+		// cleanup here when cancellation must return without waiting for I/O.
+		if err != nil && w.ctx.Err() == nil {
+			w.setErr(err)
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			var cause writerCause
 			if errors.As(context.Cause(w.ctx), &cause) {
@@ -705,18 +744,31 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		return copyContext(w.ctx, w, rs)
 	}
 	blog.V(2).Info("streaming without buffer")
+	position, err := rs.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return copyContext(w.ctx, w, r)
+	}
 	size, err := rs.Seek(0, io.SeekEnd)
 	if err != nil {
-		return 0, err
+		// Files such as OS pipes implement Seek without supporting it.
+		return copyContext(w.ctx, w, r)
 	}
-	w.progressTotal = size
+	w.progressTotal = size - position
+	if w.progressTotal <= 0 {
+		w.progressTotal = 0
+		if _, err := rs.Seek(position, io.SeekStart); err != nil {
+			w.setErr(err)
+			return 0, err
+		}
+		return copyContext(w.ctx, w, r)
+	}
 	var ra io.ReaderAt
 	if rat, ok := r.(io.ReaderAt); ok {
 		ra = rat
 	} else {
 		ra = enReaderAt(rs)
 	}
-	var offset int64
+	offset := position
 	var wrote int64
 	w.newBuffer = func() (writeBuffer, error) {
 		left := size - offset
@@ -737,9 +789,12 @@ func (w *Writer) ReadFrom(r io.Reader) (n int64, err error) {
 		return nb, nil
 	}
 	w.init()
-	if size <= int64(w.csize) {
+	if err := w.getErr(); err != nil {
+		return 0, err
+	}
+	if w.progressTotal <= int64(w.csize) {
 		// the magic happens on w.Close()
-		return size, nil
+		return w.progressTotal, nil
 	}
 	for {
 		if err := w.sendChunk(); err != nil {
@@ -761,22 +816,28 @@ func (w *Writer) Close() error {
 	w.done.Do(func() {
 		w.closeWrite.Lock()
 		defer w.closeWrite.Unlock()
+		defer w.cancel(nil)
+		w.closed = true
 		// Error exits must also wait for worker-owned cancellation callbacks.
 		defer w.wg.Wait()
 		if !w.everStarted {
 			w.init()
-			w.setErr(w.simpleWriteFile())
-			return
 		}
 		defer w.o.b.c.removeWriter(w)
 		defer func() {
 			w.wmux.Lock()
 			defer w.wmux.Unlock()
+			if w.w == nil {
+				return
+			}
 			if err := w.w.Close(); err != nil {
 				// this is non-fatal, but alarming
 				blog.V(1).Infof("b2 writer: buffer close failed (%T)", err)
 			}
 		}()
+		if err := w.getErr(); err != nil {
+			return
+		}
 		// We need the lock to dereference w.cidx and w.w.Len()
 		w.wmux.RLock()
 		// Don't defer the RUnlock, since we don't want to be RLocked when we call sendChunk
@@ -802,6 +863,13 @@ func (w *Writer) Close() error {
 		err := w.ctx.Err()
 		var f beFileInterface = nil
 		if err == nil {
+			// A shorter source must not publish trailing parts from the old upload.
+			for part := range w.seen {
+				if part > w.cidx {
+					w.setErr(errors.New("resumable upload was requested, but source has fewer parts than the unfinished upload"))
+					return
+				}
+			}
 			f, err = w.file.finishLargeFile(w.ctx)
 		}
 		if err != nil {
@@ -809,7 +877,6 @@ func (w *Writer) Close() error {
 			return
 		}
 		w.o.f = f
-		w.closed = true
 	})
 	w.reporter.finish()
 	return w.getErr()
@@ -846,41 +913,66 @@ func completedBytes(buf writeBuffer) int64 {
 	return int64(buf.Len())
 }
 
-// A WriterOption sets Writer-specific behavior.
-type WriterOption func(*Writer)
+// A WriterOption sets Writer-specific behavior when NewWriter constructs a writer.
+// Use WriterOptionFunc to adapt a custom callback. Options are not callable;
+// compose them in a []WriterOption passed to NewWriter or DefaultWriterOptions.
+type WriterOption interface {
+	apply(*Writer)
+	validateDefault() error
+}
+
+// WriterOptionFunc adapts a custom callback to a WriterOption. NewWriter calls
+// it synchronously on the initialized writer. As a default, it runs once per
+// writer, never during NewClient or authorization. The callback must not be nil.
+type WriterOptionFunc func(*Writer)
+
+func (f WriterOptionFunc) apply(w *Writer) { f(w) }
+
+func (f WriterOptionFunc) validateDefault() error {
+	if f == nil {
+		return errors.New("b2: writer option is nil")
+	}
+	return nil
+}
 
 // WithAttrsOption attaches the given Attrs to the writer. It does not copy
 // Attrs.Retention or Attrs.LegalHold; use WithFileRetention and WithLegalHold.
 func WithAttrsOption(attrs *Attrs) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.withAttrs(attrs)
-	}
+	})
 }
 
 // WithFileRetention sets Object Lock retention for the file uploaded by the writer.
 func WithFileRetention(retention *FileRetention) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.retention = retention
-	}
+	})
 }
 
 // WithLegalHold sets Object Lock legal hold for the file uploaded by the writer.
 func WithLegalHold(legalHold LegalHold) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.legalHold = legalHold
-	}
+	})
 }
 
-// WithProgress sets a callback that receives cumulative uploaded bytes. It runs
-// on one owner goroutine, never under a transfer lock; values are monotonic
-// non-decreasing and end with a final call at the bytes uploaded before Close
-// returns. The total is known for ReadFrom readers that implement io.Seeker
+// WithProgress sets a callback that receives cumulative upload payload progress.
+// New bytes are counted as they are read for upload; resuming also credits bytes
+// in completed parts already present in B2. Bytes read again for retries are not
+// counted twice. Progress does not indicate B2 acceptance: complete may equal
+// total even when the upload fails. Always check Close's error for success.
+//
+// The callback runs on one owner goroutine, never under a transfer lock. Values
+// are monotonic non-decreasing and end with a final call before Close returns.
+// Updates may be coalesced, so an intermediate value is not guaranteed.
+// The total is known for ReadFrom readers that implement io.Seeker
 // (including resume), and is -1 otherwise. Calling Close from this callback
 // is unsupported because Close waits for the callback to finish.
 func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.progress = cb
-	}
+	})
 }
 
 // WithSSECKey encrypts this upload with a caller-provided AES-256 key. The key
@@ -894,24 +986,42 @@ func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
 // file info. Before any request, uploads reject caller file info with a
 // conflicting sse_c_key_id in any letter case, an ID for a key without one, or
 // more than 10 entries after adding the key ID.
+// It cannot be used with DefaultWriterOptions, including with a nil key.
 func WithSSECKey(key *SSECKey) WriterOption {
-	return func(w *Writer) {
-		w.encryption = &uploadEncryption{ssec: key}
-		w.ssecRequested = true
-	}
+	return ssecWriterOption{key: key}
+}
+
+type ssecWriterOption struct{ key *SSECKey }
+
+func (o ssecWriterOption) apply(w *Writer) {
+	w.encryption = &uploadEncryption{ssec: o.key}
+	w.ssecRequested = true
+}
+
+func (ssecWriterOption) validateDefault() error {
+	return errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
 }
 
 // WithSSEB2 encrypts this upload with a B2-managed key using algorithm. It
 // overrides the bucket's default for this upload only; the setting is used for
 // a simple upload request or the large-file start request. It carries no
 // customer-managed key material.
+// Only "AES256" is supported. Invalid values cause the operation that starts
+// the upload (Write for multipart uploads or Close for simple uploads) to
+// return an error before sending an upload request.
+// An explicit writer encryption option overrides inherited client defaults.
+// Combining WithSSEB2 and WithSSECKey in one NewWriter call causes a non-empty
+// Write and Close to return an error.
 func WithSSEB2(algorithm string) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.encryption = &uploadEncryption{sse: newServerSideEncryption("SSE-B2", algorithm)}
 		w.sseb2Requested = true
-	}
+	})
 }
 
+// Unfinished large files remain billed until finished or canceled.
+// LifecycleRule.DaysUnfinishedUntilCanceled provides server-side cleanup.
+//
 // WithCancelOnError requests the writer, if it has started a large file
 // upload, to call b2_cancel_large_file on any permanent error.  It calls ctxf
 // to obtain a fresh context with which to cancel the file; give that context a
@@ -921,15 +1031,19 @@ func WithSSEB2(algorithm string) WriterOption {
 // does not bound errf: it must return promptly and must not call Close or wait on
 // the goroutine that calls Close, or they will deadlock.
 func WithCancelOnError(ctxf func() context.Context, errf func(error)) WriterOption {
-	return func(w *Writer) {
+	return WriterOptionFunc(func(w *Writer) {
 		w.ctxf = ctxf
 		w.errf = errf
-	}
+	})
 }
 
-// DefaultWriterOptions returns a ClientOption that will apply the given
-// WriterOptions to every Writer.  These options can be overridden by passing
-// new options to NewWriter.
+// DefaultWriterOptions applies the given options once to each initialized writer
+// during NewWriter, before its explicit options. Custom callbacks do not run
+// during NewClient or authorization. Pass WriterOptionFunc for a custom callback.
+// Explicit options passed to NewWriter can override defaults. WithSSECKey cannot
+// be a default, including with a nil key; NewClient rejects it before authorization.
+// A nil WriterOption interface or WriterOptionFunc(nil) passed as a default
+// makes NewClient return an error before authorization.
 func DefaultWriterOptions(opts ...WriterOption) ClientOption {
 	return func(c *clientOptions) {
 		c.writerOpts = opts
@@ -972,6 +1086,7 @@ func uploadPartWithReupload(ctx context.Context, large beLargeFileInterface, roo
 			}
 			return attempts
 		}),
+		retry.Delay(500*time.Millisecond),
 		retry.DynamicDelay(func(attempt uint, delay time.Duration, err error) time.Duration {
 			return retry.Backoff(delay)
 		}),

@@ -427,7 +427,7 @@ func (t *testBucket) listFileVersions(ctx context.Context, count int, a, b, c, d
 	return x, y, "", z
 }
 
-func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, cont string) ([]b2FileInterface, string, error) {
+func (t *testBucket) listUnfinishedLargeFiles(ctx context.Context, count int, cont, prefix string) ([]b2FileInterface, string, error) {
 	return nil, "", fmt.Errorf("testBucket.listUnfinishedLargeFiles(ctx, %d, %q): not implemented", count, cont)
 }
 
@@ -708,10 +708,12 @@ type testFileReader struct {
 	n string
 }
 
-func (t *testFileReader) Read(p []byte) (int, error)                      { return t.b.Read(p) }
-func (t *testFileReader) Close() error                                    { return nil }
-func (t *testFileReader) stats() (int, string, string, map[string]string) { return t.s, "", "", nil }
-func (t *testFileReader) id() string                                      { return t.n }
+func (t *testFileReader) Read(p []byte) (int, error) { return t.b.Read(p) }
+func (t *testFileReader) Close() error               { return nil }
+func (t *testFileReader) stats() (int64, string, string, map[string]string) {
+	return int64(t.s), "", "", nil
+}
+func (t *testFileReader) id() string { return t.n }
 
 type zReader struct{}
 

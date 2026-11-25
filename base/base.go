@@ -27,9 +27,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
+	"math"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,8 +45,12 @@ import (
 
 const (
 	APIBase          = "https://api.backblazeb2.com"
-	DefaultUserAgent = "blazer/0.9.0"
+	DefaultUserAgent = "blazer/0.10.1"
 )
+
+// ErrOutcomeUnknown marks a failed request that may already have been applied.
+// Reconcile the result before explicitly retrying the operation.
+var ErrOutcomeUnknown = errors.New("operation outcome unknown")
 
 type b2err struct {
 	msg     string
@@ -51,20 +58,72 @@ type b2err struct {
 	retry   int
 	code    int
 	msgCode string
+	cause   error
+	notSent bool
 }
 
 func (e b2err) Error() string {
-	if e.method == "" {
-		return fmt.Sprintf("b2 error: %s", e.msg)
+	prefix := e.method
+	if prefix == "" {
+		prefix = "b2 error"
 	}
-	return fmt.Sprintf("%s: %d: %s", e.method, e.code, e.msg)
+	message := e.msg
+	if e.outcomeUnknown() {
+		message = ErrOutcomeUnknown.Error() + ": " + message
+	}
+	if e.code == 0 {
+		return fmt.Sprintf("%s: %s", prefix, message)
+	}
+	return fmt.Sprintf("%s: %d: %s", prefix, e.code, message)
+}
+
+func (e b2err) Unwrap() error { return e.cause }
+
+// Formatting must not expose the raw cause through a struct dump such as %#v.
+func (e b2err) Format(state fmt.State, verb rune) {
+	_, _ = fmt.Fprintf(state, fmt.FormatString(state, verb), e.Error())
+}
+
+func (e b2err) Is(target error) bool {
+	return target == ErrOutcomeUnknown && e.outcomeUnknown()
+}
+
+// Idempotent reports whether the SDK treats a method as safe to retry after an
+// ambiguous failure. Unknown methods return false. Uploads use their existing
+// separate retry policy; copy-part retains its existing retry policy as well.
+func Idempotent(method string) bool {
+	switch method {
+	case "b2_authorize_account", "b2_list_buckets", "b2_list_keys",
+		"b2_list_file_names", "b2_list_file_versions", "b2_list_unfinished_large_files", "b2_list_parts",
+		"b2_get_file_info", "b2_download_file_by_id", "b2_download_file_by_name",
+		"b2_get_upload_url", "b2_get_upload_part_url", "b2_get_download_authorization",
+		"b2_get_bucket_notification_rules", "b2_set_bucket_notification_rules", "b2_copy_part",
+		"b2_update_file_legal_hold", "b2_update_file_retention":
+		return true
+	}
+	return false
+}
+
+func (e b2err) outcomeUnknown() bool {
+	if e.method == "" || Idempotent(e.method) || e.method == "b2_upload_file" || e.method == "b2_upload_part" || e.notSent {
+		return false
+	}
+	switch e.code {
+	case 0, http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
 }
 
 // Action checks an error and returns a recommended course of action.
+// An OutcomeUnknown request must be reconciled before an explicit retry.
 func Action(err error) ErrAction {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return Punt
+	}
+	if e.outcomeUnknown() {
+		return OutcomeUnknown
 	}
 	if e.retry > 0 {
 		// A zero status means the transport failed before an HTTP response arrived.
@@ -108,8 +167,8 @@ type ErrAction int
 
 // Code returns the error code and message.
 func Code(err error) (int, string) {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0, ""
 	}
 	return e.code, e.msg
@@ -117,8 +176,8 @@ func Code(err error) (int, string) {
 
 // MsgCode returns the error code, msgCode and message.
 func MsgCode(err error) (int, string, string) {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0, "", ""
 	}
 	return e.code, e.msgCode, e.msg
@@ -141,23 +200,41 @@ const (
 	// Punt means that there is no useful action to be taken on this error, and
 	// that it should be displayed to the user.
 	Punt
+
+	// OutcomeUnknown means a non-idempotent request may have succeeded. It must
+	// not be replayed automatically; reconcile the result before retrying it.
+	OutcomeUnknown
 )
 
+// maxAPIResponseBytes bounds buffered API response bodies, excluding downloads.
+const maxAPIResponseBytes int64 = 64 << 20
+
+var errAPIResponseTooLarge = fmt.Errorf("API response exceeds %d bytes", maxAPIResponseBytes)
+
+func readAPIResponse(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxAPIResponseBytes+1))
+	if err == nil && int64(len(data)) > maxAPIResponseBytes {
+		return data[:maxAPIResponseBytes], errAPIResponseTooLarge
+	}
+	return data, err
+}
+
 func mkErr(resp *http.Response) error {
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := readAPIResponse(resp.Body)
 	var msgBody string
 	if err != nil {
 		msgBody = fmt.Sprintf("couldn't read message body: %v", err)
 	}
 	logResponse(resp, data)
 	msg := &b2types.ErrorMessage{}
-	if err := json.Unmarshal(data, msg); err != nil {
-		if msgBody != "" {
-			msgBody = fmt.Sprintf("couldn't read message body: %v", err)
-		}
+	if json.Unmarshal(data, msg) != nil && msgBody == "" {
+		msgBody = string(data)
 	}
 	if msgBody == "" {
 		msgBody = msg.Msg
+		if msgBody == "" {
+			msgBody = string(data)
+		}
 	}
 	if isDownloadByIDRequest(resp.Request) {
 		// Server error text may echo the file ID.
@@ -178,6 +255,7 @@ func mkErr(resp *http.Response) error {
 		code:    resp.StatusCode,
 		msgCode: msg.Code,
 		method:  resp.Request.Header.Get("X-Blazer-Method"),
+		cause:   err,
 	}
 }
 
@@ -198,8 +276,8 @@ func parseRetryAfterSeconds(raw string) (int, error) {
 // MaxReuploads returns an appropriate amount of retries for reuploading,
 // given a method and an error if any was returned by the server.
 func MaxReuploads(err error) uint {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 5 // for non b2err errors (e.g. chunk size mismatch), try to reupload 5 times
 	}
 	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
@@ -211,9 +289,15 @@ func MaxReuploads(err error) uint {
 // MaxRetries returns an appropriate amount of retries, given a method
 // and an error if any was returned by the server.
 func MaxRetries(err error) uint {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0 // for non b2err errors, don't retry
+	}
+	if e.outcomeUnknown() {
+		return 0
+	}
+	if e.code == 0 && e.cause != nil && e.method != "b2_upload_file" && e.method != "b2_upload_part" {
+		return 5 // preserve the former method-less transport-error budget
 	}
 	if e.method == "b2_upload_file" || e.method == "b2_upload_part" {
 		return 20
@@ -228,8 +312,8 @@ func MaxRetries(err error) uint {
 // indicates Retry, the user should implement their own exponential backoff,
 // beginning with one second.
 func Backoff(err error) time.Duration {
-	e, ok := err.(b2err)
-	if !ok {
+	var e b2err
+	if !errors.As(err, &e) {
 		return 0
 	}
 	// Cap at the same 30s ceiling used by internal/retry.Backoff, so a
@@ -276,19 +360,21 @@ func sensitiveLogField(name string) bool {
 		strings.Contains(name, "authenticate")
 }
 
-func redactSensitiveValue(value interface{}) {
+func redactSensitiveValue(value interface{}, customHeader bool) {
 	switch value := value.(type) {
 	case map[string]interface{}:
 		for key, item := range value {
-			if sensitiveLogField(key) {
+			// Custom header names are arbitrary, so every entry's value may
+			// contain credentials even when its header name looks harmless.
+			if sensitiveLogField(key) || customHeader && strings.EqualFold(key, "value") {
 				value[key] = "[redacted]"
 			} else {
-				redactSensitiveValue(item)
+				redactSensitiveValue(item, strings.EqualFold(key, "customHeaders"))
 			}
 		}
 	case []interface{}:
 		for _, item := range value {
-			redactSensitiveValue(item)
+			redactSensitiveValue(item, customHeader)
 		}
 	}
 }
@@ -298,7 +384,7 @@ func redactSensitiveJSON(data []byte) string {
 	if err := json.Unmarshal(data, &value); err != nil {
 		return "[unparseable JSON omitted]"
 	}
-	redactSensitiveValue(value)
+	redactSensitiveValue(value, false)
 	safe, err := json.Marshal(value)
 	if err != nil {
 		return "[JSON omitted]"
@@ -433,6 +519,7 @@ func (o *b2Options) getTransport() http.RoundTripper {
 
 // B2 holds account information for Backblaze.
 type B2 struct {
+	redactedCredentialContainer
 	mu                  sync.RWMutex // guards the authorization fields below
 	accountID           string
 	authToken           string
@@ -461,6 +548,27 @@ type AuthData struct {
 	AllowedBuckets      []string
 	AllowedPrefix       string
 	AllowedCapabilities []string
+}
+
+// String returns the authorization state with its token redacted.
+func (a AuthData) String() string {
+	type printableAuthData AuthData
+	a.AuthToken = "[redacted]"
+	return fmt.Sprintf("%+v", printableAuthData(a))
+}
+
+// GoString returns a Go-syntax representation with its token redacted.
+func (a AuthData) GoString() string {
+	type printableAuthData AuthData
+	a.AuthToken = "[redacted]"
+	return fmt.Sprintf("%#v", printableAuthData(a))
+}
+
+// Format prevents other formatting verbs from exposing the token.
+func (a AuthData) Format(state fmt.State, verb rune) {
+	type printableAuthData AuthData
+	a.AuthToken = "[redacted]"
+	_, _ = fmt.Fprintf(state, fmt.FormatString(state, verb), printableAuthData(a))
 }
 
 // AuthData returns a detached snapshot of the current authorization state.
@@ -536,22 +644,30 @@ type httpReply struct {
 }
 
 func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper) (*http.Response, error) {
+	var sent, handshakeFailed atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		WroteHeaders: func() { sent.Store(true) },
+		WroteRequest: func(httptrace.WroteRequestInfo) { sent.Store(true) },
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			if err != nil {
+				handshakeFailed.Store(true)
+			}
+		},
+	})
 	req = req.WithContext(ctx)
 	resp, err := rt.RoundTrip(req)
 	switch err {
 	case nil:
 		return resp, nil
 	case context.Canceled, context.DeadlineExceeded:
-		return nil, err
+		method := req.Header.Get("X-Blazer-Method")
+		if !sent.Load() || Idempotent(method) || method == "b2_upload_file" || method == "b2_upload_part" {
+			return nil, err
+		}
+		fallthrough
 	default:
 		method := req.Header.Get("X-Blazer-Method")
 		blog.V(2).Infof(">> %s transport error: %T [URL and error text redacted]", method, err)
-		// Only an upload fault is classified by method (see Action). Other
-		// transport errors stay method-less so their retry budget and message
-		// do not change.
-		if method != "b2_upload_file" && method != "b2_upload_part" {
-			method = ""
-		}
 		// Certificate verification failures are permanent, including distrust of
 		// compromised CAs. Preserve the original error instead of retrying or
 		// requesting a new upload URL.
@@ -566,14 +682,32 @@ func makeNetRequest(ctx context.Context, req *http.Request, rt http.RoundTripper
 			return nil, err
 		}
 
-		// A transport error may include the full URL. Preserve ordinary error
-		// details while removing the file ID before a caller can log it.
-		message := redactDownloadIDText(req, err.Error())
-		return nil, b2err{
-			msg:    message,
-			method: method,
-			retry:  1,
+		var dnsErr *net.DNSError
+		notSent := !sent.Load() && (handshakeFailed.Load() || isDialFailure(err) || errors.As(err, &dnsErr))
+		return nil, requestError(req, err, notSent)
+	}
+}
+
+// isDialFailure reports whether err, anywhere in its chain, is a dial or
+// proxy-connect failure, meaning the request never reached B2 and is safe to
+// retry. net/http wraps a proxied dial failure as *net.OpError{Op:"proxyconnect"}
+// around the inner *net.OpError{Op:"dial"}, and errors.As stops at the first
+// match, so walk the whole chain.
+func isDialFailure(err error) bool {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if op, ok := e.(*net.OpError); ok && (op.Op == "dial" || op.Op == "proxyconnect") {
+			return true
 		}
+	}
+	return false
+}
+
+func requestError(req *http.Request, err error, notSent bool) b2err {
+	return b2err{
+		// Keep the displayed error redacted while retaining the cause for Is/As.
+		msg:    redactDownloadIDText(req, err.Error()),
+		method: req.Header.Get("X-Blazer-Method"),
+		retry:  1, cause: err, notSent: notSent,
 	}
 }
 
@@ -672,14 +806,28 @@ func (o *b2Options) makeRequest(ctx context.Context, method, verb, uri string, b
 	var replyArgs []byte
 	if b2resp != nil {
 		rbuf := &bytes.Buffer{}
-		r := io.TeeReader(resp.Body, rbuf)
+		limited := &io.LimitedReader{R: resp.Body, N: maxAPIResponseBytes + 1}
+		r := io.TeeReader(limited, rbuf)
 		decoder := json.NewDecoder(r)
-		if err := decoder.Decode(b2resp); err != nil {
+		decodeErr := decoder.Decode(b2resp)
+		if limited.N == 0 {
+			decodeErr = errAPIResponseTooLarge
+		}
+		if err := decodeErr; err != nil {
+			if !Idempotent(method) && method != "b2_upload_file" && method != "b2_upload_part" {
+				return requestError(req, err, false)
+			}
 			return err
 		}
 		replyArgs = rbuf.Bytes()
 	} else {
-		ra, err := ioutil.ReadAll(resp.Body)
+		ra, err := readAPIResponse(resp.Body)
+		if errors.Is(err, errAPIResponseTooLarge) {
+			if !Idempotent(method) && method != "b2_upload_file" && method != "b2_upload_part" {
+				return requestError(req, err, false)
+			}
+			return err
+		}
 		if err != nil {
 			blog.V(1).Infof("%s: couldn't read response body", method)
 		}
@@ -707,13 +855,14 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 	// A restricted key's scope lives under storageApi.allowed. Master keys
 	// carry an allowed with null buckets and namePrefix, leaving buckets and
 	// pfx empty; the nil check also tolerates an absent allowed.
-	var buckets []string
+	var buckets, capabilities []string
 	var pfx string
 	if allowed := storageAPI.Allowed; allowed != nil {
 		for _, b := range allowed.Buckets {
 			buckets = append(buckets, b.ID)
 		}
 		pfx = allowed.Prefix
+		capabilities = allowed.Capabilities
 	}
 	return &B2{
 		accountID:           b2resp.AccountID,
@@ -725,7 +874,7 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 		recommendedPartSize: storageAPI.PartSize,
 		buckets:             buckets,
 		pfx:                 pfx,
-		capabilities:        append([]string(nil), storageAPI.Capabilities...),
+		capabilities:        append([]string(nil), capabilities...),
 		opts:                b2opts,
 	}, nil
 }
@@ -791,9 +940,11 @@ func SetAPIBase(url string) AuthOption {
 }
 
 type LifecycleRule struct {
-	Prefix                 string
-	DaysNewUntilHidden     int
-	DaysHiddenUntilDeleted int
+	// DaysUnfinishedUntilCanceled cancels unfinished large files after this many days; zero omits the field.
+	DaysUnfinishedUntilCanceled int
+	Prefix                      string
+	DaysNewUntilHidden          int
+	DaysHiddenUntilDeleted      int
 }
 
 // decodeDefaultRetention returns the default retention from a bucket's
@@ -823,6 +974,20 @@ func normalizeDefaultServerSideEncryption(sse *b2types.ServerSideEncryption) *b2
 	return sse
 }
 
+// decodeReplicationConfiguration keeps hidden settings distinct from absent ones.
+func decodeReplicationConfiguration(cfg *b2types.ReplicationConfigurationResponse) (*b2types.ReplicationConfiguration, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	if !cfg.IsClientAuthorizedToRead {
+		return nil, true
+	}
+	if cfg.Value == nil || (cfg.Value.AsReplicationSource == nil && cfg.Value.AsReplicationDestination == nil) {
+		return nil, false
+	}
+	return cfg.Value, false
+}
+
 // CreateBucket wraps b2_create_bucket. A nil sse leaves the bucket's default
 // server-side encryption to the server.
 func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *b2types.ServerSideEncryption, corsRules []b2types.CORSRule, fileLockEnabled bool, replicationConfiguration *b2types.ReplicationConfiguration) (*Bucket, error) {
@@ -833,9 +998,10 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	var b2rules []b2types.LifecycleRule
 	for _, rule := range rules {
 		b2rules = append(b2rules, b2types.LifecycleRule{
-			Prefix:                 rule.Prefix,
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+			Prefix:                      rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 		})
 	}
 	b2req := &b2types.CreateBucketRequest{
@@ -860,12 +1026,15 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	var respRules []LifecycleRule
 	for _, rule := range b2resp.LifecycleRules {
 		respRules = append(respRules, LifecycleRule{
-			Prefix:                 rule.Prefix,
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+			Prefix:                      rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 		})
 	}
 	bucket := &Bucket{
+		rawLifecycleRules:           b2resp.RawLifecycleRules,
+		readLifecycleRules:          append([]LifecycleRule(nil), respRules...),
 		Name:                        name,
 		Info:                        b2resp.Info,
 		LifecycleRules:              respRules,
@@ -879,10 +1048,7 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 		bucket.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	bucket.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
-	if cfg := b2resp.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
-		(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
-		bucket.ReplicationConfiguration = cfg.Value
-	}
+	bucket.ReplicationConfiguration, bucket.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(b2resp.ReplicationConfiguration)
 	return bucket, nil
 }
 
@@ -901,14 +1067,19 @@ func (b *Bucket) DeleteBucket(ctx context.Context) error {
 
 // Bucket holds B2 bucket details.
 type Bucket struct {
-	Name           string
-	Type           string
-	Info           map[string]string
-	LifecycleRules []LifecycleRule
-	ID             string
-	rev            int
-	b2             *B2
+	rawLifecycleRules  json.RawMessage
+	readLifecycleRules []LifecycleRule
+	Name               string
+	Type               string
+	Info               map[string]string
+	LifecycleRules     []LifecycleRule
+	ID                 string
+	rev                int
+	b2                 *B2
 
+	// CORSRules are the bucket's rules. Update omits nil, clears the rules for
+	// a non-nil empty slice, and replaces them for a nonempty slice. A listed
+	// bucket can contain an empty slice; set it to nil to leave rules unchanged.
 	CORSRules        []b2types.CORSRule
 	DefaultRetention *b2types.Retention
 	// DefaultServerSideEncryption is the bucket's default encryption for new
@@ -917,42 +1088,59 @@ type Bucket struct {
 	DefaultServerSideEncryption *b2types.ServerSideEncryption
 	FileLockEnabled             bool
 	ReplicationConfiguration    *b2types.ReplicationConfiguration
-	// ReplicationConfigurationUnreadable records a list response that withheld
-	// replication settings. Callers must not replace a config they cannot read.
+	// ReplicationConfigurationUnreadable records a bucket response that withheld
+	// replication settings. A partial merge requires readable existing settings;
+	// a complete explicit replacement does not.
 	ReplicationConfigurationUnreadable bool
 }
 
-// Update wraps b2_update_bucket.
+// Update wraps b2_update_bucket. On success, it returns a new Bucket with the
+// revision from the response and does not update the receiver. For subsequent
+// updates, use the returned Bucket so revision-conflict checks use the latest
+// revision. On failure, it returns nil and the request error.
 func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	state := b.b2.snapshot()
 	// Only a non-nil list is sent: nil leaves lifecycle rules unchanged, and an
 	// empty non-nil list removes them all.
 	var rules *[]b2types.LifecycleRule
+	var rawRules json.RawMessage
 	if b.LifecycleRules != nil {
 		rs := make([]b2types.LifecycleRule, 0, len(b.LifecycleRules))
 		for _, rule := range b.LifecycleRules {
 			rs = append(rs, b2types.LifecycleRule{
-				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-				Prefix:                 rule.Prefix,
+				DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+				DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+				Prefix:                      rule.Prefix,
 			})
 		}
-		rules = &rs
+
+		// Preserve unknown server fields only when the entire typed slice is unchanged.
+		if len(b.LifecycleRules) > 0 && b.rawLifecycleRules != nil && slices.Equal(b.LifecycleRules, b.readLifecycleRules) {
+			rawRules = b.rawLifecycleRules
+		} else {
+			rules = &rs
+		}
 	}
 	var info *map[string]string
 	if b.Info != nil {
 		info = &b.Info
 	}
+	var corsRules *[]b2types.CORSRule
+	if b.CORSRules != nil {
+		corsRules = &b.CORSRules
+	}
 	b2req := &b2types.UpdateBucketRequest{
 		AccountID: state.accountID,
 		BucketID:  b.ID,
 		// Name:           b.Name,
-		Type:           b.Type,
-		Info:           info,
-		LifecycleRules: rules,
-		IfRevisionIs:   b.rev,
+		Type:              b.Type,
+		Info:              info,
+		LifecycleRules:    rules,
+		RawLifecycleRules: rawRules,
+		IfRevisionIs:      b.rev,
 
-		CORSRules:                   b.CORSRules,
+		CORSRules:                   corsRules,
 		DefaultRetention:            b.DefaultRetention,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b.DefaultServerSideEncryption),
 		FileLockEnabled:             b.FileLockEnabled,
@@ -968,24 +1156,30 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	var respRules []LifecycleRule
 	for _, rule := range b2resp.LifecycleRules {
 		respRules = append(respRules, LifecycleRule{
-			Prefix:                 rule.Prefix,
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+			Prefix:                      rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 		})
 	}
 	updated := &Bucket{
+		rawLifecycleRules:           b2resp.RawLifecycleRules,
+		readLifecycleRules:          append([]LifecycleRule(nil), respRules...),
 		Name:                        b.Name,
 		Type:                        b2resp.Type,
 		Info:                        b2resp.Info,
 		LifecycleRules:              respRules,
 		ID:                          b2resp.BucketID,
 		b2:                          b.b2,
+		rev:                         b2resp.Revision,
 		CORSRules:                   b2resp.CORSRules,
 		DefaultServerSideEncryption: normalizeDefaultServerSideEncryption(b2resp.DefaultServerSideEncryption.Value),
-		FileLockEnabled:             b2resp.FileLockConfig.Val.IsFileLockEnabled,
-		ReplicationConfiguration:    b2resp.ReplicationConfiguration.Value,
+	}
+	if b2resp.FileLockConfig != nil {
+		updated.FileLockEnabled = b2resp.FileLockConfig.Val.IsFileLockEnabled
 	}
 	updated.DefaultRetention = decodeDefaultRetention(b2resp.FileLockConfig)
+	updated.ReplicationConfiguration, updated.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(b2resp.ReplicationConfiguration)
 
 	return updated, nil
 }
@@ -1018,6 +1212,10 @@ func (b *Bucket) NotificationRules(ctx context.Context) ([]b2types.EventNotifica
 }
 
 // SetNotificationRules replaces a bucket's complete notification rule set.
+// A nil or empty slice clears every rule. To add or modify one rule, read the
+// existing set and preserve the other rules in the replacement. B2 ignores
+// the server-managed IsSuspended and SuspensionReason fields on set.
+// Suspended rules can only be deleted, not edited.
 func (b *Bucket) SetNotificationRules(ctx context.Context, rules []b2types.EventNotificationRule) error {
 	state := b.b2.snapshot()
 	// A non-nil empty array clears rules. B2 does not treat null as an empty
@@ -1081,12 +1279,15 @@ func (b *B2) listBucketsWithState(ctx context.Context, state authState, bucketID
 		var rules []LifecycleRule
 		for _, rule := range bucket.LifecycleRules {
 			rules = append(rules, LifecycleRule{
-				Prefix:                 rule.Prefix,
-				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+				Prefix:                      rule.Prefix,
+				DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+				DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 			})
 		}
 		listed := &Bucket{
+			rawLifecycleRules:           bucket.RawLifecycleRules,
+			readLifecycleRules:          append([]LifecycleRule(nil), rules...),
 			Name:                        bucket.Name,
 			Type:                        bucket.Type,
 			Info:                        bucket.Info,
@@ -1101,13 +1302,7 @@ func (b *B2) listBucketsWithState(ctx context.Context, state authState, bucketID
 			listed.FileLockEnabled = bucket.FileLockConfig.Val.IsFileLockEnabled
 		}
 		listed.DefaultRetention = decodeDefaultRetention(bucket.FileLockConfig)
-		if cfg := bucket.ReplicationConfiguration; cfg != nil && !cfg.IsClientAuthorizedToRead {
-			listed.ReplicationConfigurationUnreadable = true
-		}
-		if cfg := bucket.ReplicationConfiguration; cfg != nil && cfg.IsClientAuthorizedToRead && cfg.Value != nil &&
-			(cfg.Value.AsReplicationSource != nil || cfg.Value.AsReplicationDestination != nil) {
-			listed.ReplicationConfiguration = cfg.Value
-		}
+		listed.ReplicationConfiguration, listed.ReplicationConfigurationUnreadable = decodeReplicationConfiguration(bucket.ReplicationConfiguration)
 		buckets = append(buckets, listed)
 	}
 	return buckets, nil
@@ -1225,16 +1420,27 @@ func (l FileLock) retentionRequest() *b2types.FileRetention {
 	return &b2types.FileRetention{Mode: &l.Retention.Mode, RetainUntilTimestamp: &l.Retention.RetainUntilTimestamp}
 }
 
+func validateFileLockCount(lock []FileLock) error {
+	if len(lock) > 1 {
+		return fmt.Errorf("b2: at most one FileLock may be given, got %d", len(lock))
+	}
+	return nil
+}
+
 // UploadFile wraps b2_upload_file. At most one FileLock may be given; it sets
-// Object Lock retention and legal hold on the new file.
+// Object Lock retention and legal hold on the new file. Extra FileLock arguments
+// return an error without sending a request.
 func (url *URL) UploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, lock ...FileLock) (*File, error) {
 	return url.UploadFileWithSSEC(ctx, r, size, name, contentType, sha1, info, nil, lock...)
 }
 
 // UploadFileWithSSEC wraps b2_upload_file and sends per-request server-side
 // encryption settings. Callers normally use package b2 instead of this
-// low-level method.
+// low-level method. Like UploadFile, it rejects extra FileLock arguments.
 func (url *URL) UploadFileWithSSEC(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*File, error) {
+	if err := validateFileLockCount(lock); err != nil {
+		return nil, err
+	}
 	state := url.b2.snapshot()
 	headers := map[string]string{
 		"Authorization":     url.token,
@@ -1315,7 +1521,12 @@ func (f *File) UpdateFileLegalHold(ctx context.Context, legalHold string) error 
 type LargeFile struct {
 	ID string
 	b2 *B2
+	*largeFileState
+}
 
+// Keeping mutable upload state behind a pointer lets diagnostic value receivers
+// copy a handle without copying locks or reading concurrently updated fields.
+type largeFileState struct {
 	mu        sync.Mutex
 	size      int64
 	hashes    map[int]string
@@ -1387,14 +1598,18 @@ func (l *LargeFile) CopyPart(ctx context.Context, sourceFileID string, partNumbe
 }
 
 // StartLargeFile wraps b2_start_large_file. At most one FileLock may be given;
-// it sets Object Lock retention and legal hold on the new file.
+// it sets Object Lock retention and legal hold on the new file. Extra FileLock
+// arguments return an error without sending a request.
 func (b *Bucket) StartLargeFile(ctx context.Context, name, contentType string, info map[string]string, lock ...FileLock) (*LargeFile, error) {
 	return b.StartLargeFileWithSSEC(ctx, name, contentType, info, nil, lock...)
 }
 
 // StartLargeFileWithSSEC wraps b2_start_large_file and carries SSE-C settings
-// in the JSON request body.
+// in the JSON request body. Like StartLargeFile, it rejects extra FileLock arguments.
 func (b *Bucket) StartLargeFileWithSSEC(ctx context.Context, name, contentType string, info map[string]string, sse *b2types.ServerSideEncryption, lock ...FileLock) (*LargeFile, error) {
+	if err := validateFileLockCount(lock); err != nil {
+		return nil, err
+	}
 	if err := addServerSideEncryptionHeaders(map[string]string{}, sse); err != nil {
 		return nil, err
 	}
@@ -1418,10 +1633,9 @@ func (b *Bucket) StartLargeFileWithSSEC(ctx context.Context, name, contentType s
 		return nil, err
 	}
 	return &LargeFile{
-		ID:        b2resp.ID,
-		b2:        b.b2,
-		hashes:    make(map[int]string),
-		partSizes: make(map[int]int64),
+		ID:             b2resp.ID,
+		b2:             b.b2,
+		largeFileState: &largeFileState{hashes: make(map[int]string), partSizes: make(map[int]int64)},
 	}, nil
 }
 
@@ -1479,11 +1693,9 @@ func (f *File) CompileParts(size int64, seen map[int]string) *LargeFile {
 		s[k] = v
 	}
 	return &LargeFile{
-		ID:        f.ID,
-		b2:        f.b2,
-		size:      size,
-		hashes:    s,
-		partSizes: make(map[int]int64),
+		ID:             f.ID,
+		b2:             f.b2,
+		largeFileState: &largeFileState{size: size, hashes: s, partSizes: make(map[int]int64)},
 	}
 }
 
@@ -1534,13 +1746,15 @@ func (fc *FileChunk) Reload(ctx context.Context) error {
 	return nil
 }
 
-// UploadPart wraps b2_upload_part.
+// UploadPart wraps b2_upload_part. When sha1 is "hex_digits_at_end", size and
+// the returned byte count include the 40-byte SHA-1 trailer; the finished
+// large-file size counts only payload bytes.
 func (fc *FileChunk) UploadPart(ctx context.Context, r io.Reader, sha1 string, size, index int) (int, error) {
 	return fc.UploadPartWithSSEC(ctx, r, sha1, size, index, nil)
 }
 
-// UploadPartWithSSEC wraps b2_upload_part and repeats the SSE-C headers selected
-// by b2_start_large_file.
+// UploadPartWithSSEC works like UploadPart and repeats the SSE-C headers
+// selected by b2_start_large_file.
 func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 string, size, index int, sse *b2types.ServerSideEncryption) (int, error) {
 	previousSize, err := fc.file.previousPartSize(ctx, index)
 	if err != nil {
@@ -1566,15 +1780,18 @@ func (fc *FileChunk) UploadPartWithSSEC(ctx context.Context, r io.Reader, sha1 s
 	if known, ok := fc.file.partSizes[index]; ok {
 		previousSize = known
 	}
+	partSize := int64(size)
 	if sha1 == "hex_digits_at_end" {
-		sha1 = string(r.(*keepFinalBytes).sha[:])
+		trailer := r.(*keepFinalBytes).sha
+		sha1 = string(trailer[:])
+		partSize -= int64(len(trailer))
 	}
 	fc.file.hashes[index] = sha1
 	if fc.file.partSizes == nil {
 		fc.file.partSizes = make(map[int]int64)
 	}
-	fc.file.partSizes[index] = int64(size)
-	fc.file.size += int64(size) - previousSize
+	fc.file.partSizes[index] = partSize
+	fc.file.size += partSize - previousSize
 	fc.file.mu.Unlock()
 	return size, nil
 }
@@ -1613,8 +1830,14 @@ func (l *LargeFile) FinishLargeFile(ctx context.Context) (*File, error) {
 
 // ListUnfinishedLargeFiles wraps b2_list_unfinished_large_files.
 func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, continuation string) ([]*File, string, error) {
+	return b.ListUnfinishedLargeFilesWithPrefix(ctx, count, continuation, "")
+}
+
+// ListUnfinishedLargeFilesWithPrefix lists unfinished uploads whose names start with prefix.
+func (b *Bucket) ListUnfinishedLargeFilesWithPrefix(ctx context.Context, count int, continuation, prefix string) ([]*File, string, error) {
 	state := b.b2.snapshot()
 	b2req := &b2types.ListUnfinishedLargeFilesRequest{
+		NamePrefix:   prefix,
 		BucketID:     b.ID,
 		Continuation: continuation,
 		Count:        count,
@@ -1644,6 +1867,7 @@ func (b *Bucket) ListUnfinishedLargeFiles(ctx context.Context, count int, contin
 				Name:                 f.Name,
 				ContentType:          f.ContentType,
 				Info:                 f.Info,
+				Status:               f.Action,
 				Timestamp:            millitime(f.Timestamp),
 				Retention:            retention,
 				LegalHold:            legalHold,
@@ -1807,6 +2031,8 @@ func (b *Bucket) GetDownloadAuthorization(ctx context.Context, prefix string, va
 // FileReader is an io.ReadCloser that downloads a file from B2.
 type FileReader struct {
 	io.ReadCloser
+	// ContentLength is the response length, saturated at the platform's maximum
+	// int. It does not limit the bytes returned by Read.
 	ContentLength int
 	ContentType   string
 	SHA1          string
@@ -1958,6 +2184,15 @@ func (b *Bucket) downloadFile(ctx context.Context, state authState, uri, b2Metho
 	return newFileReader(resp)
 }
 
+// sizedReadCloser retains the wire length for internal consumers while the
+// exported FileReader.ContentLength remains a native-int compatibility field.
+type sizedReadCloser struct {
+	io.ReadCloser
+	size int64
+}
+
+func (r sizedReadCloser) Size() int64 { return r.size }
+
 func newFileReader(resp *http.Response) (*FileReader, error) {
 	return newFileReaderWithMaxLength(resp, int64(^uint(0)>>1))
 }
@@ -1967,12 +2202,12 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 		defer resp.Body.Close()
 		return nil, mkErr(resp)
 	}
-	contentLength, err := strconv.Atoi(resp.Header.Get("Content-Length"))
+	contentLength, err := strconv.ParseInt(resp.Header.Get("Content-Length"), 10, 64)
 	if err != nil {
 		_ = resp.Body.Close()
 		return nil, err
 	}
-	if contentLength < 0 || int64(contentLength) > maxInt {
+	if contentLength < 0 {
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("invalid download content length %d", contentLength)
 	}
@@ -1997,12 +2232,19 @@ func newFileReaderWithMaxLength(resp *http.Response, maxInt int64) (*FileReader,
 	if sha1 == "none" && info["Large_file_sha1"] != "" {
 		sha1 = info["Large_file_sha1"]
 	}
+	// Saturate ContentLength to the platform's int range so the conversion
+	// cannot truncate; the body itself is never limited. The math.MaxInt guard
+	// is the upper bound (maxInt is a test seam for the 32-bit path).
+	length := min(contentLength, maxInt)
+	if length > math.MaxInt {
+		length = math.MaxInt
+	}
 	return &FileReader{
-		ReadCloser:    resp.Body,
+		ReadCloser:    sizedReadCloser{resp.Body, contentLength},
 		SHA1:          sha1,
 		ID:            resp.Header.Get("X-Bz-File-Id"),
 		ContentType:   resp.Header.Get("Content-Type"),
-		ContentLength: contentLength,
+		ContentLength: int(length),
 		Info:          info,
 	}, nil
 }
@@ -2146,10 +2388,9 @@ func (f *File) GetFileInfo(ctx context.Context) (*FileInfo, error) {
 // AsLargeFile return a LargeFile with the same fields as this File
 func (f *File) AsLargeFile() *LargeFile {
 	return &LargeFile{
-		ID:        f.ID,
-		b2:        f.b2,
-		hashes:    make(map[int]string),
-		partSizes: make(map[int]int64),
+		ID:             f.ID,
+		b2:             f.b2,
+		largeFileState: &largeFileState{hashes: make(map[int]string), partSizes: make(map[int]int64)},
 	}
 }
 

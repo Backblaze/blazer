@@ -55,7 +55,7 @@ func (c *create) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{})
 		key = os.Getenv(legacyAPIKey)
 	}
 	if id == "" || key == "" {
-		fmt.Fprintf(os.Stderr, "both %s and %s must be set in the environment", apiID, apiKey)
+		fmt.Fprintf(os.Stderr, "both %s and %s must be set in the environment\n", apiID, apiKey)
 		return subcommands.ExitUsageError
 	}
 
@@ -66,6 +66,13 @@ func (c *create) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{})
 	}
 	name := args[0]
 	caps := args[1:]
+
+	// B2 requires a positive duration when supplied; do not silently omit negatives.
+	// https://www.backblaze.com/apidocs/b2-create-key
+	if *c.d < 0 {
+		fmt.Fprintln(os.Stderr, "duration must not be negative")
+		return subcommands.ExitUsageError
+	}
 
 	var opts []b2.KeyOption
 	if *c.d > 0 {

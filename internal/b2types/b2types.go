@@ -81,9 +81,10 @@ type Allowance struct {
 }
 
 type LifecycleRule struct {
-	DaysHiddenUntilDeleted int    `json:"daysFromHidingToDeleting,omitempty"`
-	DaysNewUntilHidden     int    `json:"daysFromUploadingToHiding,omitempty"`
-	Prefix                 string `json:"fileNamePrefix"`
+	DaysUnfinishedUntilCanceled int    `json:"daysFromStartingToCancelingUnfinishedLargeFiles,omitempty"`
+	DaysHiddenUntilDeleted      int    `json:"daysFromHidingToDeleting,omitempty"`
+	DaysNewUntilHidden          int    `json:"daysFromUploadingToHiding,omitempty"`
+	Prefix                      string `json:"fileNamePrefix"`
 }
 
 type CreateBucketRequest struct {
@@ -100,18 +101,37 @@ type CreateBucketRequest struct {
 }
 
 type CreateBucketResponse struct {
-	BucketID       string            `json:"bucketId"`
-	Name           string            `json:"bucketName"`
-	Type           string            `json:"bucketType"`
-	Info           map[string]string `json:"bucketInfo"`
-	LifecycleRules []LifecycleRule   `json:"lifecycleRules"`
-	Revision       int               `json:"revision"`
+	BucketID          string            `json:"bucketId"`
+	Name              string            `json:"bucketName"`
+	Type              string            `json:"bucketType"`
+	Info              map[string]string `json:"bucketInfo"`
+	LifecycleRules    []LifecycleRule   `json:"lifecycleRules"`
+	RawLifecycleRules json.RawMessage   `json:"-"`
+	Revision          int               `json:"revision"`
 
 	CORSRules                   []CORSRule                        `json:"corsRules,omitempty"`
 	DefaultRetention            string                            `json:"defaultRetention,omitempty"`
 	DefaultServerSideEncryption ServerSideEncryptionResponse      `json:"defaultServerSideEncryption"`
 	FileLockConfig              *FileLockConfiguration            `json:"fileLockConfiguration,omitempty"`
 	ReplicationConfiguration    *ReplicationConfigurationResponse `json:"replicationConfiguration,omitempty"`
+}
+
+// UnmarshalJSON retains lifecycle fields unknown to this SDK version.
+func (r *CreateBucketResponse) UnmarshalJSON(data []byte) error {
+	type plain CreateBucketResponse
+	var decoded struct {
+		*plain
+		Raw json.RawMessage `json:"lifecycleRules"`
+	}
+	decoded.plain = (*plain)(r)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	r.RawLifecycleRules = decoded.Raw
+	if decoded.Raw != nil {
+		return json.Unmarshal(decoded.Raw, &r.LifecycleRules)
+	}
+	return nil
 }
 
 type FileLockConfiguration struct {
@@ -152,17 +172,33 @@ type UpdateBucketRequest struct {
 	Info *map[string]string `json:"bucketInfo,omitempty"`
 	// A nil pointer omits lifecycleRules (leave them unchanged); a pointer to an
 	// empty slice sends [] (remove them all).
-	LifecycleRules *[]LifecycleRule `json:"lifecycleRules,omitempty"`
-	IfRevisionIs   int              `json:"ifRevisionIs,omitempty"`
+	LifecycleRules    *[]LifecycleRule `json:"lifecycleRules,omitempty"`
+	RawLifecycleRules json.RawMessage  `json:"-"`
+	IfRevisionIs      int              `json:"ifRevisionIs,omitempty"`
 
-	CORSRules                   []CORSRule                `json:"corsRules,omitempty"`
+	CORSRules                   *[]CORSRule               `json:"corsRules,omitempty"`
 	DefaultRetention            *Retention                `json:"defaultRetention,omitempty"`
 	DefaultServerSideEncryption *ServerSideEncryption     `json:"defaultServerSideEncryption,omitempty"`
 	FileLockEnabled             bool                      `json:"fileLockEnabled,omitempty"`
 	ReplicationConfiguration    *ReplicationConfiguration `json:"replicationConfiguration,omitempty"`
 }
 
+func (r UpdateBucketRequest) MarshalJSON() ([]byte, error) {
+	type plain UpdateBucketRequest
+	if r.RawLifecycleRules == nil {
+		return json.Marshal(plain(r))
+	}
+	return json.Marshal(struct {
+		plain
+		LifecycleRules json.RawMessage `json:"lifecycleRules"`
+	}{plain(r), r.RawLifecycleRules})
+}
+
 type UpdateBucketResponse CreateBucketResponse
+
+func (r *UpdateBucketResponse) UnmarshalJSON(data []byte) error {
+	return (*CreateBucketResponse)(r).UnmarshalJSON(data)
+}
 
 // GetBucketNotificationRulesRequest is the request for
 // b2_get_bucket_notification_rules.
@@ -428,6 +464,7 @@ type GetDownloadAuthorizationResponse struct {
 }
 
 type ListUnfinishedLargeFilesRequest struct {
+	NamePrefix   string `json:"namePrefix,omitempty"`
 	BucketID     string `json:"bucketId"`
 	Continuation string `json:"startFileId,omitempty"`
 	Count        int    `json:"maxFileCount,omitempty"`

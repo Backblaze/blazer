@@ -308,7 +308,7 @@ func TestSSECWriterDownloadAttrsAndCopyWire(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Errorf("download = %q, want %q", got, payload)
 	}
-	downloads := wire.requestsTo("/file/bucket/encrypted")
+	downloads := wire.requestsTo("/b2api/v4/b2_download_file_by_id")
 	if len(downloads) != 2 || downloads[0].method != http.MethodGet || downloads[1].method != http.MethodGet {
 		t.Fatalf("download request count/method mismatch: got %d requests", len(downloads))
 	}
@@ -319,15 +319,15 @@ func TestSSECWriterDownloadAttrsAndCopyWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	downloads = wire.requestsTo("/file/bucket/encrypted")
-	if len(downloads) != 3 || downloads[2].method != http.MethodHead {
+	if len(downloads) != 1 || downloads[0].method != http.MethodHead {
 		t.Fatalf("download request count/method mismatch after HEAD: got %d requests", len(downloads))
 	}
-	assertSSECWireHeaders(t, downloads[2].headers, wire.keyValue, wire.keyMD5)
+	assertSSECWireHeaders(t, downloads[0].headers, wire.keyValue, wire.keyMD5)
 	if _, err := encrypted.Attrs(ctx, wire.key); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(wire.requestsTo("/file/bucket/encrypted")); got != 3 {
-		t.Fatalf("resolved version caused %d name downloads, want 3", got)
+	if got := len(wire.requestsTo("/file/bucket/encrypted")); got != 1 {
+		t.Fatalf("resolved version caused %d name downloads, want 1", got)
 	}
 	infos := wire.requestsTo("/b2api/v4/b2_get_file_info")
 	if len(infos) != 2 || infos[1].body["fileId"] != "id-encrypted" {

@@ -36,6 +36,28 @@ For every behavior a PR adds or fixes:
 Tests must also fail for the right reason. An unrelated error, such as an aborted request or a test
 server that returns an empty `200`, must not satisfy an assertion meant for a specific failure.
 
+## Known-defect tests
+
+A known-defect test asserts the correct behavior of code that is still wrong, so it fails today. It is
+kept out of the default run so `make ci` stays green, and it stays runnable on demand:
+
+```sh
+make known-defects
+```
+
+Go tests live in files with the `//go:build knowndefect` tag (`known_defect_*_test.go`, named
+`TestKnownDefect_...`); the docs checks run with `scripts/docs-consistency_test.sh --known-defects`. The
+target is expected to fail until every defect is fixed. When a fix lands, move the test into the regular
+suite (a file without the tag, for example `regression_test.go`, renamed `TestRegression_...`), or move
+the check's name from `KNOWN_DEFECTS` to `PASSING` in the docs script, in the same change as the fix.
+
+`make known-defects` runs `go test -v`, so each test is listed with PASS, FAIL or SKIP: a test that passes
+is ready to move even while another test in its package still fails. A few defects exist only where `int`
+is 32 bits; their tests SKIP on a 64-bit platform, and `make known-defects-32bit` runs them with
+`GOARCH=386` (on a Linux amd64 host). The goroutine-leak test
+`TestKnownDefect_NoChunkWaiterLeftBlockedAfterClose` is probabilistic: a failure proves the defect, a pass
+does not prove it fixed.
+
 ## Repo-owned SDK harness contract
 
 `.sdkharness/tests.tsv` lists one row per scenario: level (`conformance`, `resilience`, `health`), scenario
@@ -85,6 +107,15 @@ against B2. A failure on `main` opens (or comments on) the issue "Live integrati
 main". Runs are serialized because the tests share bucket names, so rapid merges can share one run; its
 summary lists every commit merged since the last green live run.
 
+`TestListHiddenDelimiterFolderBoundaryLive` creates two versions on each side of a virtual folder,
+then lists versions with a delimiter and page size one. It checks the complete visible version set
+across that boundary; the wire regression separately tests a name-only continuation because a live
+run does not guarantee B2 will return that cursor shape. Run with throwaway live credentials:
+
+```sh
+go test -count=1 -run '^TestListHiddenDelimiterFolderBoundaryLive$' ./b2
+```
+
 ## When a PR needs a live test
 
 Wire tests prove what blazer sends; only a live test proves how B2 answers. Add or extend a live test when
@@ -115,3 +146,82 @@ Writing one:
 In the PR, list each level you ran and its result. A check that did not run is **NOT RUN**, never PASS,
 and an optional tool that is missing is not a passing check. Say what you could not verify (for example,
 no live B2 access) so a reviewer knows what is still open.
+
+## Replication helper verification (#339)
+
+`SetupReplication` takes caller-owned key IDs; it does not provision keys. `ReplicationStatus`
+reports configured rules, including disabled rules, rather than per-file replication progress.
+The tests and godoc in #339 leave executable SDK code unchanged. Record the exact tested SDK commit
+and the separate simulator commit in the implementation PR's Verification section after committing
+the change. That lets the evidence identify the final reviewed commit without putting a
+self-referential commit hash into this file. The snapshot below describes the checks exercised;
+it is not evidence for later revisions of main.
+
+The focused rejection tests cover an otherwise matching disabled rule with and without a destination
+mapping, and priority 2147483648 before any bucket reads or writes. The wire test preserves the literal
+default priority 128 assertion and checks that the inclusive maximum 2147483647 reaches the source
+update unchanged. The oversized input cannot be represented by `int` on 32-bit targets, so only that
+case skips there; the maximum-priority wire case still runs.
+`TestReplicationStatusIncludesDisabledRules` independently checks that status returns both enabled
+and disabled rules with every configured field unchanged, without updating either bucket.
+
+Each independent break was killed and passed after restoration:
+
+| Break in `b2/replication.go` | Focused test | Red result |
+| --- | --- | --- |
+| Remove `\|\| !rule.IsEnabled` | `TestSetupReplicationRejectsDisabledRule` | Both mapping cases returned nil instead of the rule-conflict error. |
+| Remove `\|\| settings.priority > maxReplicationPriority` | `TestSetupReplicationRejectsTooLargePriority` | Priority 2147483648 returned nil instead of the priority-validation error. |
+| Change `settings.priority > maxReplicationPriority` to `>=` | `TestSetupReplicationDefaultAndMaximumPriorityOnWire/maximum` | Valid priority 2147483647 was rejected. |
+| Filter out disabled rules in `ReplicationStatus` | `TestReplicationStatusIncludesDisabledRules` | Only the enabled rule was returned instead of both configured rules. |
+
+On 2026-11-10 the registered scenario passed against a fresh loopback B2 simulator:
+
+```sh
+SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=bucket.replication_helper \
+SDKHARNESS_SIMULATOR_URL=http://127.0.0.1:<port> \
+  .sdkharness/tests/run-conformance
+```
+
+Observed simulator result on that date (revision identifiers are recorded separately in the PR):
+
+```text
+NOTE blazer bucket.replication_helper: source rules=1 destination mappings=1 repeat=unchanged
+SDKHARNESS_RESULT conformance bucket.replication_helper PASS -
+```
+
+A separate real-B2 run passed all 17 checks in the existing local
+`blazer-go-demo replicationhelper` cap, including cleanup:
+
+- Setup preserved an existing destination mapping and added the caller's source/destination key IDs.
+- Repeating setup left the rule and mapping counts unchanged. A second destination reused the source
+  key, and status returned both configured rules with the expected fields and priorities 128 and 133.
+- All five option-conflict cases and both key-conflict cases returned their specific errors and left
+  both configurations unchanged.
+- Real restricted keys without `readBucketReplications` demonstrated unreadable source and destination
+  rejection by both setup and status, with configurations unchanged.
+- Cleanup deleted all three scratch buckets and six scratch keys. No key secrets were printed.
+
+```text
+PASS replicationhelper: 17 checks passed
+```
+
+To reproduce against the checked-out SDK without changing the shared demo's module replacement, set
+`DEMO_DIR` to the existing configured live rig, then run from the SDK repository. This is an external,
+local-only rig, not a program shipped in the SDK; the offline SDK tests do not require it.
+
+```sh
+sdk=$(pwd)
+scratch=$(mktemp -d)
+cp "$DEMO_DIR/go.mod" "$scratch/demo.go.mod"
+if test -f "$DEMO_DIR/go.sum"; then cp "$DEMO_DIR/go.sum" "$scratch/demo.go.sum"; fi
+(
+  cd "$DEMO_DIR" &&
+  GOWORK=off go mod edit -modfile="$scratch/demo.go.mod" \
+    -replace="github.com/Backblaze/blazer=$sdk" &&
+  GOWORK=off go run -modfile="$scratch/demo.go.mod" . replicationhelper \
+    --report "$scratch/replicationhelper.md"
+)
+```
+
+The live rig reads its existing `.env`, uses unique scratch resources and defers cleanup. Its report
+is separate from simulator evidence. Neither run claims to verify per-file replication effects.

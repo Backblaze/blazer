@@ -106,8 +106,8 @@ package main
 //
 // Setup   one normal bucket (the simulator applies its SSE-B2 default)
 // Action  upload once with WithSSEB2("AES256") and once without an option
-// Assert  each returned object's encryption is SSE-B2/AES256; the default-path
-//         object still round-trips as plaintext
+// Assert  the explicit upload sends AES256, the unset upload omits that header,
+//         both round-trip as plaintext, and the bucket default stays unchanged
 //
 // The expected value is the b2_upload_file contract cited in the shell header:
 // an X-Bz-Server-Side-Encryption request selects SSE-B2 for that upload and the
@@ -122,18 +122,44 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Backblaze/blazer/b2"
 )
 
 const capability = "enc.sse_b2"
 
+// Observe only the non-secret SSE-B2 header, then use the normal transport
+// whose dialer is restricted by loopback_guard.go. Never store other headers.
+type sseB2Requests struct {
+	next     http.RoundTripper
+	explicit atomic.Int64
+	unset    atomic.Int64
+	invalid  atomic.Bool
+}
+
+func (t *sseB2Requests) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("X-Bz-File-Name") != "" {
+		switch req.Header.Get("X-Bz-Server-Side-Encryption") {
+		case "AES256":
+			t.explicit.Add(1)
+		case "":
+			t.unset.Add(1)
+		default:
+			t.invalid.Store(true)
+		}
+	}
+	return t.next.RoundTrip(req)
+}
+
 func runCheck(ctx context.Context, target *string) error {
-	client, err := newClient(ctx, *target)
+	requests := &sseB2Requests{next: http.DefaultTransport}
+	client, err := newClient(ctx, *target, requests)
 	if err != nil {
 		return err
 	}
@@ -170,11 +196,25 @@ func runCheck(ctx context.Context, target *string) error {
 	if err := assertSSEB2("read per-request object", perRequestAttrs.ServerSideEncryption); err != nil {
 		return err
 	}
+	if requests.explicit.Load() == 0 || requests.unset.Load() != 0 || requests.invalid.Load() {
+		return failf("per-request header", "WithSSEB2 did not send the explicit AES256 upload header")
+	}
+	explicitRequests := requests.explicit.Load()
+	got, err := download(ctx, bucket, perRequestName, nil)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, payload) {
+		return failf("per-request round trip", "the uploaded bytes did not round-trip")
+	}
 
 	// --- unset option follows the bucket default and preserves plaintext ---
 	name := objectName("sse-b2-default.bin")
 	if _, err := upload(ctx, bucket, name, payload, nil, nil); err != nil {
 		return err
+	}
+	if requests.explicit.Load() != explicitRequests || requests.unset.Load() == 0 || requests.invalid.Load() {
+		return failf("unset-option header", "an upload without an option sent an explicit encryption header")
 	}
 	defaultAttrs, err := bucket.Object(name).Attrs(ctx)
 	if err != nil {
@@ -183,13 +223,21 @@ func runCheck(ctx context.Context, target *string) error {
 	if err := assertSSEB2("read default-path object", defaultAttrs.ServerSideEncryption); err != nil {
 		return err
 	}
-	got, err := download(ctx, bucket, name, nil)
+	got, err = download(ctx, bucket, name, nil)
 	if err != nil {
 		return err
 	}
 	if !bytes.Equal(got, payload) {
 		return failf("round trip", "the object stored in an SSE-B2 bucket did not come back as the plaintext that went in")
 	}
+	after, err := bucket.Attrs(ctx)
+	if err != nil {
+		return classify("read bucket after uploads", err)
+	}
+	if after.DefaultServerSideEncryption == nil || *after.DefaultServerSideEncryption != *bucketAttrs.DefaultServerSideEncryption {
+		return failf("bucket default", "per-request uploads changed the bucket default encryption")
+	}
+	note("per-request header=AES256; unset-option header=absent; bucket default=unchanged")
 	// --- the other half of the boundary: anything but SSE-B2 is refused ----
 	err = bucket.Update(ctx, &b2.BucketAttrs{
 		DefaultServerSideEncryption: &b2.ServerSideEncryption{Mode: "SSE-C", Algorithm: "AES256"},
@@ -215,8 +263,8 @@ func assertSSEB2(step string, encryption *b2.ServerSideEncryption) error {
 }
 
 // ---------------------------------------------------------------------------
-// Shared plumbing. Identical in every blazer check; the scenario above is the
-// only part that differs. Contract: bin/conformance/README.md.
+// Shared plumbing follows the other blazer checks; this scenario also passes
+// its header observer to newClient. Contract: bin/conformance/README.md.
 // ---------------------------------------------------------------------------
 
 const slug = "blazer"
@@ -335,7 +383,7 @@ func credentials(target string) (string, string, error) {
 	return "", "", amberf(reasonNoRealm, "blazer checks use only the simulator's fixed test credential")
 }
 
-func newClient(ctx context.Context, target string) (*b2.Client, error) {
+func newClient(ctx context.Context, target string, transport http.RoundTripper) (*b2.Client, error) {
 	base, err := apiBase(target)
 	if err != nil {
 		return nil, err
@@ -344,7 +392,7 @@ func newClient(ctx context.Context, target string) (*b2.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"))
+	client, err := b2.NewClient(ctx, id, key, b2.APIBase(base), b2.UserAgent("sdkharness-conformance/blazer"), b2.Transport(transport))
 	if err != nil {
 		return nil, classify("authenticate", err)
 	}

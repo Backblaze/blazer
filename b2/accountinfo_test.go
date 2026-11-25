@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -156,6 +158,9 @@ func TestAccountInfoFileRejectsUnsafeReadPermissions(t *testing.T) {
 			}
 			if _, ok := store.AuthData(); ok || store.Err() == nil {
 				t.Fatalf("unsafe cached session was trusted: ok=%t err=%v", ok, store.Err())
+			}
+			if errors.Is(store.Err(), ErrInvalidAccountInfo) {
+				t.Fatalf("unsafe permissions were classified as a recoverable cache miss: %v", store.Err())
 			}
 			if _, err := NewClient(context.Background(), "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path))); err == nil {
 				t.Fatal("NewClient accepted unsafe cached session")
@@ -367,7 +372,19 @@ func TestAccountInfoFileAtomicReplacement(t *testing.T) {
 			}
 		}(item.store, item.value)
 	}
-	for i := 0; i < 200; i++ {
+	// Keep reading until both writers are done, so every read can land between
+	// a writer's truncate and write if Set is not atomic.
+	writersDone := make(chan struct{})
+	go func() { wg.Wait(); close(writersDone) }()
+read:
+	for i := 0; ; i++ {
+		select {
+		case <-writersDone:
+			if i >= 200 {
+				break read
+			}
+		default:
+		}
 		content, err := os.ReadFile(path)
 		// On Windows a reader momentarily collides with a concurrent writer's
 		// atomic rename (ERROR_SHARING_VIOLATION); that is expected OS behavior,
@@ -379,16 +396,16 @@ func TestAccountInfoFileAtomicReplacement(t *testing.T) {
 		}
 		if err != nil {
 			errors <- err
-			break
+			break read
 		}
 		var data AuthData
 		if err := json.Unmarshal(content, &data); err != nil {
 			errors <- fmt.Errorf("observed partial JSON: %w", err)
-			break
+			break read
 		}
 		if data.AccountID != data.AuthToken || (data.AccountID != "first" && data.AccountID != "second") {
 			errors <- fmt.Errorf("observed mixed snapshot: %+v", data)
-			break
+			break read
 		}
 	}
 	wg.Wait()
@@ -532,9 +549,9 @@ func newAccountInfoWire(t *testing.T) *accountInfoWire {
 				onAuth(call)
 			}
 			if allowed == "" {
-				allowed = `{"buckets":null,"namePrefix":null}`
+				allowed = `{"buckets":null,"capabilities":["listBuckets"],"namePrefix":null}`
 			}
-			_, _ = fmt.Fprintf(out, `{"accountId":"account","authorizationToken":"token-%d","apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"recommendedPartSize":100000000,"apiUrl":%q,"downloadUrl":%q,"s3ApiUrl":%q,"allowed":%s,"capabilities":["listBuckets"]}}}`, call, w.server.URL, w.server.URL, w.server.URL, allowed)
+			_, _ = fmt.Fprintf(out, `{"accountId":"account","authorizationToken":"token-%d","apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"recommendedPartSize":100000000,"apiUrl":%q,"downloadUrl":%q,"s3ApiUrl":%q,"allowed":%s}}}`, call, w.server.URL, w.server.URL, w.server.URL, allowed)
 		case strings.HasSuffix(req.URL.Path, "/b2_list_buckets"):
 			w.mu.Lock()
 			w.listCalls++
@@ -783,9 +800,11 @@ func TestAccountInfoDoesNotReuseAnotherKeyID(t *testing.T) {
 	}
 }
 
+// The v4 storage scope is nested under allowed:
+// https://www.backblaze.com/apidocs/b2-authorize-account
 func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	wire := newAccountInfoWire(t)
-	wire.allowedJSON = `{"buckets":[{"id":"restricted-id","name":"restricted"}],"namePrefix":"prefix/"}`
+	wire.allowedJSON = `{"buckets":[{"id":"restricted-id","name":"restricted"}],"capabilities":["readFiles","bypassGovernance"],"namePrefix":"prefix/"}`
 	path := filepath.Join(t.TempDir(), "private", "account.json")
 	ctx := context.Background()
 	store := NewAccountInfoFile(path)
@@ -796,6 +815,9 @@ func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	if !ok || !reflect.DeepEqual(data.AllowedBuckets, []string{"restricted-id"}) || data.AllowedPrefix != "prefix/" {
 		t.Fatalf("stored restricted scope = %+v, ok=%t", data, ok)
 	}
+	if want := []string{"readFiles", "bypassGovernance"}; !slices.Equal(data.AllowedCapabilities, want) {
+		t.Errorf("stored AllowedCapabilities = %q, want %q", data.AllowedCapabilities, want)
+	}
 	fresh, err := NewClient(ctx, "key-id", "application-key-secret", APIBase(wire.server.URL), WithAccountInfo(NewAccountInfoFile(path)))
 	if err != nil {
 		t.Fatal(err)
@@ -803,6 +825,9 @@ func TestAccountInfoRestrictedScopeRoundTrip(t *testing.T) {
 	restored := fresh.backend.(*beRoot).b2i.(*b2Root).authData()
 	if !reflect.DeepEqual(restored.AllowedBuckets, data.AllowedBuckets) || restored.AllowedPrefix != data.AllowedPrefix {
 		t.Fatalf("restored scope = %+v, want %+v", restored, data)
+	}
+	if want := []string{"readFiles", "bypassGovernance"}; !slices.Equal(restored.AllowedCapabilities, want) {
+		t.Errorf("restored AllowedCapabilities = %q, want %q", restored.AllowedCapabilities, want)
 	}
 	wire.mu.Lock()
 	defer wire.mu.Unlock()

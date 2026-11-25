@@ -6,7 +6,7 @@
 // a non-2xx response; they never silently succeed.
 // With valid simulator authorization, b2_hide_file, b2_list_unfinished_large_files
 // (so Writer.Resume), b2_list_parts, b2_copy_file, b2_copy_part (so Copy and
-// Compose with copied parts), b2_download_file_by_id, b2_get_download_authorization,
+// Compose with copied parts), b2_get_download_authorization,
 // b2_get_bucket_notification_rules, b2_set_bucket_notification_rules,
 // b2_update_file_retention, b2_update_file_legal_hold, b2_create_key (v4),
 // b2_list_keys, and b2_delete_key return HTTP 501 unsupported_operation.
@@ -63,6 +63,7 @@ type largeFile struct {
 }
 
 // Simulator is an independent, concurrency-safe in-memory B2 service.
+// Construct it with New; the zero value is not usable.
 // It stores bucket and file settings but does not enforce retention, replication,
 // encryption, lifecycle, or download-authorization policies.
 type Simulator struct {
@@ -142,6 +143,11 @@ func rawReply(req *http.Request, status int, data []byte, headers http.Header) *
 
 func failure(req *http.Request, status int, code, message string) (*http.Response, error) {
 	return reply(req, status, map[string]any{"status": status, "code": code, "message": message})
+}
+
+func missingBucket(req *http.Request, id string) (*http.Response, error) {
+	// b2 also uses this message to classify missing-bucket errors.
+	return failure(req, http.StatusBadRequest, "bad_bucket_id", fmt.Sprintf("Bucket %s does not exist", id))
 }
 
 func decode(data []byte) (map[string]any, error) {
@@ -283,7 +289,7 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		operation = "b2_download_file_by_name"
 	}
 	s.calls[operation]++
-	if strings.HasPrefix(path, "/file/") {
+	if strings.HasPrefix(path, "/file/") || path == "/b2api/v4/b2_download_file_by_id" {
 		return s.download(req)
 	}
 	if strings.HasPrefix(path, "/upload/file/") {
@@ -305,8 +311,11 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 			"apiInfo": map[string]any{"storageApi": map[string]any{
 				"absoluteMinimumPartSize": absoluteMinimumPartSize, "recommendedPartSize": 100_000_000,
 				"apiUrl": origin, "downloadUrl": origin, "s3ApiUrl": origin, "storageApi": "storage",
-				"capabilities": []string{"listBuckets", "writeBuckets", "readBuckets", "writeFiles", "readFiles", "deleteFiles"},
-				"allowed":      map[string]any{"buckets": nil, "capabilities": []string{}, "namePrefix": nil},
+				"allowed": map[string]any{
+					"buckets":      nil,
+					"capabilities": []string{"listBuckets", "writeBuckets", "readBuckets", "writeFiles", "readFiles", "deleteFiles"},
+					"namePrefix":   nil,
+				},
 			}},
 		})
 	}
@@ -355,6 +364,8 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 		s.buckets[b.id] = b
 		return reply(req, 200, b.response())
 	case "b2_list_buckets":
+		// Bucket filters return an empty list when nothing matches; they do
+		// not have the missing-bucket errors of operations on a bucket.
 		result := make([]any, 0)
 		for _, b := range s.buckets {
 			if filter := str(args["bucketId"]); filter != "" && filter != b.id {
@@ -384,7 +395,7 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 	case "b2_update_bucket":
 		b := s.buckets[str(args["bucketId"])]
 		if b == nil {
-			return failure(req, 404, "not_found", "bucket not found")
+			return missingBucket(req, str(args["bucketId"]))
 		}
 		if revision, present := args["ifRevisionIs"]; present {
 			if value, ok := revision.(float64); !ok || value != float64(b.revision) {
@@ -423,14 +434,14 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 	case "b2_delete_bucket":
 		b := s.buckets[str(args["bucketId"])]
 		if b == nil {
-			return failure(req, 404, "not_found", "bucket not found")
+			return missingBucket(req, str(args["bucketId"]))
 		}
 		if len(b.versions) != 0 {
-			return failure(req, 400, "bad_request", "bucket is not empty")
+			return failure(req, 400, "cannot_delete_non_empty_bucket", "bucket is not empty")
 		}
 		for _, upload := range s.large {
 			if upload.file.bucketID == b.id {
-				return failure(req, 400, "bad_request", "bucket has unfinished large files")
+				return failure(req, 400, "cannot_delete_non_empty_bucket", "bucket has unfinished large files")
 			}
 		}
 		delete(s.buckets, b.id)
@@ -438,13 +449,13 @@ func (s *Simulator) RoundTrip(req *http.Request) (*http.Response, error) {
 	case "b2_get_upload_url":
 		id := str(args["bucketId"])
 		if s.buckets[id] == nil {
-			return failure(req, 404, "not_found", "bucket not found")
+			return missingBucket(req, id)
 		}
 		return reply(req, 200, map[string]any{"uploadUrl": origin + "/upload/file/" + id, "authorizationToken": "b2sim-token"})
 	case "b2_start_large_file":
 		id := str(args["bucketId"])
 		if s.buckets[id] == nil {
-			return failure(req, 404, "not_found", "bucket not found")
+			return missingBucket(req, id)
 		}
 		fileSSE := args["serverSideEncryption"]
 		if fileSSE == nil {
@@ -509,7 +520,7 @@ func (s *Simulator) upload(req *http.Request, bucketID string, data []byte) (*ht
 	}
 	b := s.buckets[bucketID]
 	if b == nil {
-		return failure(req, 404, "not_found", "bucket not found")
+		return missingBucket(req, bucketID)
 	}
 	name, err := url.QueryUnescape(req.Header.Get("X-Bz-File-Name"))
 	if err != nil || name == "" {
@@ -600,7 +611,7 @@ func (s *Simulator) finish(req *http.Request, args map[string]any) (*http.Respon
 	f.stamp = time.Now().UnixMilli()
 	b := s.buckets[f.bucketID]
 	if b == nil {
-		return failure(req, 404, "not_found", "bucket not found")
+		return missingBucket(req, f.bucketID)
 	}
 	s.next++
 	f.order = s.next
@@ -612,7 +623,7 @@ func (s *Simulator) finish(req *http.Request, args map[string]any) (*http.Respon
 func (s *Simulator) list(req *http.Request, method string, args map[string]any) (*http.Response, error) {
 	b := s.buckets[str(args["bucketId"])]
 	if b == nil {
-		return failure(req, 404, "not_found", "bucket not found")
+		return missingBucket(req, str(args["bucketId"]))
 	}
 	versions := append([]*version(nil), b.versions...)
 	sort.Slice(versions, func(i, j int) bool {
@@ -681,21 +692,32 @@ func (s *Simulator) download(req *http.Request) (*http.Response, error) {
 	if (req.Method != http.MethodGet && req.Method != http.MethodHead) || req.Header.Get("Authorization") != "b2sim-token" {
 		return failure(req, 401, "bad_auth_token", "download authorization required")
 	}
-	parts := strings.SplitN(strings.TrimPrefix(req.URL.EscapedPath(), "/file/"), "/", 2)
-	if len(parts) != 2 {
-		return failure(req, 404, "not_found", "file not found")
-	}
-	name, err := url.QueryUnescape(parts[1])
-	if err != nil {
-		return failure(req, 400, "bad_request", "invalid file name")
-	}
 	var f *version
-	for _, b := range s.buckets {
-		if b.name == parts[0] {
-			for i := len(b.versions) - 1; i >= 0; i-- {
-				if b.versions[i].name == name {
-					f = b.versions[i]
-					break
+	if req.URL.Path == "/b2api/v4/b2_download_file_by_id" {
+		id := req.URL.Query().Get("fileId")
+		for _, b := range s.buckets {
+			for _, v := range b.versions {
+				if v.id == id {
+					f = v
+				}
+			}
+		}
+	} else {
+		parts := strings.SplitN(strings.TrimPrefix(req.URL.EscapedPath(), "/file/"), "/", 2)
+		if len(parts) != 2 {
+			return failure(req, 404, "not_found", "file not found")
+		}
+		name, err := url.QueryUnescape(parts[1])
+		if err != nil {
+			return failure(req, 400, "bad_request", "invalid file name")
+		}
+		for _, b := range s.buckets {
+			if b.name == parts[0] {
+				for i := len(b.versions) - 1; i >= 0; i-- {
+					if b.versions[i].name == name {
+						f = b.versions[i]
+						break
+					}
 				}
 			}
 		}

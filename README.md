@@ -94,12 +94,12 @@ key := os.Getenv("B2_APPLICATION_KEY")
 ctx := context.Background()
 
 // b2_authorize_account
-b2, err := b2.NewClient(ctx, id, key)
+client, err := b2.NewClient(ctx, id, key)
 if err != nil {
 	log.Fatalln(err)
 }
 
-buckets, err := b2.ListBuckets(ctx)
+buckets, err := client.ListBuckets(ctx)
 if err != nil {
 	log.Fatalln(err)
 }
@@ -115,10 +115,13 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, src, dst string) error {
 	}
 	defer f.Close()
 
+	uploadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	obj := bucket.Object(dst)
-	w := obj.NewWriter(ctx)
+	w := obj.NewWriter(uploadCtx)
 	if _, err := io.Copy(w, f); err != nil {
-		w.Close()
+		cancel() // Prevent Close from committing a partial upload.
+		_ = w.Close()
 		return err
 	}
 	return w.Close()
@@ -141,10 +144,13 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, writers int, src, dst stri
 	}
 	defer f.Close()
 
-	w := bucket.Object(dst).NewWriter(ctx)
+	uploadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	w := bucket.Object(dst).NewWriter(uploadCtx)
 	w.ConcurrentUploads = writers
 	if _, err := io.Copy(w, f); err != nil {
-		w.Close()
+		cancel() // Prevent Close from committing a partial upload.
+		_ = w.Close()
 		return err
 	}
 	return w.Close()
@@ -156,25 +162,39 @@ This uploads up to `writers` parts at a time. `ChunkSize` sets the part size: 10
 
 ### Download a file from B2
 
-Downloading is as simple as uploading:
+Downloading is as simple as uploading. This example uses `context`, `io`, `os`, and `path/filepath`:
 
 ```go
 func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, dst string) error {
 	r := bucket.Object(src).NewReader(ctx)
 	defer r.Close()
 
-	f, err := os.Create(dst)
+	f, err := os.CreateTemp(filepath.Dir(dst), ".download-*")
 	if err != nil {
 		return err
 	}
+	defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
 	r.ConcurrentDownloads = downloads
 	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
 		return err
 	}
-	return f.Close()
+	if info, err := os.Stat(dst); err == nil {
+		if err := f.Chmod(info.Mode().Perm()); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), dst)
 }
 ```
+
+The temporary file is created in the destination directory so a failed download leaves the destination
+untouched. Existing permission bits are preserved; new files have mode `0600`. On Windows, replacement
+can fail if the destination is open.
 
 ### List all objects in a bucket
 
@@ -182,7 +202,7 @@ func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, ds
 func printObjects(ctx context.Context, bucket *b2.Bucket) error {
 	iterator := bucket.List(ctx)
 	for iterator.Next() {
-		fmt.Println(iterator.Object())
+		fmt.Println(iterator.Object().Name())
 	}
 	return iterator.Err()
 }

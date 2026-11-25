@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
@@ -983,6 +984,34 @@ func TestComposeCancelsLargeFileAfterPartFailure(t *testing.T) {
 	assertComposeCancelsLargeFile(t, wire)
 	if len(finishes) != 0 {
 		t.Errorf("finish called after part failure: %#v", finishes)
+	}
+}
+
+func TestComposeWholeSourceRejectionCancelsLargeFile(t *testing.T) {
+	// An omitted range copies the entire source; B2 enforces its part limit:
+	// https://www.backblaze.com/apidocs/b2-copy-part
+	wire := newComposeWire(t)
+	wire.failCopyPart = 2
+	object, err := wire.bucket(t).Compose(t.Context(), "whole-source", []ComposePart{
+		PartFromCopy("ranged-source", "bytes=0-4999999"),
+		PartFromCopy("whole-source", ""),
+	})
+	if status, code, message := base.MsgCode(err); status != 400 || code != "bad_request" || message != "copy part failed" {
+		t.Fatalf("Compose error = %v (%d, %q, %q), want scripted copy-part error", err, status, code, message)
+	}
+	if object != nil {
+		t.Fatalf("Compose returned an object after rejection: %v", object)
+	}
+	calls, copies, finishes, _ := wire.snapshot()
+	if want := []string{"start", "copy:1", "copy:2", "cancel"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("whole-source calls = %v, want %v", calls, want)
+	}
+	if len(copies) != 2 || !reflect.DeepEqual(copies[1], map[string]any{"sourceFileId": "whole-source", "largeFileId": "large", "partNumber": float64(2)}) {
+		t.Fatalf("whole-source copy requests = %#v, want an omitted range on part 2", copies)
+	}
+	assertComposeCancelsLargeFile(t, wire)
+	if len(finishes) != 0 {
+		t.Fatalf("finished a rejected whole-source copy: %#v", finishes)
 	}
 }
 

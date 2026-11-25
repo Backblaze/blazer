@@ -9,6 +9,8 @@ coding agents and new contributors; `CLAUDE.md` points here. Keep it under about
 - Build: `go build ./...` · Vet: `go vet ./...` · Format: `gofmt -l .` must print nothing (`make fmt` fixes).
 - Test: `go test -race -shuffle=on ./...`. Integration tests in `b2/integration_test.go` run against live B2
   only when `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` are set; otherwise they skip.
+- Known defects: `make known-defects` runs tests (tag `knowndefect`) that fail until an open defect is fixed;
+  they are not part of `make ci`. See [docs/testing.md](docs/testing.md#known-defect-tests).
 - Lint: `make lint` (golangci-lint v2.14.0, only findings new since `origin/main`).
 - Module hygiene: `go mod tidy -diff` and `go mod verify` must be clean.
 - `bin/b2keys` is a separate module in the Go workspace (`go.work`): `make b2keys`.

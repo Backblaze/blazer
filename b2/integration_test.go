@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -31,6 +32,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/base"
+	"github.com/Backblaze/blazer/internal/b2types"
 	"github.com/Backblaze/blazer/internal/blog"
 	"github.com/Backblaze/blazer/x/transport"
 )
@@ -41,6 +44,81 @@ const (
 
 	errVar = "B2_TRANSIENT_ERRORS"
 )
+
+// A successful live create whose reply is lost must not create another key.
+func TestOutcomeUnknownKeyCreationLive(t *testing.T) {
+	id, secret := os.Getenv(apiID), os.Getenv(apiKey)
+	if id == "" || secret == "" {
+		t.Skip("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	name := fmt.Sprintf("outcome-unknown-%s-%d", uniq, time.Now().UnixNano())
+	var attempts, faultAt atomic.Int64
+	trip := bucketInfoRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-Blazer-Method") != "b2_create_key" {
+			return defaultTransport.RoundTrip(req)
+		}
+		attempt := attempts.Add(1)
+		resp, err := defaultTransport.RoundTrip(req)
+		if err == nil && resp.StatusCode == http.StatusOK && faultAt.CompareAndSwap(0, attempt) {
+			// Consume the real successful reply without returning its key material.
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			return nil, io.EOF
+		}
+		return resp, err
+	})
+	client, err := NewClient(ctx, id, secret, append([]ClientOption{Transport(trip)}, endpointOpts()...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), time.Minute)
+		defer done()
+		for pass := 0; pass < 2; pass++ {
+			var matches []*Key
+			var cursor string
+			for {
+				keys, next, err := client.ListKeys(cleanup, 1000, cursor)
+				if err != nil && err != io.EOF {
+					t.Errorf("cleanup ListKeys: %v", err)
+					return
+				}
+				for _, key := range keys {
+					if key.Name() == name {
+						matches = append(matches, key)
+					}
+				}
+				if err == io.EOF || next == "" {
+					break
+				}
+				cursor = next
+			}
+			if pass == 1 {
+				if len(matches) != 0 {
+					t.Errorf("cleanup left %d test keys", len(matches))
+				}
+				return
+			}
+			for _, key := range matches {
+				if err := key.Delete(cleanup); err != nil {
+					t.Errorf("cleanup Delete: %v", err)
+				}
+			}
+		}
+	})
+	_, err = client.CreateKey(ctx, name, Capabilities("listFiles"), Lifetime(time.Hour))
+	if faultAt.Load() == 0 {
+		t.Fatal("did not observe a successful create to inject the lost reply")
+	}
+	if got, want := attempts.Load(), faultAt.Load(); got != want {
+		t.Errorf("create attempts=%d, want %d (no replay after the lost reply)", got, want)
+	}
+	if base.Action(err) != base.OutcomeUnknown || !errors.Is(err, base.ErrOutcomeUnknown) || !errors.Is(err, io.EOF) {
+		t.Errorf("CreateKey error=%v action=%v, want outcome unknown wrapping EOF", err, base.Action(err))
+	}
+}
 
 func TestReadWriteLive(t *testing.T) {
 	ctx := context.Background()
@@ -78,6 +156,46 @@ func TestReadWriteLive(t *testing.T) {
 	}
 }
 
+func TestReaderPinsVersionLive(t *testing.T) {
+	bucket, done := startLiveTest(context.Background(), t)
+	defer done()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	const name = "pinned-version"
+	old := bucket.Object(name)
+	write := func(object *Object, body string) {
+		t.Helper()
+		writer := object.NewWriter(ctx)
+		if _, err := io.WriteString(writer, body); err != nil {
+			_ = writer.Close()
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(old, "AAAAAAAA")
+	reader := bucket.Object(name).NewReader(ctx)
+	reader.ChunkSize, reader.ConcurrentDownloads = 4, 1
+	defer func() { _ = reader.Close() }()
+	first := make([]byte, 4)
+	if _, err := io.ReadFull(reader, first); err != nil || string(first) != "AAAA" {
+		t.Fatalf("first chunk = %q, %v; want AAAA, nil", first, err)
+	}
+	write(bucket.Object(name), "BBBBBBBB")
+	rest, err := io.ReadAll(reader)
+	if err != nil || string(rest) != "AAAA" {
+		t.Fatalf("remaining old version = %q, %v; want AAAA, nil", rest, err)
+	}
+	historical := old.NewReader(ctx)
+	historical.ChunkSize, historical.ConcurrentDownloads = 3, 3
+	defer func() { _ = historical.Close() }()
+	got, err := io.ReadAll(historical)
+	if err != nil || string(got) != "AAAAAAAA" {
+		t.Fatalf("historical handle = %q, %v; want AAAAAAAA, nil", got, err)
+	}
+}
+
 func TestReaderFromLive(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -107,7 +225,8 @@ func TestReaderFromLive(t *testing.T) {
 			writers: 12,
 		},
 		{
-			// with offset, seeks back to start after turning it into a ReaderAt
+			// Honor the source offset: io.ReaderFrom consumes the remaining
+			// 200 bytes from position 50, not all 250 bytes from the start.
 			size: 250,
 			pos:  50,
 		},
@@ -123,8 +242,9 @@ func TestReaderFromLive(t *testing.T) {
 		if err != nil {
 			t.Errorf("ReadFrom(): %v", err)
 		}
-		if n != e.size {
-			t.Errorf("ReadFrom(): got %d bytes, wanted %d bytes", n, e.size)
+		want := e.size - e.pos
+		if n != want {
+			t.Errorf("ReadFrom(): got %d bytes, wanted %d bytes", n, want)
 		}
 		if err := w.Close(); err != nil {
 			t.Errorf("w.Close(): %v", err)
@@ -245,6 +365,49 @@ func TestCopyLive(t *testing.T) {
 	}
 	if err := readFile(ctx, destination, sourceSHA1, 1024, 1); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestComposeLive(t *testing.T) {
+	// Keep the standard helper's cleanup independent of the operation deadline.
+	bucket, done := startLiveTest(context.Background(), t)
+	defer done()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+
+	source := bucket.Object("compose-source")
+	writer := source.NewWriter(ctx)
+	if _, err := writer.Write([]byte("[copied!]")); err != nil {
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	uploaded := bytes.Repeat([]byte("x"), 5_000_000)
+	object, err := bucket.Compose(ctx, "composed", []ComposePart{
+		PartFromReader(bytes.NewReader(uploaded), 5_000_000),
+		PartFromCopy(source.ID(), "bytes=1-7"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := object.NewReader(ctx)
+	got, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read composed file: read=%v close=%v", readErr, closeErr)
+	}
+	want := append(bytes.Repeat([]byte("x"), 5_000_000), []byte("copied!")...)
+	if len(got) != 5_000_007 || !bytes.Equal(got, want) {
+		t.Fatalf("composed bytes differ: got %d bytes, want exactly 5000007 bytes with uploaded data followed by copied!", len(got))
+	}
+	attrs, err := object.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.Size != 5_000_007 {
+		t.Fatalf("composed size = %d, want 5000007", attrs.Size)
 	}
 }
 
@@ -714,6 +877,64 @@ func compare(a, b *BucketAttrs) bool {
 	return reflect.DeepEqual(a.LifecycleRules, b.LifecycleRules)
 }
 
+func TestBucketClearCORSLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	bucket, done := startLiveTest(ctx, t)
+	defer done()
+	rule := CORSRule{Name: "browser", AllowedOrigins: []string{"https://example.com"}, AllowedOperations: []string{"b2_download_file_by_name"}, MaxAgeSeconds: 3600}
+	if err := bucket.Update(ctx, &BucketAttrs{CORSRules: []CORSRule{rule}}); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := bucket.Attrs(ctx)
+	if err != nil || len(attrs.CORSRules) != 1 || attrs.CORSRules[0].Name != "browser" {
+		t.Fatalf("after setting CORS: attrs=%+v, err=%v; want browser rule", attrs, err)
+	}
+	if err := bucket.Update(ctx, &BucketAttrs{CORSRules: []CORSRule{}}); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err = bucket.Attrs(ctx)
+	if err != nil || len(attrs.CORSRules) != 0 {
+		t.Fatalf("after clearing CORS: attrs=%+v, err=%v; want no rules", attrs, err)
+	}
+}
+
+func TestNewBucketDefaultRetentionLive(t *testing.T) {
+	id, key := os.Getenv(apiID), os.Getenv(apiKey)
+	if id == "" || key == "" {
+		t.Skip("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := NewClient(ctx, id, key, endpointOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.NewBucket(ctx, fmt.Sprintf("%s-default-retention-%s", id, uniq), &BucketAttrs{
+		Type: Private, FileLockEnabled: true,
+		DefaultRetention: &Retention{Mode: "governance", Period: &RetentionPeriod{Duration: 7, Unit: "days"}},
+	})
+	if bucket != nil {
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cleanupCancel()
+			if err := bucket.Delete(cleanupCtx); err != nil {
+				t.Errorf("delete scratch bucket: %v", err)
+			}
+		}()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := bucket.Attrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs.DefaultRetention == nil || attrs.DefaultRetention.Mode != "governance" || attrs.DefaultRetention.Period == nil || attrs.DefaultRetention.Period.Duration != 7 || attrs.DefaultRetention.Period.Unit != "days" {
+		t.Fatalf("default retention = %+v, want governance for 7 days", attrs.DefaultRetention)
+	}
+}
+
 func TestNewBucket(t *testing.T) {
 	id := os.Getenv(apiID)
 	key := os.Getenv(apiKey)
@@ -724,7 +945,7 @@ func TestNewBucket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	client, err := NewClient(ctx, id, key)
+	client, err := NewClient(ctx, id, key, endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +1021,7 @@ func TestBucketDefaultEncryption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	client, err := NewClient(ctx, id, key)
+	client, err := NewClient(ctx, id, key, endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1026,6 +1247,46 @@ func TestZeroByteObject(t *testing.T) {
 	}
 }
 
+// TestListHiddenDelimiterFolderBoundaryLive checks real B2 pagination across a
+// virtual folder while preserving every version on either side of it.
+func TestListHiddenDelimiterFolderBoundaryLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	bucket, done := startLiveTest(ctx, t)
+	defer done()
+
+	for _, name := range []string{"a", "a", "dir/inside", "z", "z"} {
+		w := bucket.Object(name).NewWriter(ctx)
+		if _, err := io.WriteString(w, "test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	iter := bucket.List(ctx, ListHidden(), ListDelimiter("/"), ListPageSize(1))
+	var names []string
+	ids := make(map[string]bool)
+	for iter.Next() {
+		obj := iter.Object()
+		names = append(names, obj.Name())
+		if id := obj.ID(); id == "" || ids[id] {
+			t.Errorf("listed version %q has empty or duplicate ID %q", obj.Name(), id)
+		} else {
+			ids[id] = true
+		}
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// ListHidden excludes the virtual folder entry, but returns both versions
+	// of each top-level file on either side of it.
+	if want := []string{"a", "a", "z", "z"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("version listing = %q, want %q", names, want)
+	}
+}
+
 func TestListUnfinishedLargeFiles(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -1045,13 +1306,42 @@ func TestListUnfinishedLargeFiles(t *testing.T) {
 	iter := bucket.List(ctx, ListUnfinished())
 	var names []string
 	for iter.Next() {
-		names = append(names, iter.Object().Name())
+		obj := iter.Object()
+		names = append(names, obj.Name())
+		// Regression for #333: the unfinished large file, built from B2's real
+		// b2_list_unfinished_large_files response, must report Started and not Unknown.
+		attrs, err := obj.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.Status != Started {
+			t.Errorf("unfinished %q Attrs().Status = %v, want %v", obj.Name(), attrs.Status, Started)
+		}
 	}
 	if err := iter.Err(); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{largeFileName}; !reflect.DeepEqual(names, want) {
 		t.Errorf("ListUnfinishedLargeFiles: got %q, want %q", names, want)
+	}
+	for _, tc := range []struct {
+		prefix string
+		want   []string
+	}{
+		{largeFileName, []string{largeFileName}},
+		{largeFileName + "-nonmatching", nil},
+	} {
+		iter := bucket.List(ctx, ListUnfinished(), ListPrefix(tc.prefix))
+		var got []string
+		for iter.Next() {
+			got = append(got, iter.Object().Name())
+		}
+		if err := iter.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("ListUnfinished with prefix %q: got %q, want %q", tc.prefix, got, tc.want)
+		}
 	}
 }
 
@@ -1173,7 +1463,7 @@ func TestListBucketsWithKey(t *testing.T) {
 		}
 	}()
 
-	client, err := NewClient(ctx, key.ID(), key.Secret())
+	client, err := NewClient(ctx, key.ID(), key.Secret(), endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1202,7 +1492,7 @@ func TestListBucketContentsWithKey(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	client, err := NewClient(ctx, key.ID(), key.Secret())
+	client, err := NewClient(ctx, key.ID(), key.Secret(), endpointOpts()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1279,7 +1569,7 @@ func TestMultiBucketKeyListsAllowedBuckets(t *testing.T) {
 	}()
 
 	// Authorizing with a multi-bucket key only works against v4.
-	mbClient, err := NewClient(ctx, key.ID(), key.Secret())
+	mbClient, err := NewClient(ctx, key.ID(), key.Secret(), endpointOpts()...)
 	if err != nil {
 		t.Fatalf("NewClient with multi-bucket key: %v", err)
 	}
@@ -1597,7 +1887,7 @@ func startLiveTest(ctx context.Context, t *testing.T) (*Bucket, func()) {
 	ccport := &ccTripper{rt: defaultTransport, t: t}
 	tport := eofTripper{rt: ccport, t: t}
 	errport := transport.WithFailures(tport, transport.FailureRate(.25), transport.MatchPathSubstring("/b2_get_upload_url"), transport.Response(503))
-	client, err := NewClient(ctx, id, key, FailSomeUploads(), ExpireSomeAuthTokens(), Transport(errport), UserAgent("b2-test"), UserAgent("integration-test"))
+	client, err := NewClient(ctx, id, key, append([]ClientOption{FailSomeUploads(), ExpireSomeAuthTokens(), Transport(errport), UserAgent("b2-test"), UserAgent("integration-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 		return nil, nil
@@ -1632,4 +1922,212 @@ func startLiveTest(ctx context.Context, t *testing.T) (*Bucket, func()) {
 		}
 	}
 	return bucket, f
+}
+
+// TestReplicationDestinationPartialUpdateLive verifies that a metadata-only
+// update needs no replication-write capability and preserves the destination.
+func TestReplicationDestinationPartialUpdateLive(t *testing.T) {
+	id, secret := os.Getenv(apiID), os.Getenv(apiKey)
+	if id == "" || secret == "" {
+		t.Skip("B2_APPLICATION_KEY_ID or B2_APPLICATION_KEY unset; skipping integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := NewClient(ctx, id, secret, endpointOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buckets []*Bucket
+	var keys []*Key
+	// This test creates two buckets and three scoped keys. Cleanup must still
+	// work after the operation context expires or a setup step fails.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		for _, bucket := range buckets {
+			if err := bucket.Delete(cleanupCtx); err != nil {
+				t.Errorf("cleanup replication bucket: %v", err)
+			}
+		}
+		for _, key := range keys {
+			if err := key.Delete(cleanupCtx); err != nil {
+				t.Errorf("cleanup replication key: %v", err)
+			}
+		}
+	})
+	for _, role := range []string{"source", "destination"} {
+		bucket, err := client.NewBucket(ctx, "blazer-repl-"+role+"-"+uniq, &BucketAttrs{Type: Private})
+		if err != nil {
+			t.Fatal(err)
+		}
+		buckets = append(buckets, bucket)
+	}
+	source, destination := buckets[0], buckets[1]
+	for _, entry := range []struct {
+		bucket *Bucket
+		name   string
+		caps   []string
+	}{
+		{source, "source", []string{"readFiles", "readFileLegalHolds", "readFileRetentions"}},
+		{destination, "destination", []string{"writeFiles", "writeFileLegalHolds", "writeFileRetentions", "deleteFiles"}},
+		// Cached SSE settings are still resent by unrelated updates (#108).
+		// Allow that write here to isolate the missing replication-write capability.
+		{destination, "metadata", []string{"listBuckets", "writeBuckets", "readBucketReplications", "writeBucketEncryption"}},
+	} {
+		key, err := entry.bucket.CreateKey(ctx, "blazer-repl-"+entry.name+"-"+uniq, Capabilities(entry.caps...), Lifetime(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key)
+	}
+	want := map[string]string{keys[0].ID(): keys[1].ID()}
+	if err := destination.Update(ctx, &BucketAttrs{ReplicationConfig: &ReplicationConfiguration{
+		AsReplicationDestination: &AsReplicationDestination{SourceToDestinationKeyMapping: want},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	limited, err := NewClient(ctx, keys[2].ID(), keys[2].Secret(), endpointOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := limited.Bucket(ctx, destination.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"first", "second"} {
+		if err := dst.Update(ctx, &BucketAttrs{Info: map[string]string{"metadata": value}}); err != nil {
+			t.Fatalf("metadata update without replication-write capability: %v", err)
+		}
+		attrs, err := destination.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.Info["metadata"] != value {
+			t.Errorf("metadata = %q, want %q", attrs.Info["metadata"], value)
+		}
+		if attrs.ReplicationConfig == nil || attrs.ReplicationConfig.AsReplicationDestination == nil ||
+			!reflect.DeepEqual(attrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping, want) {
+			t.Fatal("metadata-only update did not preserve the destination key mapping")
+		}
+	}
+	// Bypass high-level validation to pin why nil/empty maps are unsupported:
+	// the current wire encoder omits them, and B2 requires the mapping field.
+	// This checks field presence, not whether B2 accepts a present empty object.
+	raw, err := base.AuthorizeAccount(ctx, id, secret, authEndpointOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := raw.ListBuckets(ctx, destination.Name())
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list destination for mapping contract: buckets=%d error=%v", len(listed), err)
+	}
+	for _, mapping := range []map[string]string{nil, {}} {
+		listed[0].ReplicationConfiguration = &b2types.ReplicationConfiguration{
+			AsReplicationDestination: &b2types.AsReplicationDestination{SourceToDestinationKeyMapping: mapping},
+		}
+		_, err := listed[0].Update(ctx)
+		status, code, message := base.MsgCode(err)
+		if status != http.StatusBadRequest || code != "bad_request" || !strings.Contains(message, "sourceToDestinationKeyMapping") {
+			t.Errorf("missing mapping field error = %v, want 400 bad_request naming sourceToDestinationKeyMapping", err)
+		}
+		attrs, err := destination.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.ReplicationConfig == nil || attrs.ReplicationConfig.AsReplicationDestination == nil ||
+			!reflect.DeepEqual(attrs.ReplicationConfig.AsReplicationDestination.SourceToDestinationKeyMapping, want) {
+			t.Fatal("B2 changed the destination mapping after rejecting an omitted required field")
+		}
+	}
+	listed, err = raw.ListBuckets(ctx, source.Name())
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list source for mapping contract: buckets=%d error=%v", len(listed), err)
+	}
+	for _, mapping := range []map[string]string{nil, {}} {
+		listed[0].ReplicationConfiguration = &b2types.ReplicationConfiguration{
+			AsReplicationSource: &b2types.AsReplicationSource{
+				KeyID: keys[0].ID(), ReplicationRules: []b2types.ReplicationRules{{
+					DestinationBucketID: destination.ID(), FileNamePrefix: "demo/" + uniq + "/",
+					IsEnabled: true, Priority: 128, ReplicationRuleName: "mapping-contract",
+				}},
+			},
+			AsReplicationDestination: &b2types.AsReplicationDestination{SourceToDestinationKeyMapping: mapping},
+		}
+		_, err := listed[0].Update(ctx)
+		status, code, message := base.MsgCode(err)
+		if status != http.StatusBadRequest || code != "bad_request" || !strings.Contains(message, "sourceToDestinationKeyMapping") {
+			t.Errorf("source plus omitted mapping field error = %v, want 400 bad_request naming sourceToDestinationKeyMapping", err)
+		}
+		attrs, err := source.Attrs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attrs.ReplicationConfig != nil {
+			t.Fatal("B2 changed source replication after rejecting an omitted required mapping field")
+		}
+	}
+}
+
+// TestResumeShorterSourceLive checks that a shorter source cannot publish an
+// older upload's trailing parts. The unfinished upload remains available.
+func TestResumeShorterSourceLive(t *testing.T) {
+	bucket, done := startLiveTest(context.Background(), t)
+	defer done()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	const name = "resume-shorter-source"
+	part := bytes.Repeat([]byte("r"), 5_000_000)
+	digest := fmt.Sprintf("%x", sha1.Sum(part))
+	large, err := bucket.b.startLargeFile(ctx, name, "application/octet-stream", nil, nil, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := large.getUploadPartURL(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// startLiveTest enables FailSomeUploads testmode, so B2 rejects some uploads
+	// with a 503. The high-level writer retries those; this raw setup path has no
+	// retry layer, so retry here with a fresh part URL before giving up.
+	for number := 1; number <= 5; number++ {
+		var perr error
+		for attempt := 0; attempt < 8; attempt++ {
+			if _, perr = url.uploadPart(ctx, newResetter(part), digest, len(part), number); perr == nil {
+				break
+			}
+			if url, err = large.getUploadPartURL(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if perr != nil {
+			t.Fatalf("upload part %d: %v", number, perr)
+		}
+	}
+	iter := bucket.List(ctx, ListUnfinished(), ListPrefix(name))
+	if !iter.Next() {
+		t.Fatalf("unfinished upload missing: %v", iter.Err())
+	}
+	unfinishedID := iter.Object().ID()
+	w := bucket.Object(name).NewWriter(ctx)
+	w.Resume, w.ChunkSize, w.ConcurrentUploads = true, len(part), 2
+	if _, err := w.ReadFrom(bytes.NewReader(bytes.Repeat(part, 3))); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err == nil || !strings.Contains(err.Error(), "source has fewer parts") {
+		t.Fatalf("Close = %v, want shorter-source error", err)
+	}
+	iter = bucket.List(ctx, ListPrefix(name))
+	if iter.Next() {
+		t.Fatalf("shorter resume published object %q", iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	iter = bucket.List(ctx, ListUnfinished(), ListPrefix(name))
+	if !iter.Next() {
+		t.Fatalf("unfinished upload missing after rejection: %v", iter.Err())
+	}
+	if got := iter.Object().ID(); got != unfinishedID {
+		t.Fatalf("unfinished ID = %q, want %q", got, unfinishedID)
+	}
 }

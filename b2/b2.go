@@ -33,22 +33,25 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
 // Client is a Backblaze B2 client.
 type Client struct {
+	redactedClientValue
 	backend beRootInterface
 
 	slock    sync.Mutex
-	sWriters map[string]*Writer
-	sReaders map[string]*Reader
+	sWriters map[*Writer]string
+	sReaders map[*Reader]string
 	sMethods []methodCounter
 	opts     clientOptions
 }
@@ -78,14 +81,14 @@ func NewClient(ctx context.Context, account, key string, opts ...ClientOption) (
 		c.opts.accountInfo = &InMemoryAccountInfo{}
 	}
 	c.backend.(*beRoot).accountInfo = c.opts.accountInfo
-	// Probe default writer options before authorization: SSE-C keys are strictly
-	// request-scoped and must not be retained by a Client.
-	probe := &Writer{}
+	// Validate defaults without invoking callbacks: SSE-C keys are request-scoped.
 	for _, option := range c.opts.writerOpts {
-		option(probe)
-	}
-	if probe.ssecRequested || (probe.encryption != nil && probe.encryption.ssec != nil) {
-		return nil, errors.New("b2: SSE-C key cannot be a default writer option; pass it to NewWriter")
+		if option == nil {
+			return nil, errors.New("b2: writer option is nil")
+		}
+		if err := option.validateDefault(); err != nil {
+			return nil, err
+		}
 	}
 	if err := c.backend.authorizeAccount(ctx, account, key, c.opts); err != nil {
 		return nil, err
@@ -109,6 +112,14 @@ type clientOptions struct {
 
 // WithAccountInfo uses the given session store. By default NewClient uses an
 // InMemoryAccountInfo; NewAccountInfoFile opts in to persistence.
+// The store must satisfy AccountInfo's concurrent-call and optional Err contract.
+// A cache miss (ok=false with nil Err or an error matching ErrInvalidAccountInfo)
+// triggers reauthorization. The sentinel does not invalidate ok=true data;
+// otherwise complete sessions for the requested key may still be reused.
+// Other read errors and errors observed after Set or Clear are returned.
+// Err reflects the most recent operation from any caller; when a store is shared
+// across clients, another call can overwrite an error or expose it to a different
+// client before it is checked. Use separate stores for per-client error isolation.
 func WithAccountInfo(ai AccountInfo) ClientOption {
 	return func(o *clientOptions) {
 		if o.accountInfoSet {
@@ -147,9 +158,40 @@ func UserAgent(agent string) ClientOption {
 }
 
 // APIBase returns a ClientOption specifying the URL root of API requests.
-func APIBase(url string) ClientOption {
+// HTTPS is required except for HTTP endpoints on localhost or a loopback IP.
+// An empty URL uses the default B2 endpoint. For non-loopback HTTP endpoints,
+// use InsecureAPIBase instead.
+func APIBase(rawURL string) ClientOption {
+	return apiBase(rawURL, false)
+}
+
+// InsecureAPIBase is APIBase with an explicit opt-in to plain HTTP as well as
+// HTTPS, including non-loopback endpoints. APIBase already allows loopback HTTP.
+// HTTP sends credentials and data without encryption; use it only for trusted
+// test or self-hosted endpoints.
+func InsecureAPIBase(rawURL string) ClientOption {
+	return apiBase(rawURL, true)
+}
+
+func apiBase(rawURL string, allowHTTP bool) ClientOption {
 	return func(o *clientOptions) {
-		o.apiBase = url
+		if rawURL != "" {
+			u, err := url.Parse(rawURL)
+			if err != nil {
+				o.optionErr = errors.New("b2: invalid APIBase URL")
+				return
+			}
+			if u.Scheme != "https" && u.Scheme != "http" {
+				o.optionErr = errors.New("b2: unsupported APIBase URL scheme; use HTTP or HTTPS")
+				return
+			}
+			loopback := strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()).IsLoopback()
+			if u.Scheme == "http" && !allowHTTP && !loopback {
+				o.optionErr = errors.New("b2: APIBase requires HTTPS except for loopback hosts; use InsecureAPIBase to allow non-loopback HTTP")
+				return
+			}
+		}
+		o.apiBase = rawURL
 	}
 }
 
@@ -259,10 +301,12 @@ type BucketAttrs struct {
 
 	// Reports or sets bucket lifecycle rules.  If nil during a bucket.Update,
 	// the rules are not modified.  A bucket's rules can be removed by updating
-	// with an empty slice.
+	// with an empty slice. An unchanged slice retains unknown server fields;
+	// changing any rule replaces the full slice using the fields known to this SDK.
 	LifecycleRules []LifecycleRule
 
-	// The initial list (a JSON array) of CORS rules for this bucket.
+	// CORSRules reports or sets the bucket's CORS rules. During Update, nil
+	// leaves the rules unchanged and a non-nil empty slice clears them.
 	// See CORS Rules (https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules) for an overview and the rule structure.
 	CORSRules []CORSRule
 
@@ -289,11 +333,13 @@ type BucketAttrs struct {
 	// Object Lock: https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-native-api.
 	FileLockEnabled bool
 
-	// The configuration to create a Replication Rule. See Cloud Replication Rules. At least one of the asReplicationSource or asReplicationDestination
-	// parameters is required, but they can also both be present.
-	// NOTE: The first time that you configure Cloud Replication, complete the following tasks to ensure that you have the correct permission:
-	// 1. Verify your email address.
-	// 2. Have a payment history on file or make a payment.
+	// ReplicationConfig configures bucket replication. NewBucket uses the service
+	// default when nil; Update leaves replication unchanged when nil.
+	// Creation and updates reject empty configurations. Replication changes require
+	// writeBucketReplications and normal bucket-update permissions. An Update that
+	// preserves an unspecified role also requires readBucketReplications; provide
+	// both roles explicitly to replace a configuration that cannot be read.
+	// B2 requires a verified email and payment history before first configuration.
 	ReplicationConfig           *ReplicationConfiguration
 	replicationConfigUnreadable bool
 }
@@ -344,12 +390,27 @@ type RetentionPeriod struct {
 	Unit     string
 }
 
+// ReplicationConfiguration describes a bucket's source and destination roles.
+// Both roles may be present. Creation and replication updates require a non-empty
+// configuration. In an Update, an unspecified role is preserved and requires a
+// readable existing configuration. Providing both roles replaces them without a
+// merge. A nil BucketAttrs.ReplicationConfig leaves even unreadable settings alone.
+// Clearing replication is not supported by this high-level representation.
 type ReplicationConfiguration struct {
-	AsReplicationSource      AsReplicationSource
+	// AsReplicationSource is unspecified when its key ID is empty and it has no rules.
+	AsReplicationSource AsReplicationSource
+	// AsReplicationDestination specifies the destination key mapping. When nil
+	// in a source-only Update, the known destination mapping is preserved.
 	AsReplicationDestination *AsReplicationDestination
 }
 
+// AsReplicationDestination maps source application keys to destination keys.
+// An explicit destination in Bucket.Update replaces the existing mapping.
 type AsReplicationDestination struct {
+	// SourceToDestinationKeyMapping uses source application-key IDs as keys and
+	// destination application-key IDs as values. Nil and empty maps omit the
+	// mapping field in the current wire encoding and are left to B2 to validate.
+	// Neither form is a supported way to clear the destination role.
 	SourceToDestinationKeyMapping map[string]string
 }
 
@@ -359,6 +420,8 @@ type AsReplicationSource struct {
 }
 
 type ReplicationRules struct {
+	// DestinationBucketID is the B2 bucket ID of the destination bucket.
+	// Use destination.ID(), not destination.Name().
 	DestinationBucketID  string
 	FileNamePrefix       string
 	IncludeExistingFiles bool
@@ -369,10 +432,14 @@ type ReplicationRules struct {
 
 // A LifecycleRule describes an object's life cycle, namely how many days after
 // uploading an object should be hidden, and after how many days hidden an
-// object should be deleted.  Multiple rules may not apply to the same file or
+// object should be deleted, or unfinished large files canceled. Multiple rules may not apply to the same file or
 // set of files.  Be careful when using this feature; it can (is designed to)
 // delete your data.
 type LifecycleRule struct {
+	// DaysUnfinishedUntilCanceled cancels unfinished large files after this many days.
+	// Zero disables automatic cancellation.
+	DaysUnfinishedUntilCanceled int
+
 	// Prefix specifies all the files in the bucket to which this rule applies.
 	Prefix string
 
@@ -395,6 +462,8 @@ type b2err struct {
 func (e b2err) Error() string {
 	return e.err.Error()
 }
+
+func (e b2err) Unwrap() error { return e.err }
 
 // IsNotExist reports whether a given error indicates that an object or bucket
 // does not exist.
@@ -461,6 +530,10 @@ func (c *Client) Bucket(ctx context.Context, name string) (*Bucket, error) {
 // NewBucket returns a bucket.  The bucket is created with the given attributes
 // if it does not already exist.  If attrs is nil, it is created as a private
 // bucket with no info metadata and no lifecycle rules.
+// Default retention on a newly created bucket requires a separate update. If
+// that update fails, NewBucket attempts to delete the new bucket and returns
+// the update error. If deletion also fails, it returns the bucket and error so
+// the caller can handle the remaining bucket. Existing buckets are not updated.
 func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs) (*Bucket, error) {
 	buckets, err := c.backend.listBuckets(ctx, name)
 	if err != nil {
@@ -486,12 +559,23 @@ func (c *Client) NewBucket(ctx context.Context, name string, attrs *BucketAttrs)
 	if err != nil {
 		return nil, err
 	}
-	return &Bucket{
+	bucket := &Bucket{
 		b:       b,
 		r:       c.backend,
 		c:       c,
 		urlPool: newURLPool(),
-	}, err
+	}
+	if attrs.DefaultRetention != nil {
+		if err := bucket.Update(ctx, &BucketAttrs{DefaultRetention: attrs.DefaultRetention}); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if cleanupErr := bucket.Delete(cleanupCtx); cleanupErr != nil && !IsNotExist(cleanupErr) {
+				return bucket, err
+			}
+			return nil, err
+		}
+	}
+	return bucket, nil
 }
 
 // ListBuckets returns all the available buckets.
@@ -581,8 +665,9 @@ func (b *Bucket) Name() string {
 	return b.b.name()
 }
 
-// ID returns the bucket's B2 identifier, as reported when the bucket was
-// created or listed. It makes no network call.
+// ID returns the B2 bucket ID reported when the bucket was created or listed.
+// It makes no network call. Use it to populate ReplicationRules.DestinationBucketID
+// when configuring replication.
 func (b *Bucket) ID() string {
 	return b.b.id()
 }
@@ -727,13 +812,34 @@ func (b *Bucket) Object(name string) *Object {
 
 // URL returns the full URL to the given object.
 func (o *Object) URL() string {
-	return fmt.Sprintf("%s/file/%s/%s", o.b.BaseURL(), o.b.Name(), o.name)
+	segments := strings.Split(o.name, "/")
+	for i, seg := range segments {
+		segments[i] = strings.ReplaceAll(url.PathEscape(seg), "+", "%2B")
+	}
+	return fmt.Sprintf("%s/file/%s/%s", o.b.BaseURL(), o.b.Name(), strings.Join(segments, "/"))
 }
 
 // NewWriter returns a new writer for the given object.  Objects that are
 // overwritten are not deleted, but are "hidden".
 //
 // Callers must close the writer when finished and check the error status.
+// Default options and then opts are applied synchronously to the initialized
+// writer before NewWriter returns.
+//
+// When copying from an arbitrary source, pass a context created with
+// context.WithCancel to NewWriter. If io.Copy fails, call cancel before Close
+// so a partial upload is not finalized. A source implementing io.WriterTo can
+// bypass Writer.ReadFrom and leave partial data buffered. For example:
+//
+//	uploadCtx, cancel := context.WithCancel(ctx)
+//	defer cancel()
+//	w := obj.NewWriter(uploadCtx)
+//	if _, err := io.Copy(w, src); err != nil {
+//		cancel()
+//		_ = w.Close()
+//		return err
+//	}
+//	return w.Close()
 func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 	ctx, cancel := context.WithCancelCause(ctx)
 	w := &Writer{
@@ -744,22 +850,31 @@ func (o *Object) NewWriter(ctx context.Context, opts ...WriterOption) *Writer {
 		progressTotal: -1,
 	}
 	for _, f := range o.b.c.opts.writerOpts {
-		f(w)
+		f.apply(w)
 	}
 	// Conflict flags describe explicit options on this writer, not inherited
 	// defaults. Keep the default encryption unless an option below replaces it.
 	w.ssecRequested = false
 	w.sseb2Requested = false
 	for _, f := range opts {
-		f(w)
+		f.apply(w)
 	}
 	return w
 }
 
 // NewRangeReader returns a reader for the given object, reading up to length
-// bytes. If length is negative, the rest of the object is read. With a Progress
+// bytes. A zero length returns no bytes and makes no download request. If length
+// is negative, the rest of the object is read. With a Progress
 // callback, a finite range reports the available byte count when a HEAD
 // request can determine it; otherwise the progress total is -1.
+//
+// An Object with a resolved ID reads that version. Uploads, Copy, Compose,
+// listings, Attrs, Delete, Hide, Cancel, UpdateFileRetention and
+// UpdateFileLegalHold can resolve the ID, even if a subsequent request fails.
+// A deleted pinned version returns a not-found error; Hide leaves the pinned
+// content readable by ID. Use a fresh bucket.Object(name) handle to read the
+// latest visible version. Fresh handles resolve the name once, then use the ID
+// for subsequent chunks and retries.
 func (o *Object) NewRangeReader(ctx context.Context, offset, length int64, keys ...*SSECKey) *Reader {
 	ctx, cancel := context.WithCancel(ctx)
 	key, err := optionalSSECKey(keys)
@@ -791,14 +906,24 @@ func readerProgressTotal(length int64) int64 {
 // NewReader returns a reader for the given object. Pass an SSE-C key when the
 // object was encrypted with a customer-managed key; the key is not retained by
 // the Object, Bucket or Client.
+//
+// An Object with a resolved ID reads that version. Uploads, Copy, Compose,
+// listings, Attrs, Delete, Hide, Cancel, UpdateFileRetention and
+// UpdateFileLegalHold can resolve the ID, even if a subsequent request fails.
+// A deleted pinned version returns a not-found error; Hide leaves the pinned
+// content readable by ID. Use a fresh bucket.Object(name) handle to read the
+// latest visible version. Fresh handles resolve the name once, then use the ID
+// for subsequent chunks and retries.
 func (o *Object) NewReader(ctx context.Context, keys ...*SSECKey) *Reader {
 	return o.NewRangeReader(ctx, 0, -1, keys...)
 }
 
 // DownloadFileByID returns a reader for a file identified by its B2 file ID.
-// It makes one download request; use Object.NewReader for chunked downloads by
-// file name. Supply an SSE-C key for a customer-key-encrypted version; the key
-// is used only on this request and is not retained.
+// It makes one download request. For chunked downloads, use Object.NewReader,
+// which uses the Object's resolved ID or resolves the name once before using
+// that ID for subsequent chunks and retries. Supply an SSE-C key for a
+// customer-key-encrypted version; the key is used only on this request and
+// is not retained.
 func (b *Bucket) DownloadFileByID(ctx context.Context, id string, keys ...*SSECKey) (io.ReadCloser, error) {
 	key, err := optionalSSECKey(keys)
 	if err != nil {
@@ -825,6 +950,7 @@ func (o *Object) ensure(ctx context.Context, keys ...*SSECKey) error {
 
 type deleteOptions struct {
 	bypassGovernance bool
+	ssecKeys         []*SSECKey
 }
 
 // DeleteOption configures Delete.
@@ -841,14 +967,28 @@ func BypassGovernance() DeleteOption {
 	}
 }
 
-// Delete removes the given object, if it is a regular file or hide marker.
-func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
-	if err := o.ensure(ctx); err != nil {
-		return err
+// WithDeleteSSECKey supplies a customer-managed key for resolving an object
+// before deletion. The key is not retained by the object.
+func WithDeleteSSECKey(key *SSECKey) DeleteOption {
+	return func(opts *deleteOptions) {
+		opts.ssecKeys = append(opts.ssecKeys, key)
 	}
+}
+
+// Delete removes the given object, if it is a regular file or hide marker.
+// A nil DeleteOption returns an error before any request is sent.
+// For the v0.9.0 method-type migration, see
+// https://github.com/Backblaze/blazer/blob/main/docs/delete-options.md.
+func (o *Object) Delete(ctx context.Context, opts ...DeleteOption) error {
 	options := &deleteOptions{}
 	for _, opt := range opts {
+		if opt == nil {
+			return fmt.Errorf("b2: nil delete option")
+		}
 		opt(options)
+	}
+	if err := o.ensure(ctx, options.ssecKeys...); err != nil {
+		return err
 	}
 	status := o.f.status()
 	if status == "upload" || status == "hide" || status == "copy" {
@@ -877,9 +1017,10 @@ func (o *Object) Cancel(ctx context.Context) error {
 	}
 }
 
-// Hide hides the object from name-based listing.
-func (o *Object) Hide(ctx context.Context) error {
-	if err := o.ensure(ctx); err != nil {
+// Hide hides the object from name-based listing. Pass an SSE-C key to resolve
+// a customer-key-encrypted object; the key is not retained by the object.
+func (o *Object) Hide(ctx context.Context, keys ...*SSECKey) error {
+	if err := o.ensure(ctx, keys...); err != nil {
 		return err
 	}
 	_, err := o.b.b.hideFile(ctx, o.name)
@@ -887,7 +1028,9 @@ func (o *Object) Hide(ctx context.Context) error {
 }
 
 // Reveal unhides (if hidden) the named object.  If there are multiple objects
-// of a given name, it will reveal the most recent.
+// of a given name, it will reveal the most recent. An absent object yields a
+// not-found error; listing and deletion errors, including cancellation, are
+// returned to the caller.
 func (b *Bucket) Reveal(ctx context.Context, name string) error {
 	iter := b.List(ctx, ListPrefix(name), ListHidden())
 	for iter.Next() {
@@ -901,6 +1044,9 @@ func (b *Bucket) Reveal(ctx context.Context, name string) error {
 		if obj.Name() > name {
 			break
 		}
+	}
+	if err := iter.Err(); err != nil {
+		return err
 	}
 	return b2err{err: fmt.Errorf("%s: not found", name), notFoundErr: true}
 }
@@ -947,13 +1093,14 @@ func (o *Object) AuthURL(ctx context.Context, valid time.Duration, b2cd string) 
 	if err != nil {
 		return nil, err
 	}
-	urlString := fmt.Sprintf("%s?Authorization=%s", o.URL(), url.QueryEscape(token))
-	if b2cd != "" {
-		urlString = fmt.Sprintf("%s&b2ContentDisposition=%s", urlString, url.QueryEscape(b2cd))
-	}
-	u, err := url.Parse(urlString)
+	u, err := url.Parse(o.URL())
 	if err != nil {
 		return nil, err
 	}
+	q := url.Values{"Authorization": {token}}
+	if b2cd != "" {
+		q.Set("b2ContentDisposition", b2cd)
+	}
+	u.RawQuery = q.Encode()
 	return u, nil
 }

@@ -70,7 +70,7 @@ func TestCreateKeyNormalizesRestrictions(t *testing.T) {
 	}{
 		{
 			name:           "v3 bucketId",
-			createResponse: `{"accountId":"account-id","applicationKeyId":"key-v3","applicationKey":"secret-v3","capabilities":["listFiles"],"keyName":"v3","expirationTimestamp":0,"bucketId":"bucket-v3","namePrefix":"v3/"}`,
+			createResponse: `{"accountId":"account-id","applicationKeyId":"key-v3","applicationKey":"secret-v3","capabilities":["listFiles"],"keyName":"v3","expirationTimestamp":null,"bucketId":"bucket-v3","namePrefix":"v3/"}`,
 			create: func(ctx context.Context, b *B2) (*Key, error) {
 				return b.CreateKey(ctx, "v3", []string{"listFiles"}, 0, "bucket-v3", "v3/")
 			},
@@ -79,7 +79,7 @@ func TestCreateKeyNormalizesRestrictions(t *testing.T) {
 		},
 		{
 			name:           "v4 bucketIds",
-			createResponse: `{"accountId":"account-id","applicationKeyId":"key-v4","applicationKey":"secret-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":0,"bucketIds":["bucket-a","bucket-b"],"namePrefix":"v4/"}`,
+			createResponse: `{"accountId":"account-id","applicationKeyId":"key-v4","applicationKey":"secret-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":null,"bucketIds":["bucket-a","bucket-b"],"namePrefix":"v4/"}`,
 			create: func(ctx context.Context, b *B2) (*Key, error) {
 				return b.CreateKeyMultiBucket(ctx, "v4", []string{"listFiles"}, 0, []string{"bucket-a", "bucket-b"}, "v4/")
 			},
@@ -88,14 +88,14 @@ func TestCreateKeyNormalizesRestrictions(t *testing.T) {
 		},
 		{
 			name:           "unrestricted",
-			createResponse: `{"accountId":"account-id","applicationKeyId":"key-unrestricted","applicationKey":"secret-unrestricted","capabilities":["listBuckets"],"keyName":"unrestricted","expirationTimestamp":0,"bucketIds":null,"namePrefix":null}`,
+			createResponse: `{"accountId":"account-id","applicationKeyId":"key-unrestricted","applicationKey":"secret-unrestricted","capabilities":["listBuckets"],"keyName":"unrestricted","expirationTimestamp":null,"bucketIds":null,"namePrefix":null}`,
 			create: func(ctx context.Context, b *B2) (*Key, error) {
 				return b.CreateKeyMultiBucket(ctx, "unrestricted", []string{"listBuckets"}, 0, nil, "")
 			},
 		},
 		{
 			name:           "empty bucketIds",
-			createResponse: `{"accountId":"account-id","applicationKeyId":"key-empty","applicationKey":"secret-empty","capabilities":["listBuckets"],"keyName":"empty","expirationTimestamp":0,"bucketIds":[],"namePrefix":null}`,
+			createResponse: `{"accountId":"account-id","applicationKeyId":"key-empty","applicationKey":"secret-empty","capabilities":["listBuckets"],"keyName":"empty","expirationTimestamp":null,"bucketIds":[],"namePrefix":null}`,
 			create: func(ctx context.Context, b *B2) (*Key, error) {
 				return b.CreateKeyMultiBucket(ctx, "empty", []string{"listBuckets"}, 0, nil, "")
 			},
@@ -116,9 +116,9 @@ func TestCreateKeyNormalizesRestrictions(t *testing.T) {
 
 func TestListKeysNormalizesRestrictions(t *testing.T) {
 	const listResponse = `{"keys":[` +
-		`{"accountId":"account-id","applicationKeyId":"key-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":0,"bucketIds":["bucket-a","bucket-b"],"namePrefix":"v4/"},` +
-		`{"accountId":"account-id","applicationKeyId":"key-unrestricted","capabilities":["listBuckets"],"keyName":"unrestricted","expirationTimestamp":0,"bucketIds":null,"namePrefix":null},` +
-		`{"accountId":"account-id","applicationKeyId":"key-empty","capabilities":["listBuckets"],"keyName":"empty","expirationTimestamp":0,"bucketIds":[],"namePrefix":null}` +
+		`{"accountId":"account-id","applicationKeyId":"key-v4","capabilities":["listFiles"],"keyName":"v4","expirationTimestamp":null,"bucketIds":["bucket-a","bucket-b"],"namePrefix":"v4/"},` +
+		`{"accountId":"account-id","applicationKeyId":"key-unrestricted","capabilities":["listBuckets"],"keyName":"unrestricted","expirationTimestamp":null,"bucketIds":null,"namePrefix":null},` +
+		`{"accountId":"account-id","applicationKeyId":"key-empty","capabilities":["listBuckets"],"keyName":"empty","expirationTimestamp":null,"bucketIds":[],"namePrefix":null}` +
 		`],"nextApplicationKeyId":null}`
 	b := newKeyRestrictionsB2(t, `{}`, listResponse)
 

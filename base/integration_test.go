@@ -47,6 +47,15 @@ const (
 	largeFileName    = "BigBytes"
 )
 
+// uniqueSuffix returns a short token so live-test bucket names are unique per
+// run. B2 bucket names must be globally unique, so a fixed name makes concurrent
+// CI runs on the same account contend on one bucket, which B2 rejects with a 409
+// "simultaneous updates" conflict (and duplicate-name create failures).
+func uniqueSuffix() string {
+	h := sha1.Sum([]byte(fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())))
+	return fmt.Sprintf("%x", h)[:6]
+}
+
 type zReader struct{}
 
 func (zReader) Read(p []byte) (int, error) {
@@ -62,7 +71,7 @@ func TestStorage(t *testing.T) {
 	ctx := context.Background()
 
 	// b2_authorize_account
-	b2, err := AuthorizeAccount(ctx, id, key, UserAgent("blazer-base-test"))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{UserAgent("blazer-base-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +86,7 @@ func TestStorage(t *testing.T) {
 			DaysNewUntilHidden: 5,
 		},
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", m, rules, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +132,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket // carry the new revision so the next update isn't rejected with 409
 	if sse := newBucket.DefaultServerSideEncryption; sse == nil || sse.Mode != "SSE-B2" || sse.Algorithm != "AES256" {
 		t.Errorf("%s: DefaultServerSideEncryption = %+v, want SSE-B2/AES256", bucket.Name, sse)
 	}
@@ -135,6 +145,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if !newBucket.FileLockEnabled {
 		t.Errorf("%s: bucket fileLockEnabled was false, wanted true", bucket.Name)
 		return
@@ -154,6 +165,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if newBucket.DefaultRetention == nil {
 		t.Errorf("%s: bucket defaultRetention was nil, wanted %v", bucket.Name, bucket.DefaultRetention)
 		return
@@ -170,6 +182,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if newBucket.DefaultRetention != nil {
 		t.Errorf("%s: bucket defaultRetention was %v, wanted nil", bucket.Name, bucket.DefaultRetention)
 		return
@@ -200,13 +213,14 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if len(newBucket.CORSRules) != 1 {
 		t.Errorf("%s: CORS rules: got %d rules, wanted 1", bucket.Name, len(bucket.CORSRules))
 		return
 	}
 
 	// Need a real bucket ID etc. to create a replication rule
-	targetName := id + "-" + targetBucketName
+	targetName := id + "-" + targetBucketName + "-" + uniqueSuffix()
 	targetBucket, err := b2.CreateBucket(ctx, targetName, "", m, rules, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -241,6 +255,7 @@ func TestStorage(t *testing.T) {
 		t.Errorf("%s: update bucket: %v", bucket.Name, err)
 		return
 	}
+	bucket = newBucket
 	if newBucket.ReplicationConfiguration == nil {
 		t.Logf("newBucket: %v", newBucket)
 		t.Errorf("%s: bucket replicationConfiguration was nil, wanted %v", bucket.Name, bucket.ReplicationConfiguration)
@@ -446,11 +461,11 @@ func TestUploadAuthAfterConnectionHang(t *testing.T) {
 	}
 	tport := transport.WithFailures(nil, transport.AfterNBytes(10000, hang))
 
-	b2, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -509,11 +524,11 @@ func TestCancelledContextCancelsHTTPRequest(t *testing.T) {
 
 	tport := transport.WithFailures(nil, transport.MatchPathSubstring("b2_upload_file"), transport.FailureRate(1), transport.Stall(2*time.Second))
 
-	b2, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -555,11 +570,11 @@ func TestDeadlineExceededContextCancelsHTTPRequest(t *testing.T) {
 	ctx := context.Background()
 
 	tport := transport.WithFailures(nil, transport.MatchPathSubstring("b2_upload_file"), transport.FailureRate(1), transport.Stall(2*time.Second))
-	b2, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -601,7 +616,11 @@ func TestUnknownCA(t *testing.T) {
 		TLSClientConfig: &tls.Config{RootCAs: x509.NewCertPool()},
 	}
 
-	_, err := AuthorizeAccount(ctx, id, key, Transport(tport))
+	eopts, ok := tlsEndpointOpts()
+	if !ok {
+		t.Skipf("%s is not https and %s is unset; an untrusted CA cannot be tested over plain http", endpointVar, tlsEndpointVar)
+	}
+	_, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{Transport(tport)}, eopts...)...)
 	if err == nil {
 		t.Error("expected an error, got none")
 	}
@@ -771,13 +790,13 @@ func TestUploadDownloadFilenameEscaping(t *testing.T) {
 	ctx := context.Background()
 
 	// b2_authorize_account
-	b2, err := AuthorizeAccount(ctx, id, key, UserAgent("blazer-base-test"))
+	b2, err := AuthorizeAccount(ctx, id, key, append([]AuthOption{UserAgent("blazer-base-test")}, endpointOpts()...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// b2_create_bucket
-	bname := id + "-" + bucketName
+	bname := id + "-" + bucketName + "-" + uniqueSuffix()
 	bucket, err := b2.CreateBucket(ctx, bname, "", nil, nil, nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,3 @@
+kind: Fixed
+body: "A rejected bucket update no longer leaves the attempted bucket type, CORS rules or default server-side encryption in the local bucket cache, where a later update on the same handle could resend them (#108)."
+time: 2026-11-02T12:00:01.000000-05:00

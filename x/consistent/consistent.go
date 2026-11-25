@@ -77,7 +77,12 @@ func (g *Group) Mutex(ctx context.Context, name string) *Mutex {
 //
 // The io.Reader that f returns is guaranteed to be read until at least the
 // first error.  Callers must ensure that this is sufficient for the reader to
-// clean up after itself.
+// clean up after itself. If copying fails, OperateStream closes the writer
+// without publishing partial data and attempts to cancel an unfinished large
+// upload. A cancellation failure is included in the returned error. Cleanup
+// uses a fresh context with a 30-second timeout and replaces any client-default
+// b2.WithCancelOnError for these writers; its callbacks are not called. Callers
+// should inspect the returned error to observe cancellation failures.
 func (g *Group) OperateStream(ctx context.Context, name string, f func(io.Reader) (io.Reader, error)) error {
 	for {
 		r, err := g.NewReader(ctx, name)
@@ -90,18 +95,42 @@ func (g *Group) OperateStream(ctx context.Context, name string, f func(io.Reader
 			return err
 		}
 		defer io.Copy(ioutil.Discard, out) // ensure the reader is read
-		w, err := g.NewWriter(ctx, r.Key, name)
+		uploadCtx, cancel := context.WithCancel(ctx)
+		var cleanupCancel context.CancelFunc
+		var cleanupErr error
+		w, err := g.newWriter(uploadCtx, r.Key, name, b2.WithCancelOnError(
+			func() context.Context {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				cleanupCancel = cancel
+				return cleanupCtx
+			},
+			func(err error) {
+				cleanupErr = err
+				cleanupCancel()
+			},
+		))
+		withCleanupError := func(err error) error {
+			if cleanupErr != nil {
+				return fmt.Errorf("%w; cancel unfinished upload: %w", err, cleanupErr)
+			}
+			return err
+		}
 		if err != nil {
+			cancel()
 			return err
 		}
 		if _, err := io.Copy(w, out); err != nil {
-			return err
+			cancel() // Prevent Close from publishing a partial upload.
+			_ = w.Close()
+			return withCleanupError(err)
 		}
-		if err := w.Close(); err != nil {
+		err = w.Close()
+		cancel()
+		if err != nil {
 			if err == errUpdateConflict {
 				continue
 			}
-			return err
+			return withCleanupError(err)
 		}
 		return nil
 	}
@@ -240,13 +269,17 @@ func (r Reader) Close() error {
 // data available from the Reader with no intervening writes.  New objects can
 // be created with an empty key.
 func (g *Group) NewWriter(ctx context.Context, key, name string) (Writer, error) {
+	return g.newWriter(ctx, key, name)
+}
+
+func (g *Group) newWriter(ctx context.Context, key, name string, opts ...b2.WriterOption) (Writer, error) {
 	suffix, err := random()
 	if err != nil {
 		return Writer{}, err
 	}
 	return Writer{
 		ctx:    ctx,
-		wc:     g.b.Object(name + "/" + suffix).NewWriter(ctx),
+		wc:     g.b.Object(name+"/"+suffix).NewWriter(ctx, opts...),
 		name:   name,
 		suffix: suffix,
 		key:    key,
@@ -278,9 +311,6 @@ func (g *Group) info(ctx context.Context) (*consistentInfo, error) {
 	}
 	g.ba = attrs
 	imap := attrs.Info
-	if imap == nil {
-		return nil, nil
-	}
 	enc, ok := imap[metaKey+"-"+g.name]
 	if !ok {
 		return &consistentInfo{

@@ -1,2 +1,4 @@
+github.com/Backblaze/blazer v0.10.1 h1:i57l7EtxKg3Iz9k5+tUPnT0nJx206dUiWOMZp+yZWiI=
+github.com/Backblaze/blazer v0.10.1/go.mod h1:/JlJELHVlJWBwHknmVqQ92zYyVm0s4EI+Cn3XU6IgCc=
 github.com/google/subcommands v1.2.0 h1:vWQspBTo2nEqTUFita5/KeEWlUL8kQObDFbub/EN9oE=
 github.com/google/subcommands v1.2.0/go.mod h1:ZjhPrFU+Olkh9WazFPsl27BQ4UPiG37m3yTrtFlrHVk=

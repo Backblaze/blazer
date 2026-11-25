@@ -1,0 +1,3 @@
+kind: Fixed
+body: Bucket.Reveal now reports listing failures instead of reporting the object as absent.
+time: 2026-11-20T10:45:59.075551-06:00

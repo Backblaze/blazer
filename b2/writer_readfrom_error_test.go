@@ -292,7 +292,7 @@ func (b *readFromFailureBucket) startLargeFile(ctx context.Context, name, conten
 	return &readFromFailureFile{beLargeFileInterface: file, partEntered: b.partEntered, failure: b.failure}, nil
 }
 
-func (b *readFromFailureBucket) listUnfinishedLargeFiles(context.Context, int, string) ([]beFileInterface, string, error) {
+func (b *readFromFailureBucket) listUnfinishedLargeFiles(context.Context, int, string, string) ([]beFileInterface, string, error) {
 	return nil, "", nil
 }
 

@@ -37,7 +37,8 @@ func (s *blockedMeterSource) Reset() error { return nil }
 func TestProgressStatusDoesNotWaitForBlockedRead(t *testing.T) {
 	source := &blockedMeterSource{make(chan struct{}), make(chan struct{})}
 	meter := &meteredReader{r: source, size: 1, progressSize: 1}
-	client := &Client{sWriters: map[string]*Writer{"blocked": {smap: map[int]*meteredReader{1: meter}}}}
+	w := &Writer{smap: map[int]*meteredReader{1: meter}}
+	client := &Client{sWriters: map[*Writer]string{w: "blocked"}}
 	readDone := make(chan struct{})
 	go func() { _, _ = meter.Read(make([]byte, 1)); close(readDone) }()
 	<-source.entered
@@ -219,6 +220,16 @@ func TestProgressCloseWaitsForInitialization(t *testing.T) {
 	if len(samples) == 0 || samples[len(samples)-1] != (progressSample{0, -1}) {
 		t.Fatalf("progress after Close = %+v, want final 0/-1 after cancelled initialization", samples)
 	}
+	if len(samples) != 1 {
+		t.Fatalf("progress calls = %+v, want exactly one terminal callback after Close", samples)
+	}
+	// A second Close must not add another terminal callback.
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 1 {
+		t.Fatalf("progress calls after repeated Close = %d, want 1: %+v", len(samples), samples)
+	}
 }
 
 type pipeProgressBody struct {
@@ -233,9 +244,9 @@ func (b *pipeProgressBody) Read(p []byte) (int, error) {
 	b.exitOnce.Do(func() { close(b.exited) })
 	return n, err
 }
-func (b *pipeProgressBody) Close() error                                    { return b.r.Close() }
-func (b *pipeProgressBody) stats() (int, string, string, map[string]string) { return 1, "", "", nil }
-func (b *pipeProgressBody) id() string                                      { return "pipe" }
+func (b *pipeProgressBody) Close() error                                      { return b.r.Close() }
+func (b *pipeProgressBody) stats() (int64, string, string, map[string]string) { return 1, "", "", nil }
+func (b *pipeProgressBody) id() string                                        { return "pipe" }
 
 type pipeProgressBucket struct {
 	beBucketInterface

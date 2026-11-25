@@ -176,9 +176,8 @@ func TestActionUploadRetryAfter(t *testing.T) {
 	}
 }
 
-// A transport fault on anything but an upload must behave as before: a plain
-// same-request retry with the default budget and the method-less message.
-func TestTransportFaultOutsideUploadsIsUnchanged(t *testing.T) {
+// Retryable transport faults retain the default budget and identify the method.
+func TestTransportFaultOnRetryableMethodsKeepsRetryPolicy(t *testing.T) {
 	for _, method := range []string{
 		"b2_download_file_by_name", "b2_download_file_by_id", "b2_list_file_names",
 		"b2_authorize_account", "b2_get_upload_url", "",
@@ -201,7 +200,11 @@ func TestTransportFaultOutsideUploadsIsUnchanged(t *testing.T) {
 			if got := MaxReuploads(err); got != 0 {
 				t.Errorf("MaxReuploads = %d, want 0", got)
 			}
-			if got, want := err.Error(), "b2 error: connection reset"; got != want {
+			prefix := method
+			if prefix == "" {
+				prefix = "b2 error"
+			}
+			if got, want := err.Error(), prefix+": connection reset"; got != want {
 				t.Errorf("message = %q, want %q", got, want)
 			}
 		})
@@ -224,7 +227,7 @@ func TestUploadTransportFaultBudget(t *testing.T) {
 			if got := MaxReuploads(err); got != 5 {
 				t.Errorf("MaxReuploads = %d, want 5", got)
 			}
-			if got, want := err.Error(), method+": 0: connection reset"; got != want {
+			if got, want := err.Error(), method+": connection reset"; got != want {
 				t.Errorf("message = %q, want %q", got, want)
 			}
 		})

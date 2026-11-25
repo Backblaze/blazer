@@ -1,0 +1,3 @@
+kind: Changed
+body: '**Breaking for non-loopback HTTP endpoints:** APIBase requires HTTPS except for localhost and loopback IP addresses. Only non-loopback HTTP endpoints must use InsecureAPIBase; loopback HTTP, the default B2 endpoint, and HTTPS configurations are unchanged.'
+time: 2026-11-21T12:00:00-06:00

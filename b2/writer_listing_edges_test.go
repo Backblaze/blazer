@@ -70,7 +70,7 @@ func TestMappingListPageSizeClamps(t *testing.T) {
 		name        string
 		given, want int
 		unfinished  bool
-	}{{"large", 5000, 1000, false}, {"negative", -1, 1000, false}, {"within range", 500, 500, false}, {"unfinished", 500, 100, true}} {
+	}{{"large", 5000, 5000, false}, {"negative", -1, 1000, false}, {"within range", 500, 500, false}, {"unfinished", 500, 100, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			bucket, srv := newMappingBucket(t, updateBucketJSON)
 			srv.Reply("b2_list_file_names", http.StatusOK, `{"files":[],"nextFileName":null}`)

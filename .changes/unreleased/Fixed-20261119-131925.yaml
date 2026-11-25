@@ -1,0 +1,3 @@
+kind: Fixed
+body: Writer.ReadFrom and io.Copy now buffer OS pipe sources whose Seek fails and honor the current position of seekable sources. Writes after Close return ErrClosed for empty, small, and large uploads, including failed closes; closing an unused writer also releases its temporary buffer and status registration (#181).
+time: 2026-11-19T13:19:25.960931-06:00

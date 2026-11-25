@@ -32,6 +32,7 @@ const (
 
 type copyOptions struct {
 	destinationBucket        *Bucket
+	invalidDestination       bool
 	byteRange                string
 	metadataDirective        MetadataDirective
 	contentType              string
@@ -47,9 +48,15 @@ type CopyOption func(*copyOptions)
 
 // CopyToBucket copies to destinationBucket, which must belong to the same
 // account as the source file. Without this option, Copy writes to the receiver
-// bucket.
+// bucket. Passing nil makes Copy return an error before sending any request.
 func CopyToBucket(destinationBucket *Bucket) CopyOption {
-	return func(o *copyOptions) { o.destinationBucket = destinationBucket }
+	return func(o *copyOptions) {
+		o.destinationBucket = destinationBucket
+		// A later option must not hide an explicitly invalid destination.
+		if destinationBucket == nil {
+			o.invalidDestination = true
+		}
+	}
 }
 
 // CopyRange copies only the byte range specified by byteRange, in the form
@@ -172,6 +179,9 @@ func copyInfoWithSSECKeyID(info map[string]string, id string) map[string]string 
 }
 
 func (o *copyOptions) validate() error {
+	if o.invalidDestination {
+		return errors.New("b2: CopyToBucket requires a non-nil destination bucket")
+	}
 	if o.sourceSSECRequested || o.sourceSSECKey != nil {
 		if err := o.sourceSSECKey.validate(); err != nil {
 			return err

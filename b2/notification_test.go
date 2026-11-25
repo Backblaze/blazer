@@ -41,7 +41,7 @@ type notificationFixture struct {
 
 func newNotificationFixture(t *testing.T) *notificationFixture {
 	t.Helper()
-	f := &notificationFixture{t: t}
+	f := &notificationFixture{t: t, rules: []map[string]interface{}{}}
 	bucketJSON := func() map[string]interface{} {
 		return map[string]interface{}{
 			"bucketId": "bucket-id", "bucketName": "bucket", "bucketType": "allPrivate",
@@ -73,6 +73,13 @@ func newNotificationFixture(t *testing.T) *notificationFixture {
 			var body map[string]json.RawMessage
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 				return nil, err
+			}
+			var bucketID string
+			if err := json.Unmarshal(body["bucketId"], &bucketID); err != nil {
+				return nil, err
+			}
+			if bucketID != "bucket-id" {
+				t.Errorf("set bucketId = %q, want %q", bucketID, "bucket-id")
 			}
 			rawRules, ok := body["eventNotificationRules"]
 			if !ok {

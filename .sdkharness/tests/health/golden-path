@@ -1,8 +1,9 @@
 #!/bin/sh
 # Customer-style B2 health check using github.com/Backblaze/blazer/b2.
 # Realm: HEALTHCHECK_REALM_URL, which must be an IPv4 loopback HTTP origin (the harness simulator),
-# through b2.APIBase. There is no production or staging mode, and only the simulator's fixed test
-# credential is accepted, so running this file directly cannot reach a real account.
+# through b2.APIBase (which accepts loopback HTTP). There is no production or staging mode,
+# and only the simulator's fixed test credential is accepted, so running this file directly
+# cannot reach a real account.
 
 set -eu
 

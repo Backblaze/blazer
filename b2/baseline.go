@@ -16,6 +16,8 @@ package b2
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -30,6 +32,15 @@ import (
 // AuthData is the authorized session snapshot stored by AccountInfo.
 // It excludes the application key secret.
 type AuthData base.AuthData
+
+// String returns the session with its token redacted.
+func (a AuthData) String() string { return base.AuthData(a).String() }
+
+// GoString returns the session with its token redacted.
+func (a AuthData) GoString() string { return base.AuthData(a).GoString() }
+
+// Format delegates all formatting verbs to the redacted base representation.
+func (a AuthData) Format(s fmt.State, verb rune) { base.AuthData(a).Format(s, verb) }
 
 type b2RootInterface interface {
 	authorizeAccount(context.Context, string, string, clientOptions) error
@@ -60,7 +71,7 @@ type b2BucketInterface interface {
 	listFileNames(context.Context, int, string, string, string) ([]b2FileInterface, string, error)
 	getFileInfoByName(context.Context, string) (b2FileInfoInterface, error)
 	listFileVersions(context.Context, int, string, string, string, string) ([]b2FileInterface, string, string, error)
-	listUnfinishedLargeFiles(context.Context, int, string) ([]b2FileInterface, string, error)
+	listUnfinishedLargeFiles(context.Context, int, string, string) ([]b2FileInterface, string, error)
 	downloadFileByName(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
 	downloadFileByID(context.Context, string, int64, int64, bool, *SSECKey) (b2FileReaderInterface, error)
 	hideFile(context.Context, string) (b2FileInterface, error)
@@ -105,7 +116,7 @@ type b2FileChunkInterface interface {
 
 type b2FileReaderInterface interface {
 	io.ReadCloser
-	stats() (int, string, string, map[string]string)
+	stats() (int64, string, string, map[string]string)
 	id() string
 }
 
@@ -252,12 +263,16 @@ func (*b2Root) reupload(err error) bool {
 }
 
 func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[string]string, rules []LifecycleRule, sse *ServerSideEncryption, corsRules []CORSRule, fileLockEnabled bool, replicationConfig *ReplicationConfiguration) (b2BucketInterface, error) {
+	if err := validateReplicationConfiguration(replicationConfig); err != nil {
+		return nil, err
+	}
 	var baseRules []base.LifecycleRule
 	for _, rule := range rules {
 		baseRules = append(baseRules, base.LifecycleRule{
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-			Prefix:                 rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+			Prefix:                      rule.Prefix,
 		})
 	}
 	var baseSSE *b2types.ServerSideEncryption
@@ -287,7 +302,10 @@ func (b *b2Root) listBuckets(ctx context.Context, name string, bucketTypes ...st
 }
 
 func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
-	var out []b2types.CORSRule
+	if rules == nil {
+		return nil
+	}
+	out := make([]b2types.CORSRule, 0, len(rules))
 	for _, rule := range rules {
 		out = append(out, b2types.CORSRule{
 			Name:              rule.Name,
@@ -301,17 +319,33 @@ func toBaseCORSRules(rules []CORSRule) []b2types.CORSRule {
 	return out
 }
 
+func replicationSourceSet(source AsReplicationSource) bool {
+	return source.SourceApplicationKeyID != "" || len(source.ReplicationRules) > 0
+}
+
+func validateReplicationConfiguration(cfg *ReplicationConfiguration) error {
+	if cfg == nil {
+		return nil
+	}
+	if !replicationSourceSet(cfg.AsReplicationSource) && cfg.AsReplicationDestination == nil {
+		return errors.New("b2: replication configuration requires a source or destination")
+	}
+	return nil
+}
+
 func toBaseReplicationConfiguration(attrs *ReplicationConfiguration, existing *b2types.ReplicationConfiguration) *b2types.ReplicationConfiguration {
 	if attrs == nil {
 		return nil
 	}
 	cfg := &b2types.ReplicationConfiguration{}
 	source := attrs.AsReplicationSource
-	if source.SourceApplicationKeyID != "" || source.ReplicationRules != nil {
+	if replicationSourceSet(source) {
 		cfg.AsReplicationSource = &b2types.AsReplicationSource{
 			KeyID:            source.SourceApplicationKeyID,
 			ReplicationRules: make([]b2types.ReplicationRules, len(source.ReplicationRules)),
 		}
+	} else if existing != nil {
+		cfg.AsReplicationSource = existing.AsReplicationSource
 	}
 	for i, rule := range source.ReplicationRules {
 		cfg.AsReplicationSource.ReplicationRules[i] = b2types.ReplicationRules{
@@ -389,6 +423,16 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	if attrs == nil {
 		return nil
 	}
+	if err := validateReplicationConfiguration(attrs.ReplicationConfig); err != nil {
+		return err
+	}
+	if cfg := attrs.ReplicationConfig; cfg != nil && b.b.ReplicationConfigurationUnreadable &&
+		(!replicationSourceSet(cfg.AsReplicationSource) || cfg.AsReplicationDestination == nil) {
+		return errors.New("b2: cannot update unreadable replication configuration")
+	}
+	previousType := b.b.Type
+	previousCORS := b.b.CORSRules
+	previousSSE := b.b.DefaultServerSideEncryption
 	if attrs.Type != UnknownType {
 		b.b.Type = string(attrs.Type)
 	}
@@ -399,20 +443,27 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	// non-nil slice removes them all.
 	previousRules := b.b.LifecycleRules
 	if attrs.LifecycleRules != nil {
+		// Rebuild typed rules so base.Update can compare them with the rules read:
+		// unchanged rules reuse the saved JSON, including fields unknown to this SDK;
+		// changed rules are re-encoded from the known fields.
 		rules := []base.LifecycleRule{}
 		for _, rule := range attrs.LifecycleRules {
 			rules = append(rules, base.LifecycleRule{
-				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-				Prefix:                 rule.Prefix,
+				DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+				DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+				Prefix:                      rule.Prefix,
 			})
 		}
 		b.b.LifecycleRules = rules
 	} else {
 		b.b.LifecycleRules = nil
 	}
-	if len(attrs.CORSRules) > 0 {
+	if attrs.CORSRules != nil {
 		b.b.CORSRules = toBaseCORSRules(attrs.CORSRules)
+	} else {
+		// Omit cached rules when the caller did not request a CORS update.
+		b.b.CORSRules = nil
 	}
 
 	// Setting a default retention needs the writeBucketRetentions capability, and
@@ -444,6 +495,10 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	previousReplication := b.b.ReplicationConfiguration
 	if attrs.ReplicationConfig != nil {
 		b.b.ReplicationConfiguration = toBaseReplicationConfiguration(attrs.ReplicationConfig, b.b.ReplicationConfiguration)
+	} else {
+		// Replication settings require a separate write capability. Cached values
+		// must not turn an unrelated update into a replication update.
+		b.b.ReplicationConfiguration = nil
 	}
 
 	newBucket, err := b.b.Update(ctx)
@@ -455,6 +510,9 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.Info = previousInfo
 		b.b.LifecycleRules = previousRules
 		b.b.ReplicationConfiguration = previousReplication
+		b.b.Type = previousType
+		b.b.CORSRules = previousCORS
+		b.b.DefaultServerSideEncryption = previousSSE
 	}
 	code, _ := base.Code(err)
 	if code == 409 {
@@ -522,9 +580,10 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 	var rules []LifecycleRule
 	for _, rule := range b.b.LifecycleRules {
 		rules = append(rules, LifecycleRule{
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-			Prefix:                 rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+			Prefix:                      rule.Prefix,
 		})
 	}
 	attrs := &BucketAttrs{
@@ -633,8 +692,8 @@ func (b *b2Bucket) listFileVersions(ctx context.Context, count int, nextName, ne
 	return files, name, id, nil
 }
 
-func (b *b2Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, continuation string) ([]b2FileInterface, string, error) {
-	fs, cont, err := b.b.ListUnfinishedLargeFiles(ctx, count, continuation)
+func (b *b2Bucket) listUnfinishedLargeFiles(ctx context.Context, count int, continuation, prefix string) ([]b2FileInterface, string, error) {
+	fs, cont, err := b.b.ListUnfinishedLargeFilesWithPrefix(ctx, count, continuation, prefix)
 	if err != nil {
 		return nil, "", err
 	}
@@ -835,8 +894,12 @@ func (b *b2FileReader) Close() error {
 	return b.b.Close()
 }
 
-func (b *b2FileReader) stats() (int, string, string, map[string]string) {
-	return b.b.ContentLength, b.b.ContentType, b.b.SHA1, b.b.Info
+func (b *b2FileReader) stats() (int64, string, string, map[string]string) {
+	size := int64(b.b.ContentLength)
+	if body, ok := b.b.ReadCloser.(interface{ Size() int64 }); ok {
+		size = body.Size()
+	}
+	return size, b.b.ContentType, b.b.SHA1, b.b.Info
 }
 
 func (b *b2FileReader) id() string { return b.b.ID }

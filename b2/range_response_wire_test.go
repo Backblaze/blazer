@@ -28,13 +28,32 @@ import (
 func newRangeReaderWireBucket(t *testing.T, download func(b2wiretest.Request) b2wiretest.Response) (*Bucket, *b2wiretest.Server) {
 	t.Helper()
 	srv := b2wiretest.New(t)
-	srv.Handle("object", download)
+	serve := func(req b2wiretest.Request) b2wiretest.Response {
+		response := download(req)
+		if response.Header == nil {
+			response.Header = make(http.Header)
+		}
+		response.Header.Set("X-Bz-File-Id", "range-object-id")
+		return response
+	}
+	srv.Handle("object", serve)
+	srv.Handle("b2_download_file_by_id", func(req b2wiretest.Request) b2wiretest.Response {
+		if id := req.Query.Get("fileId"); id != "range-object-id" {
+			t.Errorf("download ID = %q, want range-object-id", id)
+		}
+		return serve(req)
+	})
 	return newListingWireBucket(t, context.Background(), srv), srv
 }
 
 func assertRangeCalls(t *testing.T, srv *b2wiretest.Server, want ...string) {
 	t.Helper()
-	calls := srv.Calls("object")
+	var calls []b2wiretest.Request
+	for _, req := range srv.Requests() {
+		if req.Call == "object" || req.Call == "b2_download_file_by_id" {
+			calls = append(calls, req)
+		}
+	}
 	if len(calls) != len(want) {
 		t.Fatalf("range calls = %d, want %d", len(calls), len(want))
 	}

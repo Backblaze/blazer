@@ -5,13 +5,13 @@ Security-response owner: Backblaze Security. Repository security-review owners: 
 
 ## Supported Versions
 
-The latest minor release line (currently `0.9.x`) is supported. Earlier releases are not patched in
+The latest minor release line (currently `0.10.x`) is supported. Earlier releases are not patched in
 place; upgrade to the newest `v0.x` tag to receive fixes. Once 1.0 ships, only the latest minor release
 receives security patches. See [`RELEASE.md`](RELEASE.md).
 
 | Version | Supported |
 |---|---|
-| Latest minor (`0.9.x`) | Yes |
+| Latest minor (`0.10.x`) | Yes |
 | Older releases | No |
 
 ## Reporting a Vulnerability
@@ -57,11 +57,24 @@ Out of scope:
   and in JSON request bodies on large-file start (`serverSideEncryption`) and server-side copy
   (`sourceServerSideEncryption`, `destinationServerSideEncryption`). They are not persisted. If you log
   requests, redact both headers and bodies.
-- **Transport**: all B2 API traffic uses HTTPS. Certificate verification failures stop retries and
-  return the original error; they are never treated as retryable.
+- **Transport**: `b2.NewClient` uses HTTPS by default. `b2.APIBase` requires HTTPS except
+  for `localhost` or loopback IP addresses, which also accept HTTP without an opt-in.
+  `b2.InsecureAPIBase` explicitly allows non-loopback HTTP for trusted test or self-hosted endpoints;
+  HTTP transmits credentials and data without encryption. The lower-level `base.SetAPIBase`
+  accepts a caller-supplied endpoint without this scheme check. Certificate verification
+  failures stop retries and return the original error; they are never treated as retryable.
 - **Tests and CI**: live tests read `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` from the
   environment; CI keeps them in repository secrets used only by `test-live.yml`. The `.sdkharness`
   checks refuse any non-loopback endpoint and drop ambient `B2_*` variables.
+
+## Credential formatting
+
+SDK credential containers redact direct diagnostic formatting, including SDK-owned session stores.
+File and bucket formatters retain non-secret metadata such as names, sizes and IDs. Clients and
+in-memory session stores remain fully redacted. Large-file formatters retain the upload ID.
+Public credential string fields and JSON persistence retain their original values. Do not log those
+fields or serialized credentials. Go can bypass formatting methods inside caller-defined unexported
+wrapper fields; formatting such wrappers is not protected by the container formatters.
 
 ## Best practices for users
 

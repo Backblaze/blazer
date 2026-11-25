@@ -9,8 +9,143 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
+
+func replacementPartOperations() []struct {
+	name string
+	run  func(context.Context, *LargeFile, *b2wiretest.Server) error
+} {
+	return []struct {
+		name string
+		run  func(context.Context, *LargeFile, *b2wiretest.Server) error
+	}{
+		{"copy", func(ctx context.Context, large *LargeFile, _ *b2wiretest.Server) error {
+			_, err := large.CopyPart(ctx, "source", 1, "bytes=0-4999999", nil)
+			return err
+		}},
+		{"upload", func(ctx context.Context, large *LargeFile, wire *b2wiretest.Server) error {
+			chunk := &FileChunk{file: large, url: wire.URL() + "/b2_upload_part", token: "upload-token"}
+			_, err := chunk.UploadPart(ctx, bytes.NewReader(bytes.Repeat([]byte("x"), 5_000_000)), "replacement-sha", 5_000_000, 1)
+			return err
+		}},
+	}
+}
+
+func TestPartReplacementRejectsInvalidPriorPart(t *testing.T) {
+	// ListParts may return a later number when the requested part is absent:
+	// https://www.backblaze.com/apidocs/b2-list-parts
+	for _, operation := range replacementPartOperations() {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, body string
+				status     int
+			}{
+				{"different hash", `{"parts":[{"fileId":"large","partNumber":1,"contentSha1":"different","contentLength":5000000}],"nextPartNumber":null}`, http.StatusOK},
+				{"different number", `{"parts":[{"fileId":"large","partNumber":2,"contentSha1":"old","contentLength":5000000}],"nextPartNumber":null}`, http.StatusOK},
+				{"missing part", `{"parts":[],"nextPartNumber":null}`, http.StatusOK},
+				{"service error", `{"status":400,"code":"bad_request","message":"list-parts denied"}`, http.StatusBadRequest},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					wire := b2wiretest.New(t)
+					wire.StrictReplySequence("b2_list_parts", b2wiretest.Response{Status: tc.status, Body: tc.body})
+					wire.StrictReplySequence("b2_copy_part")
+					wire.StrictReplySequence("b2_upload_part")
+					account, err := AuthorizeAccount(t.Context(), "account", "key", SetAPIBase(wire.URL()))
+					if err != nil {
+						t.Fatal(err)
+					}
+					large := (&File{ID: "large", b2: account}).CompileParts(11_000_000, map[int]string{1: "old", 2: "two"})
+					large.partSizes = map[int]int64{2: 6_000_000}
+					err = operation.run(t.Context(), large, wire)
+					if tc.status == http.StatusBadRequest {
+						if status, code, message := MsgCode(err); status != 400 || code != "bad_request" || message != "list-parts denied" {
+							t.Fatalf("replacement error = %v (%d, %q, %q), want scripted list-parts error", err, status, code, message)
+						}
+					} else if want := "b2: cannot determine prior size of large-file part 1"; err == nil || err.Error() != want {
+						t.Fatalf("replacement error = %v, want %q", err, want)
+					}
+					requests := wire.Calls("b2_list_parts")
+					if len(requests) != 1 || !reflect.DeepEqual(requests[0].JSON, map[string]any{"fileId": "large", "startPartNumber": float64(1), "maxPartCount": float64(1)}) {
+						t.Fatalf("list-parts requests = %+v, want one lookup for large part 1", requests)
+					}
+					if len(wire.Calls("b2_copy_part")) != 0 || len(wire.Calls("b2_upload_part")) != 0 {
+						t.Fatal("invalid prior-part lookup sent a replacement request")
+					}
+					if large.size != 11_000_000 || !reflect.DeepEqual(large.hashes, map[int]string{1: "old", 2: "two"}) || !reflect.DeepEqual(large.partSizes, map[int]int64{2: 6_000_000}) {
+						t.Fatalf("rejected replacement changed size=%d hashes=%v partSizes=%v", large.size, large.hashes, large.partSizes)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPartReplacementRejectsHashChangedDuringLookup(t *testing.T) {
+	for _, operation := range replacementPartOperations() {
+		t.Run(operation.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			wire := b2wiretest.New(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			releaseLookup := sync.OnceFunc(func() { close(release) })
+			defer releaseLookup()
+			var listCalls atomic.Int32
+			wire.Handle("b2_list_parts", func(b2wiretest.Request) b2wiretest.Response {
+				if listCalls.Add(1) == 1 {
+					close(entered)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return b2wiretest.Response{Status: http.StatusBadRequest, Body: `{"status":400,"code":"bad_request","message":"lookup gate timed out"}`}
+					}
+				}
+				return b2wiretest.Response{Body: `{"parts":[{"fileId":"large","partNumber":1,"contentSha1":"old","contentLength":5000000}],"nextPartNumber":null}`}
+			})
+			wire.StrictReplySequence("b2_copy_part")
+			wire.StrictReplySequence("b2_upload_part", b2wiretest.Response{Body: `{"fileId":"large","partNumber":1,"contentLength":7000000,"contentSha1":"concurrent-sha"}`})
+			account, err := AuthorizeAccount(ctx, "account", "key", SetAPIBase(wire.URL()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			large := (&File{ID: "large", b2: account}).CompileParts(11_000_000, map[int]string{1: "old", 2: "two"})
+			large.partSizes = map[int]int64{2: 6_000_000}
+			done := make(chan error, 1)
+			go func() { done <- operation.run(ctx, large, wire) }()
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal("replacement never entered the first list-parts lookup")
+			}
+			// A second real upload resolves the old size and updates local metadata
+			// while the first lookup is held. No production hook or map edit is used.
+			chunk := &FileChunk{file: large, url: wire.URL() + "/b2_upload_part", token: "upload-token"}
+			if _, err := chunk.UploadPart(ctx, bytes.NewReader(bytes.Repeat([]byte("y"), 7_000_000)), "concurrent-sha", 7_000_000, 1); err != nil {
+				t.Fatal(err)
+			}
+			releaseLookup()
+			select {
+			case err := <-done:
+				if want := "b2: large-file part 1 changed while resolving its size"; err == nil || err.Error() != want {
+					t.Fatalf("replacement error = %v, want %q", err, want)
+				}
+			case <-ctx.Done():
+				t.Fatal("replacement did not finish after its lookup was released")
+			}
+			if listCalls.Load() != 2 || len(wire.Calls("b2_upload_part")) != 1 || len(wire.Calls("b2_copy_part")) != 0 {
+				t.Fatalf("calls: list=%d upload=%d copy=%d, want 2/1/0", listCalls.Load(), len(wire.Calls("b2_upload_part")), len(wire.Calls("b2_copy_part")))
+			}
+			if large.size != 13_000_000 || !reflect.DeepEqual(large.hashes, map[int]string{1: "concurrent-sha", 2: "two"}) || !reflect.DeepEqual(large.partSizes, map[int]int64{1: 7_000_000, 2: 6_000_000}) {
+				t.Fatalf("rejected lookup overwrote concurrent state: size=%d hashes=%v partSizes=%v", large.size, large.hashes, large.partSizes)
+			}
+		})
+	}
+}
 
 func TestCopyPartRecordsHashAndSizeForFinish(t *testing.T) {
 	var copied map[string]any

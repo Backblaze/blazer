@@ -33,6 +33,13 @@ func TestNewBucketAttributesWire(t *testing.T) {
 			wantInfo: map[string]string{"this": "that", "other": "thing"},
 		},
 		{
+			name:      "unfinished-only",
+			attrs:     &BucketAttrs{LifecycleRules: []LifecycleRule{{Prefix: "uploads/", DaysUnfinishedUntilCanceled: 7}}},
+			rules:     []map[string]any{{"fileNamePrefix": "uploads/", "daysFromStartingToCancelingUnfinishedLargeFiles": 7}},
+			response:  `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[{"fileNamePrefix":"uploads/","daysFromStartingToCancelingUnfinishedLargeFiles":7}],"revision":1}`,
+			wantRules: []LifecycleRule{{Prefix: "uploads/", DaysUnfinishedUntilCanceled: 7}},
+		},
+		{
 			name: "only-rules",
 			attrs: &BucketAttrs{LifecycleRules: []LifecycleRule{
 				{Prefix: "whee/", DaysHiddenUntilDeleted: 30},
@@ -91,6 +98,15 @@ func TestNewBucketAttributesWire(t *testing.T) {
 			b2wiretest.AssertJSON(t, request, "bucketInfo", test.info)
 			b2wiretest.AssertJSON(t, request, "lifecycleRules", test.rules)
 			b2wiretest.AssertNoJSON(t, request, "defaultServerSideEncryption")
+			cached := bucket.b.attrs()
+			if len(cached.LifecycleRules) != len(test.wantRules) {
+				t.Fatalf("create response rules = %+v, want %+v", cached.LifecycleRules, test.wantRules)
+			}
+			for i, want := range test.wantRules {
+				if got := cached.LifecycleRules[i].DaysUnfinishedUntilCanceled; got != want.DaysUnfinishedUntilCanceled {
+					t.Errorf("create response cancellation days = %d, want %d", got, want.DaysUnfinishedUntilCanceled)
+				}
+			}
 			attrs, err := bucket.Attrs(ctx)
 			if err != nil {
 				t.Fatal(err)
@@ -108,6 +124,9 @@ func TestNewBucketAttributesWire(t *testing.T) {
 			}
 			for i, want := range test.wantRules {
 				got := attrs.LifecycleRules[i]
+				if got.DaysUnfinishedUntilCanceled != want.DaysUnfinishedUntilCanceled {
+					t.Errorf("create cancellation days = %d, want %d", got.DaysUnfinishedUntilCanceled, want.DaysUnfinishedUntilCanceled)
+				}
 				if got.Prefix != want.Prefix {
 					t.Errorf("Attrs LifecycleRules[%d].Prefix = %q, want %q", i, got.Prefix, want.Prefix)
 				}

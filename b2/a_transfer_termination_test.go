@@ -88,7 +88,10 @@ func TestTransferOperationsComplete(t *testing.T) {
 			srv, bucket := newSHA1WireBucket(t)
 			srv.Reply("b2_start_large_file", http.StatusOK, `{"fileId":"completion-id"}`)
 			srv.Reply("b2_finish_large_file", http.StatusOK, `{"fileId":"completion-id","fileName":"completion","action":"upload"}`)
-			srv.Handle("completion", func(request b2wiretest.Request) b2wiretest.Response {
+			srv.Handle("b2_download_file_by_id", func(request b2wiretest.Request) b2wiretest.Response {
+				if id := request.Query.Get("fileId"); id != "completion-id" {
+					t.Errorf("download ID = %q, want completion-id", id)
+				}
 				responses := map[string]b2wiretest.Response{
 					"bytes=0-2": {Status: http.StatusPartialContent, Body: "abc", Header: http.Header{"Content-Range": {"bytes 0-2/9"}}},
 					"bytes=3-5": {Status: http.StatusPartialContent, Body: "def", Header: http.Header{"Content-Range": {"bytes 3-5/9"}}},

@@ -35,7 +35,7 @@ func listingPages(pages [2]string, cursor map[string]string) func(b2wiretest.Req
 }
 
 func TestListDefaultPageSizeUsesB2Default(t *testing.T) {
-	// https://www.backblaze.com/apidocs/b2-list-file-names documents zero as its default of 100.
+	// https://www.backblaze.com/apidocs/b2-list-file-names documents the default as 100.
 	for _, tc := range []struct {
 		name string
 		opts []ListOption
@@ -84,11 +84,86 @@ func TestListDefaultPageSizeUsesB2Default(t *testing.T) {
 				t.Fatalf("listing requests = %d, want 2", len(calls))
 			}
 			for _, call := range calls {
-				b2wiretest.AssertJSON(t, call, "maxFileCount", 0)
+				b2wiretest.AssertJSON(t, call, "maxFileCount", 100)
 			}
 			b2wiretest.AssertNoJSON(t, calls[0], "startFileName")
 			b2wiretest.AssertJSON(t, calls[1], "startFileName", "file-101")
 		})
+	}
+}
+
+func TestListDefaultPageSizeOnWire(t *testing.T) {
+	// https://www.backblaze.com/apidocs/b2-list-file-names
+	// https://www.backblaze.com/apidocs/b2-list-file-versions
+	for _, tc := range []struct {
+		name      string
+		call      string
+		opts      []ListOption
+		wantField bool
+	}{
+		{"names", "b2_list_file_names", nil, true},
+		{"names explicit zero", "b2_list_file_names", []ListOption{ListPageSize(0)}, true},
+		{"versions", "b2_list_file_versions", []ListOption{ListHidden()}, true},
+		{"versions explicit zero", "b2_list_file_versions", []ListOption{ListHidden(), ListPageSize(0)}, true},
+		{"unfinished", "b2_list_unfinished_large_files", []ListOption{ListUnfinished()}, false},
+		{"unfinished explicit zero", "b2_list_unfinished_large_files", []ListOption{ListUnfinished(), ListPageSize(0)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv := b2wiretest.New(t)
+			srv.Reply(tc.call, http.StatusOK, `{"files":[],"nextFileName":null,"nextFileId":null}`)
+			bucket := newListingWireBucket(t, ctx, srv)
+			iter := bucket.List(ctx, tc.opts...)
+			if iter.Next() || iter.Err() != nil {
+				t.Fatalf("empty listing returned an object or error: %v", iter.Err())
+			}
+			calls := srv.Calls(tc.call)
+			if len(calls) != 1 {
+				t.Fatalf("%s requests = %d, want 1", tc.call, len(calls))
+			}
+			if tc.wantField {
+				b2wiretest.AssertJSON(t, calls[0], "maxFileCount", 100)
+			} else {
+				b2wiretest.AssertNoJSON(t, calls[0], "maxFileCount")
+			}
+		})
+	}
+}
+
+func TestListPageSizeB2MaximumOnWire(t *testing.T) {
+	// Both file listing APIs document 10,000 as the maximum maxFileCount.
+	// https://www.backblaze.com/apidocs/b2-list-file-names
+	// https://www.backblaze.com/apidocs/b2-list-file-versions
+	for _, endpoint := range []struct {
+		name string
+		call string
+		opts []ListOption
+	}{
+		{"names", "b2_list_file_names", nil},
+		{"versions", "b2_list_file_versions", []ListOption{ListHidden()}},
+	} {
+		for _, tc := range []struct{ given, want int }{
+			{1000, 1000}, {1001, 1001}, {9999, 9999}, {10000, 10000}, {10001, 10000},
+		} {
+			t.Run(fmt.Sprintf("%s/%d", endpoint.name, tc.given), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				srv := b2wiretest.New(t)
+				srv.Reply(endpoint.call, http.StatusOK, `{"files":[],"nextFileName":null,"nextFileId":null}`)
+				bucket := newListingWireBucket(t, ctx, srv)
+				opts := append(append([]ListOption(nil), endpoint.opts...), ListPageSize(tc.given))
+				iter := bucket.List(ctx, opts...)
+				if iter.Next() || iter.Err() != nil {
+					t.Fatalf("empty listing returned an object or error: %v", iter.Err())
+				}
+				calls := srv.Calls(endpoint.call)
+				if len(calls) != 1 {
+					t.Fatalf("%s requests = %d, want 1", endpoint.call, len(calls))
+				}
+				b2wiretest.AssertJSON(t, calls[0], "maxFileCount", tc.want)
+			})
+		}
 	}
 }
 
@@ -171,9 +246,83 @@ func TestListSendsPrefixAndCursorOnEveryPage(t *testing.T) {
 	}
 }
 
+// A version cursor can identify the next folder by name without a file ID.
+func TestListVersionsContinuesWithNameOnlyCursor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := b2wiretest.New(t)
+	const call = "b2_list_file_versions"
+	pages := [2]string{
+		`{"files":[{"fileName":"logs/a","fileId":"id-a","action":"upload"}],"nextFileName":"logs/sub/","nextFileId":null}`,
+		`{"files":[{"fileName":"logs/sub/","fileId":null,"action":"folder"},{"fileName":"logs/z","fileId":"id-z","action":"upload"}],"nextFileName":null,"nextFileId":null}`,
+	}
+	srv.Handle(call, listingPages(pages, map[string]string{"startFileName": "logs/sub/"}))
+	bucket := newListingWireBucket(t, ctx, srv)
+	iter := bucket.List(ctx, ListHidden(), ListPrefix("logs/"), ListDelimiter("/"), ListPageSize(2))
+	var names []string
+	for iter.Next() {
+		names = append(names, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if want := []string{"logs/a", "logs/z"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("names = %q, want %q", names, want)
+	}
+	calls := srv.Calls(call)
+	if len(calls) != 2 {
+		t.Fatalf("%s requests = %d, want 2", call, len(calls))
+	}
+	b2wiretest.AssertNoJSON(t, calls[0], "startFileName")
+	b2wiretest.AssertJSON(t, calls[1], "startFileName", "logs/sub/")
+	for _, call := range calls {
+		b2wiretest.AssertNoJSON(t, call, "startFileId")
+		b2wiretest.AssertJSON(t, call, "prefix", "logs/")
+		b2wiretest.AssertJSON(t, call, "delimiter", "/")
+	}
+}
+
+// Listing unfinished uploads with a name prefix must only return
+// uploads that match the prefix.
+func TestRegression_ListUnfinishedHonoursPrefix(t *testing.T) {
+	srv := b2wiretest.New(t)
+	bucket := newListingWireBucket(t, newTestCtx(t), srv)
+	all := []string{"logs/a", "other/b", "logs/c", "tmp/d"}
+	srv.Handle("b2_list_unfinished_large_files", func(r b2wiretest.Request) b2wiretest.Response {
+		prefix, _ := r.JSON["namePrefix"].(string) // a server honours the B2 namePrefix parameter
+		var files []string
+		for _, n := range all {
+			if strings.HasPrefix(n, prefix) {
+				files = append(files, `{"fileName":"`+n+`","fileId":"id-`+n+`","action":"start"}`)
+			}
+		}
+		return b2wiretest.Response{Body: `{"files":[` + strings.Join(files, ",") + `],"nextFileId":null}`}
+	})
+	iter := bucket.List(newTestCtx(t), ListUnfinished(), ListPrefix("logs/"))
+	var got []string
+	for iter.Next() {
+		got = append(got, iter.Object().Name())
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture holds logs/a, logs/c, other/b and tmp/d; exactly the two
+	// matching uploads must come back (the fake server lists in fixture
+	// order, so the order is fixed), and the prefix must reach the wire.
+	if want := []string{"logs/a", "logs/c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ListUnfinished with ListPrefix(\"logs/\") returned %q, want %q", got, want)
+	}
+	calls := srv.Calls("b2_list_unfinished_large_files")
+	if len(calls) == 0 {
+		t.Fatal("no b2_list_unfinished_large_files request was sent")
+	}
+	for _, c := range calls {
+		b2wiretest.AssertJSON(t, c, "namePrefix", "logs/")
+	}
+}
+
 func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
 	// https://www.backblaze.com/apidocs/b2-list-unfinished-large-files
-	// Add the prefix assertion when #184 makes ListUnfinished send it.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv := b2wiretest.New(t)
@@ -184,7 +333,7 @@ func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
 	}
 	srv.Handle(call, listingPages(pages, map[string]string{"startFileId": "id-c"}))
 	bucket := newListingWireBucket(t, ctx, srv)
-	iter := bucket.List(ctx, ListUnfinished(), ListPageSize(2))
+	iter := bucket.List(ctx, ListUnfinished(), ListPrefix("logs/"), ListPageSize(2))
 	var names []string
 	for iter.Next() {
 		names = append(names, iter.Object().Name())
@@ -202,9 +351,72 @@ func TestListUnfinishedSendsCursorOnEveryPage(t *testing.T) {
 	for _, r := range calls {
 		b2wiretest.AssertJSON(t, r, "bucketId", "bid")
 		b2wiretest.AssertJSON(t, r, "maxFileCount", 2)
+		b2wiretest.AssertJSON(t, r, "namePrefix", "logs/")
 	}
 	b2wiretest.AssertNoJSON(t, calls[0], "startFileId")
 	b2wiretest.AssertJSON(t, calls[1], "startFileId", "id-c")
+}
+
+func TestListedObjectAttrsStatus(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		file   string
+		call   string
+		opts   []ListOption
+		action string
+		want   ObjectState
+	}{
+		{
+			name:   "unfinished large file",
+			file:   "unfinished/large",
+			call:   "b2_list_unfinished_large_files",
+			opts:   []ListOption{ListPrefix("unfinished/"), ListUnfinished()},
+			action: "start",
+			want:   Started,
+		},
+		{
+			name:   "current file",
+			file:   "uploaded/file",
+			call:   "b2_list_file_names",
+			opts:   []ListOption{ListPrefix("uploaded/")},
+			action: "upload",
+			want:   Uploaded,
+		},
+		{
+			name:   "hidden file",
+			file:   "hidden/file",
+			call:   "b2_list_file_versions",
+			opts:   []ListOption{ListPrefix("hidden/"), ListHidden()},
+			action: "hide",
+			want:   Hider,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			srv := b2wiretest.New(t)
+			srv.Reply(test.call, http.StatusOK, `{"files":[{"fileName":"`+test.file+`","fileId":"id","action":"`+test.action+`"}],"nextFileName":null,"nextFileId":null}`)
+			bucket := newListingWireBucket(t, ctx, srv)
+
+			iter := bucket.List(ctx, test.opts...)
+			if !iter.Next() {
+				t.Fatalf("listing yielded no object: %v", iter.Err())
+			}
+			attrs, err := iter.Object().Attrs(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attrs.Status != test.want {
+				t.Errorf("Attrs().Status = %v, want %v", attrs.Status, test.want)
+			}
+			if iter.Next() {
+				t.Fatal("listing yielded more than one object")
+			}
+			if err := iter.Err(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestListPrefixFromKeyOrCaller(t *testing.T) {
