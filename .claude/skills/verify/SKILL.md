@@ -23,9 +23,11 @@ When a test fails, fix the code, not the test. Paste the output tail into the PR
 - `changelog-check`: the required entry is missing or fragments failed validation.
 - `scripts-test`: a script test failed or could not complete.
 
-## Outside the gate
+## Live and separate checks
 
-Live B2 tests need `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY`; they skip without credentials.
-Do not claim a live run unless it ran. See `docs/testing.md` for live test requirements.
+The `test` stage runs live B2 integration tests when both `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` are set.
+The tests skip when either credential is missing. A live run can create and clean up test resources in the account.
+For a normal gate run, unset both credentials unless you intend a live run. Report whether live tests ran.
+See `docs/testing.md` for live test requirements.
 The gate does not run the `.sdkharness` simulator contract, `make known-defects`, or `make release-check`.
 Run those separately when required and report what did not run.
