@@ -139,6 +139,31 @@ YAML file with your change. Do not edit `CHANGELOG.md` directly; maintainers reb
 (see [RELEASE.md](RELEASE.md)). The `changelog` check fails on a PR that changes library code without an
 entry; a maintainer can apply the `skip-changelog` label when no entry is warranted.
 
+### Deprecating and removing public API
+
+1. Mark the old symbol with a `// Deprecated: use X.` godoc line naming its replacement.
+   Start that line in its own paragraph, separated from the summary by a blank `//` line.
+   Go tools recognize deprecation notices that begin a paragraph.
+
+   ```go
+   // Old performs the operation.
+   // It remains available during the support window.
+   //
+   // Deprecated: use New.
+   func Old() {}
+   ```
+
+2. Ship the replacement and an example in the same release.
+3. Add a `Deprecated` changelog entry.
+4. Do not count the deprecating release. Keep the old symbol in the next two minor releases.
+5. Remove it no earlier than the third minor release after deprecation.
+   Add a `Removed` entry starting with `**Breaking:**` that says what callers must do.
+
+   Deprecated in v0.12.0: keep it in v0.13.0 and v0.14.0, and remove it in v0.15.0 at the earliest.
+
+Blazer is pre-1.0, so breaking changes bump the minor version.
+The API compatibility check requires a new changelog fragment containing `**Breaking:**` for incompatible changes.
+
 ### Working with coding agents
 
 [AGENTS.md](AGENTS.md) is the map for coding agents (and a quick start for people). Larger changes start
