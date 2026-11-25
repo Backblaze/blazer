@@ -1,0 +1,26 @@
+name: Red check
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]   # the refactor label changes the check
+  merge_group:
+permissions:
+  contents: read
+jobs:
+  red-check:
+    if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0               # the merge base must be present
+          persist-credentials: false
+      - name: New tests fail without the change and pass with it (in the merge queue, the combined commit passes)
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          REFACTOR: ${{ contains(github.event.pull_request.labels.*.name, 'refactor') }}
+        run: |
+          if [ "$EVENT" = merge_group ]; then exec python3 .github/scripts/red_check.py --green-only --test-cmd "go test -race ./... && make scripts-test"; fi
+          args=()
+          [ "$REFACTOR" = true ] && args+=(--refactor)
+          python3 .github/scripts/red_check.py --base "$BASE" --test-cmd "go test -race ./... && make scripts-test" "${args[@]}"

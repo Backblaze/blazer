@@ -1,0 +1,74 @@
+name: Nightly review of existing code
+# Reviews one area of the repo each night with a read-only agent, then a separate step files
+# a single issue. The agent has no write access; only the last step can create an issue.
+# Finds old bugs early, instead of letting them surface as late findings on unrelated PRs.
+# Uses Claude Code's headless run as the example; for Codex, Copilot or Gemini CLI swap in the
+# install, key and command from references/ai-assistants.md and keep the tools read-only.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      area:
+        description: 'Directory to review (default: rotate by day of year)'
+        required: false
+permissions:
+  contents: read
+  issues: write
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false   # the agent reads the checkout; keep the token out of .git/config
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Pick the area
+        id: area
+        env:
+          INPUT_AREA: ${{ inputs.area }}
+        run: |
+          if [ -n "$INPUT_AREA" ]; then
+            area="$INPUT_AREA"
+            [ -d "$area" ] && [[ "$area" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "bad area: $area"; exit 1; }
+          else
+            # Every top-level directory (dot-directories such as .github included) except .git and
+            # vendored code, plus "." for the files at the root, so nothing is skipped over the rotation.
+            areas=$( { echo .; git ls-tree -d --name-only HEAD | grep -vxE '\.git|node_modules|vendor' || true; } | sort -u)
+            count=$(grep -c . <<<"$areas")
+            idx=$(( 10#$(date +%j) % count + 1 ))
+            area=$(sed -n "${idx}p" <<<"$areas")
+          fi
+          echo "name=$area" >> "$GITHUB_OUTPUT"
+      - name: Review the area (read-only)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AREA: ${{ steps.area.outputs.name }}
+        run: |
+          if [ "$AREA" = . ]; then scope="the files directly in the repository root (not its subdirectories)"; else scope="the code under $AREA/"; fi
+          rc=0
+          claude -p "Review $scope for real bugs that exist today. Follow REVIEW.md and AGENTS.md. For each finding give file and line, one sentence on what breaks, and tag it Important or Nit. Report at most 10 findings. Skip generated files and anything CI already enforces. Start your reply with the line 'Findings: N'. Do not suggest style changes." \
+            --tools "Read,Grep,Glob" \
+            --allowedTools "Read,Grep,Glob" \
+            --strict-mcp-config \
+            --permission-mode dontAsk \
+            --output-format json > review.raw || rc=$?
+          # normalize_result.py comes from sdlc-evals/assets; it also reads codex exec --json output.
+          python3 .github/scripts/normalize_result.py --assistant claude --exit-code "$rc" review.raw > review.json
+          jq -e '.ok == true' review.json >/dev/null \
+            || { echo "the review run failed: $(jq -r .why review.json)"; exit 1; }   # a failed run is not a clean area
+          jq -r '.final' review.json > review.md
+      - name: File one issue if there are findings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AREA: ${{ steps.area.outputs.name }}
+        run: |
+          n=$(grep -m1 -oiE '^findings:[[:space:]]*[0-9]+' review.md | grep -oE '[0-9]+' || true)   # no match is not an error
+          if [ "$n" = 0 ]; then
+            echo "Nothing to report for $AREA"
+            exit 0
+          fi   # any other count, or no parsable count, files the issue so a person looks
+          gh issue create \
+            --title "[Bug] Nightly review of $AREA: findings $(date +%F)" \
+            --label bug \
+            --body-file review.md

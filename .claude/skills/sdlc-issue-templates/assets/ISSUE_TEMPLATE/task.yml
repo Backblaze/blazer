@@ -1,0 +1,53 @@
+name: Task
+description: A bounded piece of work with a clear definition of done
+title: "[Task] "
+labels: ["task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for work that is already decided: maintenance, chores, refactors, docs, follow-ups. For a new idea use the feature form, and for something broken use the bug form.
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What needs to be done, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why now? Link the parent issue, intent, spec, incident or discussion it comes from.
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+      description: Checks that someone can run or observe. For example "make test passes", "the dashboard shows X", "the doc lists Y".
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is in, and what is explicitly out.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and how to revert
+      description: What could go wrong, and how to undo the change.
+  - type: input
+    id: area
+    attributes:
+      label: Area or owner
+      description: The component, team or code owner affected.
