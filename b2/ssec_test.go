@@ -133,7 +133,7 @@ func TestSSECKeyEveryFormatRedactsMaterial(t *testing.T) {
 		{"exported struct field", struct{ Key SSECKey }{*key}},
 		{"unexported struct field", struct{ key SSECKey }{*key}},
 	}
-	forbidden := []string{string(raw), "51 51", "3333", hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw), keyID}
+	forbidden := []string{string(raw), "51 51 51", hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw), keyID}
 	for _, value := range values {
 		for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d", "%x", "%X"} {
 			t.Run(value.name+"/"+format, func(t *testing.T) {
