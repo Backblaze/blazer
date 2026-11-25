@@ -358,6 +358,23 @@ concern: it can become stale as the code changes.
 
 ## Backblaze ecosystem
 
+Choose by task:
+
+- Manage B2 storage as code: use the Terraform provider.
+- Write a Go program: use blazer, this repository's Go SDK.
+- Write a Python program: use the Python SDK.
+- Write a TypeScript or JavaScript program: use the TypeScript SDK, incubating in Backblaze Labs.
+- Write a Java program: use the official Java SDK.
+- Write a Rust program: the Rust SDK is upcoming.
+- Give an MCP-compatible AI client access to B2: use b2-mcp, incubating in Backblaze Labs.
+- Orchestrate generative AI media pipelines with output provenance: use genblaze.
+- Work with B2 from the command line: use the B2 Command Line Tool.
+
+All projects:
+
+- **[terraform-provider-b2](https://github.com/Backblaze/terraform-provider-b2)** — the Terraform provider for B2 Cloud Storage.
+- **[b2-sdk-java](https://github.com/Backblaze/b2-sdk-java)** — the official Java SDK for B2 storage APIs.
+- **[genblaze](https://github.com/backblaze-labs/genblaze)** — an open source Python SDK for generative AI media pipelines with output provenance.
 - **[b2-sdk-python](https://github.com/Backblaze/b2-sdk-python)** — the Python SDK for B2, and the
   reference implementation Blazer is checked against.
 - **[B2 Command Line Tool](https://github.com/Backblaze/B2_Command_Line_Tool)** — the `b2` CLI.
