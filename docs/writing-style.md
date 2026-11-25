@@ -65,7 +65,7 @@ Public identifiers and B2 API field names never change.
 
 **README**
 Instead of: “Unless you specifically need the Native API, you should use the MinIO Go Client SDK with B2's S3 Compatible API.”
-Write: “If you do not need the Native API, use the MinIO Go Client SDK with B2's S3 Compatible API.”
+Write: “If you do not need the Native API, you should use the MinIO Go Client SDK with B2's S3 Compatible API.”
 
 **Upgrade guide**
 Instead of: “v0.10.0 adds the parity capabilities and includes breaking changes. Three require a source change (they cause compile errors); the rest change runtime behavior for specific call patterns — mostly turning a previously silent, risky behavior into an explicit error ("fail closed").”
