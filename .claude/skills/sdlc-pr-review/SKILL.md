@@ -34,7 +34,7 @@ Hosting options: the managed Code Review service (admin enables it per repositor
 
 ## Mode B: review a diff or PR
 
-1. Get the diff (`git diff <base>...HEAD`, or `gh pr diff`). Read `REVIEW.md`, `CLAUDE.md`, and the change's `intent/<slug>/spec.md` and `plan.md` if present. The compliance pass depends on the committed plan, which a reviewer looking at the diff alone would not have open.
+1. Get the diff (`git diff <base>...HEAD`, or `gh pr diff`). Read `REVIEW.md`, `CLAUDE.md`, and the change's `docs/product-specs/<slug>/spec.md` and `docs/exec-plans/{active,completed}/<slug>/plan.md` if present. The compliance pass depends on the committed plan, which a reviewer looking at the diff alone would not have open.
 2. Run each pass in `REVIEW.md` over the full diff, citing requirement numbers (R1..) and plan steps where relevant.
 3. Check that tests were not weakened and that `plan.md` was updated if the implementation departed from it.
 4. Report a table sorted by severity:

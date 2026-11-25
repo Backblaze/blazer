@@ -142,7 +142,7 @@ entry; a maintainer can apply the `skip-changelog` label when no entry is warran
 ### Working with coding agents
 
 [AGENTS.md](AGENTS.md) is the map for coding agents (and a quick start for people). Larger changes start
-with an `intent.md` under [`intent/`](intent/README.md), and reviews follow [REVIEW.md](REVIEW.md).
+with an `intent.md` under [`docs/product-specs/`](docs/product-specs/README.md), and reviews follow [REVIEW.md](REVIEW.md).
 
 ### Submitting a Pull Request
 

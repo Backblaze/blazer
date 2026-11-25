@@ -2,7 +2,7 @@ Summary:
 
 ## Motivation
 
-Why this change is needed. Link the issue (`Fixes #123`) and, if one exists, `intent/<slug>/`.
+Why this change is needed. Link the issue (`Fixes #123`) and, if one exists, `docs/product-specs/<slug>/`.
 
 ## Changes
 

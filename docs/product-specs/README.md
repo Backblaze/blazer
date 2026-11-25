@@ -1,6 +1,6 @@
 # Change intents
 
-Each non-trivial change gets a folder `intent/<change-slug>/` holding three files, written in order. A
+Each non-trivial change gets a folder `docs/product-specs/<change-slug>/` holding its intent and spec. The three files are written in order. A
 human approves each one before the next is written; the approval is a commit or a PR review, not an
 agent's edit to the status line.
 
@@ -10,7 +10,9 @@ agent's edit to the status line.
 | `spec.md` | Claude, from the intent | Maintainer; area owner for flagged concerns | Numbered requirements R1.., design, constraint table, concerns. |
 | `plan.md` | Claude in plan mode | Engineer doing the work | Files, ordered steps citing R numbers, risks, proof. |
 
-Small fixes that already have a GitHub issue with a clear reproduction can skip `intent/` and start from a
+Plans live in `docs/exec-plans/active/<change-slug>/` while in progress and `docs/exec-plans/completed/<change-slug>/` after merge.
+
+Small fixes that already have a GitHub issue with a clear reproduction can skip these artifacts and start from a
 failing test. Link the GitHub issue in the `intent.md` header when one exists, and the intent folder in the
 issue.
 

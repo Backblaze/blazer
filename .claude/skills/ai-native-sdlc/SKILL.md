@@ -9,7 +9,7 @@ Humans stay accountable for every judgment call. Claude does the drafting, check
 
 ## The artifact chain
 
-Each change gets a folder in the repo: `intent/<change-slug>/`.
+Each change gets a folder `docs/product-specs/<change-slug>/` for its intent and spec; its plan lives in `docs/exec-plans/active/<change-slug>/` until merged, then in `docs/exec-plans/completed/<change-slug>/`.
 
 | Artifact | Written by | Approved by | Skill |
 |---|---|---|---|
@@ -21,7 +21,7 @@ Each change gets a folder in the repo: `intent/<change-slug>/`.
 
 ## Pick the next step from what exists
 
-Look in `intent/<slug>/` and the repo, then route:
+Look in `docs/product-specs/<slug>/`, `docs/exec-plans/{active,completed}/<slug>/` and the repo, then route:
 
 1. No folder, only an idea or a ticket: `sdlc-intent`.
 2. `intent.md` approved, no `spec.md`: `sdlc-spec`.

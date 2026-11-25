@@ -85,9 +85,9 @@ Each line was raised by a reviewer on at least two PRs.
 
 ## Workflow (AI-native SDLC)
 
-- Non-trivial changes start in `intent/<slug>/`: `intent.md` (problem) → `spec.md` (numbered requirements
-  R1..) → `plan.md` (steps cite R numbers). A human approves each before the next. Templates in
-  [`intent/README.md`](intent/README.md). Bug fixes with a linked issue may skip straight to a failing test.
+- Non-trivial changes start in `docs/product-specs/<slug>/`: `intent.md` (problem) → `spec.md` (numbered requirements
+  R1..) → `docs/exec-plans/active/<slug>/plan.md` (steps cite R numbers). A human approves each before the next. Templates in
+  [`docs/product-specs/README.md`](docs/product-specs/README.md). Bug fixes with a linked issue may skip straight to a failing test.
 - Bug fixes: commit the failing regression test first, then the fix, without editing the test.
 - Skills in `.claude/skills/` (`ai-native-sdlc` routes to the right one).
 - Before opening a PR, review your own diff in a fresh context (`/code-review` and `/security-review`, or a
