@@ -10,7 +10,7 @@ Use `bin/b2keys` to create a key. Never use a master key for routine work.
 ## Flags
 
 - `-bucket`: restrict the key to one bucket by name.
-- `-duration`: set the key lifetime as a Go duration, such as `1h`; zero leaves it unset.
+- `-duration`: set the key lifetime as a Go duration, such as `1h`. The value must be zero or positive. Zero leaves the lifetime unset. For a negative value, the tool reports `duration must not be negative` and creates no key.
 - `-prefix`: restrict the key to file names starting with the given prefix.
 
 ## Workflow
