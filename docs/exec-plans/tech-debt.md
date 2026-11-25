@@ -1,6 +1,6 @@
 # Technical debt
 
-`make known-defects` runs tagged Go tests and documentation checks. Each failing item links its issue.
+`make known-defects` runs tagged Go tests and documentation checks. Each listed item links its issue.
 
 ## Failing today
 
@@ -22,10 +22,10 @@
 
 | Test | Status at this revision | Tracking |
 | --- | --- | --- |
-| `TestKnownDefect_NonJSONErrorReplyHasMessage` | The test passes on this revision; its known-defect marker needs review. | no linked issue |
-| `TestKnownDefect_ChunkOffsetMultipliedIn64Bit` | The test skips on 64-bit hosts. Run `make known-defects-32bit` to verify the marker. | no linked issue |
-| `readme-examples` | The check passes at this revision; its known-defect marker needs review. | no linked issue |
-| `upgrade-sync-before` | The check passes at this revision; its known-defect marker needs review. | no linked issue |
-| `upgrade-breaking-claim` | The check passes at this revision; its known-defect marker needs review. | no linked issue |
+| `TestKnownDefect_NonJSONErrorReplyHasMessage` | The test passes on this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
+| `TestKnownDefect_ChunkOffsetMultipliedIn64Bit` | The test skips on 64-bit hosts. Run `make known-defects-32bit` on a Linux amd64 host to verify the marker. That target cannot run on macOS or arm64. | [#539](https://github.com/Backblaze/blazer/issues/539) |
+| `readme-examples` | The check passes at this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
+| `upgrade-sync-before` | The check passes at this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
+| `upgrade-breaking-claim` | The check passes at this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
 
 Sources: [bucket tests](../../b2/known_defect_bucket_test.go), [reader test](../../b2/known_defect_reader_test.go), [base test](../../base/known_defect_test.go), and [consistent test](../../x/consistent/known_defect_test.go).
