@@ -1,3 +1,3 @@
 kind: Changed
-body: '**Breaking:** Add DaysUnfinishedUntilCanceled to b2.LifecycleRule and base.LifecycleRule so unfinished large-file lifecycle rules round-trip. Unchanged lifecycle rules retain unknown server fields; changing any rule replaces the entire slice using the known fields. Callers using unkeyed struct literals must add the field or switch to keyed literals.'
+body: '**Breaking:** Add DaysUnfinishedUntilCanceled to b2.LifecycleRule and base.LifecycleRule for server-side cleanup of unfinished large files. Callers using unkeyed struct literals must add the field or switch to keyed literals. Attrs-to-Update and x/consistent saves preserve unknown lifecycle-rule fields when rules are unchanged; changing any rule re-encodes the entire slice using known fields. Writer documentation describes the cleanup rule and billing of unfinished files.'
 time: 2026-11-25T12:00:00-06:00
