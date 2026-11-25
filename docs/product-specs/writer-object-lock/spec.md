@@ -40,7 +40,7 @@ Fixed values used throughout: retention mode `compliance`, retain-until `time.Un
 - **R5. Resume accepts a matching lock.** The same listed unfinished upload, with `getFileInfo` reporting
   the requested retention and legal hold, proceeds past the lock check: a `b2_list_parts` request is
   recorded, no `b2_start_large_file` is sent, and one `b2_finish_large_file` request completes the resume.
-- **R6. Test-only.** No file outside `*_test.go` and `intent/writer-object-lock/` changes. Existing tests
+- **R6. Test-only.** No file outside `*_test.go`, `docs/product-specs/writer-object-lock/` and `docs/exec-plans/completed/writer-object-lock/` changes. Existing tests
   stay as they are.
 
 ## Design

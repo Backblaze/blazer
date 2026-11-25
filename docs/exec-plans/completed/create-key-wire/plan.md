@@ -9,9 +9,9 @@ tests need.
 
 ```
 b2/create_key_wire_test.go            (test) R1-R8
-intent/create-key-wire/intent.md      (status and owner alignment)
-intent/create-key-wire/spec.md        (reviewed assertions)
-intent/create-key-wire/plan.md        (reviewed steps and proof)
+docs/product-specs/create-key-wire/intent.md      (status and owner alignment)
+docs/product-specs/create-key-wire/spec.md        (reviewed assertions)
+docs/exec-plans/completed/create-key-wire/plan.md        (reviewed steps and proof)
 ```
 
 No production file changes (R9).

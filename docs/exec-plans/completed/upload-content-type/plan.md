@@ -8,7 +8,7 @@ issue #197 carries this folder and the tests. Apply the lean-code ladder from `A
 
 ```
 b2/upload_content_type_wire_test.go        (new)  R1-R3
-intent/upload-content-type/plan.md         (edit only if the implementation departs from this plan)
+docs/exec-plans/completed/upload-content-type/plan.md         (edit only if the implementation departs from this plan)
 ```
 
 No production file changes (R4).
@@ -17,7 +17,7 @@ No production file changes (R4).
 
 0. **Get #191's code.** Run `git merge test-issue-191-shared-recording-server` (merge, never rebase). If
    `internal/b2wiretest/server.go` is still missing, stop: blocked on #191. Read
-   `intent/b2wiretest/spec.md` for the helper API.
+   `docs/product-specs/b2wiretest/spec.md` for the helper API.
 1. **Fixture.** Script the authorization (the `updateAuthJSON` shape from `b2/update_cors_name_test.go`),
    one bucket (reuse an existing bucket JSON constant), `upload_file` and `b2_finish_large_file` (reuse an
    existing file JSON if one fits), and `b2_start_large_file` (`{"fileId":"large-1"}`).

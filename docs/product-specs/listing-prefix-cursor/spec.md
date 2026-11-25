@@ -39,7 +39,7 @@ Sources of truth (each test links the page):
   returns only files whose name starts with the request `prefix`, starting at `startFileName`, at most
   `maxFileCount` per page, and sets `nextFileName` when more remain. Every existing test in `b2/sync`
   still passes unchanged.
-- **R9. Test-only.** Outside `intent/listing-prefix-cursor/`, only `*_test.go` files change.
+- **R9. Test-only.** Outside `docs/product-specs/listing-prefix-cursor/` and `docs/exec-plans/completed/listing-prefix-cursor/`, only `*_test.go` files change.
 
 ## Design
 

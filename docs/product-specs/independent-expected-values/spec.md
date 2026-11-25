@@ -29,7 +29,7 @@ Sources of truth:
 - **R5. Reader budget literals.** `TestReaderBudgetMatchesTheDownloadRetryBudget` asserts: 20 truncated
   downloads then a whole one succeed with exactly 21 download calls and the full content; 21 truncated
   downloads fail. Both numbers are literals.
-- **R6. Test-only.** Only `*_test.go` files and `intent/independent-expected-values/` change.
+- **R6. Test-only.** Only `*_test.go` files, `docs/product-specs/independent-expected-values/` and `docs/exec-plans/completed/independent-expected-values/` change.
 
 ## Design
 

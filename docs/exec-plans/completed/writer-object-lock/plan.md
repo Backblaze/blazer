@@ -8,7 +8,7 @@ for issue #193 carries this folder and the tests. Apply the lean-code ladder fro
 
 ```
 b2/writer_object_lock_wire_test.go      (new)  R1-R5
-intent/writer-object-lock/plan.md       (edit only if the implementation departs from this plan)
+docs/exec-plans/completed/writer-object-lock/plan.md       (edit only if the implementation departs from this plan)
 ```
 
 No production file changes (R6).
@@ -17,7 +17,7 @@ No production file changes (R6).
 
 0. **Wait for #191's code.** Run `git merge test-issue-191-shared-recording-server` (merge, never rebase).
    If `internal/b2wiretest/server.go` is still missing, stop: blocked on #191. Read
-   `intent/b2wiretest/spec.md` for the helper API.
+   `docs/product-specs/b2wiretest/spec.md` for the helper API.
 1. **Fixture.** `newObjectLockWire(t)`:
    - script the authorization (reuse the shape of `updateAuthJSON` from `b2/update_cors_name_test.go`);
    - script one bucket. Reuse `noReplicationBucketJSON` (`b2/replconfig_repro_test.go`) or

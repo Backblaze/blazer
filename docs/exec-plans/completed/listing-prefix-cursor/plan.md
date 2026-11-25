@@ -10,7 +10,7 @@ PR for issue #196 carries this folder and the tests. Apply the lean-code ladder 
 b2/listing_wire_test.go                    (new)   R1-R6
 b2/sync/sync_prefix_wire_test.go           (new)   R7
 b2/sync/sync_test.go                       (edit)  R8: the b2_list_file_names case of the existing fake only
-intent/listing-prefix-cursor/plan.md       (edit only if the implementation departs from this plan)
+docs/exec-plans/completed/listing-prefix-cursor/plan.md       (edit only if the implementation departs from this plan)
 ```
 
 No production file changes (R9).
@@ -19,7 +19,7 @@ No production file changes (R9).
 
 0. **Get #191's code.** Run `git merge test-issue-191-shared-recording-server` (merge, never rebase). If
    `internal/b2wiretest/server.go` is still missing, stop: blocked on #191. Read
-   `intent/b2wiretest/spec.md` for the helper API.
+   `docs/product-specs/b2wiretest/spec.md` for the helper API.
 1. **Paging handler.** A small local function that builds a `b2wiretest` handler from two literal pages
    and the expected cursor field(s):
    - no cursor in the request: page 1;

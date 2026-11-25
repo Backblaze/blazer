@@ -65,7 +65,7 @@ authorization" (the `Authorization` and `b2ContentDisposition` URL parameters); 
 
 - **R12.** Record `go test -coverprofile` statement coverage for the module, credential-free, before and after
   this change in the PR description.
-- **R13. Test-only.** Only `*_test.go` files and `intent/credential-free-live-calls/` change.
+- **R13. Test-only.** Only `*_test.go` files, `docs/product-specs/credential-free-live-calls/` and `docs/exec-plans/completed/credential-free-live-calls/` change.
 
 ## Design
 

@@ -21,7 +21,7 @@ Expected hashes are `fmt.Sprintf("%x", sha1.Sum(part))` over fixed literal bytes
   SHA1(`B`), gives a non-nil error and `true`. (Kills `b2/reader.go:185` and `:367`.)
 - **R4. No verification on a ranged read.** `NewRangeReader` with offset > 0 gives `(nil, false)`.
 - **R5. No verification for `none`.** A full read with `X-Bz-Content-Sha1: none` gives `(nil, false)`.
-- **R6. Test-only.** No file outside `*_test.go` and `intent/sha1-upload-and-verify/` changes.
+- **R6. Test-only.** No file outside `*_test.go`, `docs/product-specs/sha1-upload-and-verify/` and `docs/exec-plans/completed/sha1-upload-and-verify/` changes.
 
 ## Design
 

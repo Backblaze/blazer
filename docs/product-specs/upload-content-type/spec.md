@@ -18,7 +18,7 @@ Fixed test value: `text/html; charset=utf-8`. It has a parameter on purpose, to 
   `b2_start_large_file` whose body `contentType` is `text/html; charset=utf-8`. (Kills `b2/writer.go:414`.)
 - **R3. Default type.** Without `WithAttrsOption`, the small upload sends `Content-Type:
   application/octet-stream`, and the large upload sends `contentType` `application/octet-stream`.
-- **R4. Test-only.** No file outside `*_test.go` and `intent/upload-content-type/` changes. SSE-B2 header
+- **R4. Test-only.** No file outside `*_test.go`, `docs/product-specs/upload-content-type/` and `docs/exec-plans/completed/upload-content-type/` changes. SSE-B2 header
   tests are already covered (`b2/sse_b2_wire_test.go`) and are not duplicated.
 
 ## Design

@@ -45,7 +45,7 @@ Sources of truth (each test links or quotes its source):
   bytes: assert the endpoint sequence and the uploaded bytes for each. The exact-ChunkSize case exposed
   a one-part large-file upload and is split into a separate product-bug issue (#221), per
   the owner's direction. The `<` to `<=` break is not provable with these remaining cases.
-- **R12. Test-only.** Only `b2/*_test.go` and `intent/b2-mapping-edges/` change.
+- **R12. Test-only.** Only `b2/*_test.go`, `docs/product-specs/b2-mapping-edges/` and `docs/exec-plans/completed/b2-mapping-edges/` change.
 
 ## Design
 

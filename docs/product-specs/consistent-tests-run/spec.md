@@ -27,7 +27,7 @@ this package)."
   `Unlock()` on the same name also returns, within a 10-second test context.
 - **R7. The default run shows tests.** `go test -json ./x/consistent` with no environment variables set
   contains `"Action":"run"` events for the R3, R5 and R6 tests, and `"Action":"skip"` for the three live tests.
-- **R8. Test-only.** No file outside `x/consistent/*_test.go` and `intent/consistent-tests-run/` changes.
+- **R8. Test-only.** No file outside `x/consistent/*_test.go`, `docs/product-specs/consistent-tests-run/` and `docs/exec-plans/completed/consistent-tests-run/` changes.
 
 ## Design
 

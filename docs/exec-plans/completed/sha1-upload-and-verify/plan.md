@@ -8,7 +8,7 @@ PR for issue #195 carries this folder and the tests. Apply the lean-code ladder 
 
 ```
 b2/sha1_wire_test.go                        (new)  R1-R5
-intent/sha1-upload-and-verify/plan.md       (edit only if the implementation departs from this plan)
+docs/exec-plans/completed/sha1-upload-and-verify/plan.md       (edit only if the implementation departs from this plan)
 ```
 
 No production file changes (R6).
@@ -17,7 +17,7 @@ No production file changes (R6).
 
 0. **Get #191's code.** Run `git merge test-issue-191-shared-recording-server` (merge, never rebase). If
    `internal/b2wiretest/server.go` is still missing, stop: blocked on #191. Read
-   `intent/b2wiretest/spec.md` for the helper API. Note that `Call` is the last path segment of any
+   `docs/product-specs/b2wiretest/spec.md` for the helper API. Note that `Call` is the last path segment of any
    request, so a download is recorded under the object name.
 1. **Fixture.** Script the authorization (the `updateAuthJSON` shape from `b2/update_cors_name_test.go`)
    and one bucket (reuse an existing bucket JSON constant). For uploads, script `b2_start_large_file`

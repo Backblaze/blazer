@@ -12,7 +12,7 @@ internal/b2wiretest/assert.go        (new)  R9
 internal/b2wiretest/server_test.go   (new)  R10
 b2/update_cors_name_test.go          (edit) R11: TestUpdateBucketSendsCORSRuleName uses the helper
 AGENTS.md, docs/testing.md            (edit) Review finding: direct new wire tests to `internal/b2wiretest`; retain per-feature fakes until rewritten
-intent/b2wiretest/plan.md            (edit only if the implementation departs from this plan)
+docs/exec-plans/completed/b2wiretest/plan.md            (edit only if the implementation departs from this plan)
 ```
 
 Nothing else changes. `go.mod`, `go.sum`, `base/`, `b2/` (other than the one test), `x/` and `.changes/`

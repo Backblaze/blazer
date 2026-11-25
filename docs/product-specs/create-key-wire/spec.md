@@ -39,7 +39,7 @@ Source of truth for every expected value: the B2 API documentation for `b2_creat
 - **R8. Checks before any request.** `(*Client).CreateKey` with `Prefix` and no bucket, and
   `(*Bucket).CreateKey` with `BucketIDs`, return their exact validation error, a nil `*Key`, and no
   `b2_create_key` request is recorded.
-- **R9. Test-only.** No file outside `*_test.go` and `intent/create-key-wire/` changes. Existing tests,
+- **R9. Test-only.** No file outside `*_test.go`, `docs/product-specs/create-key-wire/` and `docs/exec-plans/completed/create-key-wire/` changes. Existing tests,
   including `base/base_v4_test.go:301,322`, stay as they are.
 
 ## Design

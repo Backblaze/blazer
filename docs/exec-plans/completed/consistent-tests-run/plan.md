@@ -9,7 +9,7 @@ and the package's own API, add only what the tests need.
 ```
 x/consistent/consistent_test.go            (edit)  R1, R2
 x/consistent/consistent_sim_test.go        (new)   R3, R5, R6
-intent/consistent-tests-run/plan.md        (edit only if the implementation departs from this plan)
+docs/exec-plans/completed/consistent-tests-run/plan.md        (edit only if the implementation departs from this plan)
 ```
 
 No production file changes (R8). `x/b2sim` is not modified.

@@ -27,7 +27,7 @@ Sources of truth (cited in the check's DOCS header, as `large.multipart` does):
 - **R4. The contract test follows.** `b2/sdkharness_contract_test.go` expects 51 lines and 34 conformance rows
   (from 50 and 33).
 - **R5. Test-only.** Only `.sdkharness/`, `b2/sdkharness_contract_test.go` and
-  `intent/unbound-incremental-conformance/` change. The check is executable (`0755`).
+  `docs/product-specs/unbound-incremental-conformance/` and `docs/exec-plans/completed/unbound-incremental-conformance/` change. The check is executable (`0755`).
 
 ## Design
 

@@ -35,7 +35,7 @@ Human review time goes where the risk is, with no rise in reverts or post-releas
 
    | Tier | Paths | Human approvals |
    | --- | --- | --- |
-   | Low | `*.md` docs, `*_test.go` only, `.changes/`, `intent/`, `examples/` | None once CI and automated review are green, for authors on the trusted list |
+   | Low | `*.md` docs, `*_test.go` only, `.changes/`, `docs/product-specs/`, `docs/exec-plans/`, `examples/` | None once CI and automated review are green, for authors on the trusted list |
    | Medium | `b2/`, `x/`, `internal/` (except below), `bin/b2keys/` | One code owner |
    | High | `base/` wire and auth code, credential handling, `.github/workflows/`, `.changie.yaml`, release commits | One code owner always; two for auth and workflow changes |
 

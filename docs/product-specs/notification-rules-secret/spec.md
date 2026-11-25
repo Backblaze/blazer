@@ -25,7 +25,7 @@ Fixed test values: secret `"abcdefghijklmnopqrstuvwxyz012345"`, suspension reaso
   `TargetConfiguration.Webhook.HMACSHA256SigningSecret` equal to the secret.
 - **R4. Get is independent of set.** The R3 response is scripted on its own, so the test never relies on
   what blazer sent.
-- **R5. Test-only.** No file outside `*_test.go` and `intent/notification-rules-secret/` changes.
+- **R5. Test-only.** No file outside `*_test.go`, `docs/product-specs/notification-rules-secret/` and `docs/exec-plans/completed/notification-rules-secret/` changes.
   `TestNotificationRulesGetAndReplace` stays as it is.
 
 ## Design

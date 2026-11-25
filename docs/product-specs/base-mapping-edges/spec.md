@@ -21,7 +21,7 @@ Sources of truth (each test links the page):
   response has `X-Bz-Content-Sha1: none` and `X-Bz-Info-large_file_sha1: <40 hex>` yields
   `FileReader.SHA1 == <40 hex>`. With a real `X-Bz-Content-Sha1` and a different `large_file_sha1`, `SHA1` is
   the content SHA-1. With `none` and no info header, `SHA1 == "none"`.
-- **R4. Test-only.** Only `base/*_test.go` and `intent/base-mapping-edges/` change.
+- **R4. Test-only.** Only `base/*_test.go`, `docs/product-specs/base-mapping-edges/` and `docs/exec-plans/completed/base-mapping-edges/` change.
 
 ## Design
 
