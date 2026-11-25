@@ -83,7 +83,11 @@ only the capabilities and buckets your program uses.
 
 ## Examples
 
+Examples that look up a bucket by name with `client.Bucket` also need `listBuckets` on that bucket.
+
 ### Getting started
+
+Needs: `listBuckets` across all buckets in the account.
 
 ```go
 import "os"
@@ -106,6 +110,8 @@ if err != nil {
 ```
 
 ### Copy a file into B2
+
+Needs: `writeFiles` on the destination bucket.
 
 ```go
 func copyFile(ctx context.Context, bucket *b2.Bucket, src, dst string) error {
@@ -134,6 +140,8 @@ always produces at least two parts.
 
 ### Copy a file into B2, with multiple concurrent uploads
 
+Needs: `writeFiles` on the destination bucket.
+
 Uploading a large file with multiple HTTP connections is simple:
 
 ```go
@@ -161,6 +169,8 @@ This uploads up to `writers` parts at a time. `ChunkSize` sets the part size: 10
 5 MB, at most 5 GB.
 
 ### Download a file from B2
+
+Needs: `readFiles` on the source bucket.
 
 Downloading is as simple as uploading. This example uses `context`, `io`, `os`, and `path/filepath`:
 
@@ -198,6 +208,8 @@ can fail if the destination is open.
 
 ### List all objects in a bucket
 
+Needs: `listFiles` on the bucket.
+
 ```go
 func printObjects(ctx context.Context, bucket *b2.Bucket) error {
 	iterator := bucket.List(ctx)
@@ -210,6 +222,8 @@ func printObjects(ctx context.Context, bucket *b2.Bucket) error {
 
 ### Report upload progress
 
+Needs: no additional capabilities to construct the writer; `writeFiles` on the bucket to upload.
+
 ```go
 w := bucket.Object(dst).NewWriter(ctx, b2.WithProgress(func(done, total int64) {
 	log.Printf("%d of %d bytes", done, total)
@@ -217,6 +231,8 @@ w := bucket.Object(dst).NewWriter(ctx, b2.WithProgress(func(done, total int64) {
 ```
 
 ### Encrypt with a customer-supplied key (SSE-C)
+
+Needs: `writeFiles` and `readFiles` on the bucket to upload and read the file.
 
 ```go
 key, err := b2.NewSSECKey(secret) // 32 bytes; keep it safe, B2 does not store it
@@ -232,6 +248,8 @@ Use `b2.WithSSEB2("AES256")` instead for B2-managed encryption on a single uploa
 
 ### Sync a local directory
 
+Needs: `listFiles`, `readFiles` and `writeFiles` on the destination bucket.
+
 ```go
 import "github.com/Backblaze/blazer/b2/sync"
 
@@ -245,6 +263,8 @@ log.Printf("uploaded %d, skipped %d, failed %d", len(res.Uploaded), len(res.Skip
 Add `sync.WithDryRun()` to see what would be uploaded without writing anything.
 
 ### Grant temporary auth to a file
+
+Needs: `shareFiles` on the bucket.
 
 Say you have a number of files in a private bucket, and you want to allow other
 people to download some files.  This is possible to do by issuing a temporary
