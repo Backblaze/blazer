@@ -269,9 +269,10 @@ func (b *b2Root) createBucket(ctx context.Context, name, btype string, info map[
 	var baseRules []base.LifecycleRule
 	for _, rule := range rules {
 		baseRules = append(baseRules, base.LifecycleRule{
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-			Prefix:                 rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+			Prefix:                      rule.Prefix,
 		})
 	}
 	var baseSSE *b2types.ServerSideEncryption
@@ -442,12 +443,16 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 	// non-nil slice removes them all.
 	previousRules := b.b.LifecycleRules
 	if attrs.LifecycleRules != nil {
+		// Rebuild typed rules so base.Update can compare them with the rules read:
+		// unchanged rules reuse the saved JSON, including fields unknown to this SDK;
+		// changed rules are re-encoded from the known fields.
 		rules := []base.LifecycleRule{}
 		for _, rule := range attrs.LifecycleRules {
 			rules = append(rules, base.LifecycleRule{
-				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-				Prefix:                 rule.Prefix,
+				DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+				DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+				Prefix:                      rule.Prefix,
 			})
 		}
 		b.b.LifecycleRules = rules
@@ -575,9 +580,10 @@ func (b *b2Bucket) attrs() *BucketAttrs {
 	var rules []LifecycleRule
 	for _, rule := range b.b.LifecycleRules {
 		rules = append(rules, LifecycleRule{
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-			Prefix:                 rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+			Prefix:                      rule.Prefix,
 		})
 	}
 	attrs := &BucketAttrs{

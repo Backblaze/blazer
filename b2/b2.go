@@ -301,7 +301,8 @@ type BucketAttrs struct {
 
 	// Reports or sets bucket lifecycle rules.  If nil during a bucket.Update,
 	// the rules are not modified.  A bucket's rules can be removed by updating
-	// with an empty slice.
+	// with an empty slice. An unchanged slice retains unknown server fields;
+	// changing any rule replaces the full slice using the fields known to this SDK.
 	LifecycleRules []LifecycleRule
 
 	// CORSRules reports or sets the bucket's CORS rules. During Update, nil
@@ -431,10 +432,14 @@ type ReplicationRules struct {
 
 // A LifecycleRule describes an object's life cycle, namely how many days after
 // uploading an object should be hidden, and after how many days hidden an
-// object should be deleted.  Multiple rules may not apply to the same file or
+// object should be deleted, or unfinished large files canceled. Multiple rules may not apply to the same file or
 // set of files.  Be careful when using this feature; it can (is designed to)
 // delete your data.
 type LifecycleRule struct {
+	// DaysUnfinishedUntilCanceled cancels unfinished large files after this many days.
+	// Zero disables automatic cancellation.
+	DaysUnfinishedUntilCanceled int
+
 	// Prefix specifies all the files in the bucket to which this rule applies.
 	Prefix string
 
