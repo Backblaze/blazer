@@ -9,11 +9,11 @@ Requirements and design happen in one session instead of two hand-offs. The prod
 
 ## Before you start
 
-- Locate `intent/<slug>/intent.md` and confirm it is approved (ask if unclear). No intent, run `sdlc-intent` first.
+- Locate `docs/product-specs/<slug>/intent.md` and confirm it is approved (ask if unclear). No intent, run `sdlc-intent` first.
 - List the policy skills available (`.claude/skills/`, plugins) for brand, security, compliance and UX, and apply every one that is relevant. If none exist, say so, because the spec will rest on stated constraints only.
 - Read `CLAUDE.md` and the parts of the codebase the intent touches so the design integrates with what exists.
 
-## Produce `intent/<slug>/spec.md`
+## Produce `docs/product-specs/<slug>/spec.md`
 
 ```markdown
 # Spec: <title>

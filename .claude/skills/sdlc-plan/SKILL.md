@@ -1,6 +1,6 @@
 ---
 name: sdlc-plan
-description: Produce and commit a plan.md before any code is written, working in plan mode from the approved spec.md and intent.md. Use when starting implementation of a change, when asked to "plan this", "make an implementation plan", or before editing code for a change that has an intent/spec; also use to keep plan.md in sync when implementation departs from it.
+description: Produce and commit a plan.md before any code is written, working in plan mode from the approved spec.md and intent.md. Use when starting implementation of a change, when asked to "plan this", "make an implementation plan", or before editing code for a change that has an intent and a spec; also use to keep plan.md in sync when implementation departs from it.
 ---
 
 # Plan mode as the default starting point
@@ -10,11 +10,11 @@ Work starts with a written, reviewable plan. Plan mode lets Claude read the code
 ## Steps
 
 1. Work in plan mode (Shift+Tab, or start the session with `--permission-mode plan`). Do not edit files until the engineer accepts the plan.
-2. Read `intent/<slug>/intent.md`, `spec.md` (the requirement numbers R1.. and concerns), `CLAUDE.md` and the code the change touches. If a spec exists, a plan without it is a smell; if neither exists, ask whether to run `sdlc-intent` / `sdlc-spec` first or to plan from a plain description.
+2. Read `docs/product-specs/<slug>/intent.md`, `docs/product-specs/<slug>/spec.md` (the requirement numbers R1.. and concerns), `CLAUDE.md` and the code the change touches. If a spec exists, a plan without it is a smell; if neither exists, ask whether to run `sdlc-intent` / `sdlc-spec` first or to plan from a plain description.
 3. Draft the plan using the template below.
 4. Let the engineer interrogate it. Be ready to answer: what could this break, which step is riskiest, which alternatives were rejected and why.
 5. Iterate until someone who never saw the conversation could implement the change from the plan alone.
-6. Commit the approved plan as `intent/<slug>/plan.md`. Then implement; with a solid plan this is often one pass.
+6. Commit the approved plan as `docs/exec-plans/active/<slug>/plan.md`. Then implement; with a solid plan this is often one pass.
 7. If implementation departs from the plan, update `plan.md` in the same commit. Consider a hook that flags source changes with no matching plan update.
 
 ## Template

@@ -44,7 +44,7 @@ Run all three before reporting any task complete, and paste the output.
 If a test fails, fix the code, not the test.
 ```
 
-If artifacts live in `intent/`, add a line saying `intent/` holds `intent.md`, `spec.md` and `plan.md` per change.
+If artifacts live in `docs/product-specs/`, add a line saying it holds `intent.md` and `spec.md` per change, with plans in `docs/exec-plans/active/` or `docs/exec-plans/completed/`.
 
 ## Audit an existing file
 

@@ -13,7 +13,7 @@ failure: it claims coverage it does not give.
 
 ## Before the passes
 
-1. Read the linked issue and, if present, `intent/<slug>/spec.md` and `plan.md`.
+1. Read the linked issue and, if present, `docs/product-specs/<slug>/spec.md` and `docs/exec-plans/{active,completed}/<slug>/plan.md`.
 2. Merge the PR onto current `main` locally and run `make ci`. Say what you ran.
 3. For each behavior the PR claims to fix or add, revert that line and confirm a test fails. Name any
    behavior no test pins.
