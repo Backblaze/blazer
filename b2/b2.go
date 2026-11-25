@@ -809,7 +809,7 @@ func (b *Bucket) Object(name string) *Object {
 func (o *Object) URL() string {
 	segments := strings.Split(o.name, "/")
 	for i, seg := range segments {
-		segments[i] = url.PathEscape(seg)
+		segments[i] = strings.ReplaceAll(url.PathEscape(seg), "+", "%2B")
 	}
 	return fmt.Sprintf("%s/file/%s/%s", o.b.BaseURL(), o.b.Name(), strings.Join(segments, "/"))
 }
