@@ -2,6 +2,8 @@
 From: intent.md (Felipe Fumero). Issue: #227. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.
 
+Credential risks: [credential threat model](../../design-docs/threat-model-credentials.md).
+
 Sources of truth:
 - B2 `b2_create_key` (https://www.backblaze.com/apidocs/b2-create-key) and `b2_list_keys`
   (https://www.backblaze.com/apidocs/b2-list-keys): each key carries `bucketId` (v3; null when unrestricted) or
