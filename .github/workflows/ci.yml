@@ -26,12 +26,7 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: '**/go.sum'
-      - run: go build ./...
-      - run: go vet ./...
-      - run: test -z "$(gofmt -l .)"
-      - run: go mod tidy -diff
-      - run: go mod verify
-      - run: make scripts-test
+      - run: make build vet fmt-check tidy-check verify scripts-test
 
   lint:
     name: lint
@@ -47,11 +42,11 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: '**/go.sum'
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.14.0
-          # Existing findings are scoped out; check this PR or the latest push to the default branch.
-          args: --new-from-rev=${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^' }} ./...
+      - name: Lint changes
+        # Existing findings are scoped out on both pull requests and pushes.
+        run: make lint
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^' }}
 
   test:
     name: test / Go ${{ matrix.go-version }} / ${{ matrix.os }}
@@ -74,7 +69,11 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
           cache-dependency-path: '**/go.sum'
+      - run: make test TEST_FLAGS=-coverprofile=cover.out
+        if: ${{ matrix.os != 'windows-latest' }}
       - run: go test -race -shuffle=on -coverprofile=cover.out ./...
+        if: ${{ matrix.os == 'windows-latest' }}
+        # Windows uses Bash without requiring GNU Make on the hosted image.
         shell: bash # Windows PowerShell splits cover.out into a separate .out package.
       - name: Test simulator ranges on 32-bit Linux
         if: ${{ matrix.os == 'ubuntu-latest' && matrix.go-version == 'stable' }}
@@ -104,10 +103,7 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: '**/go.sum'
-      - run: go build ./...
-        working-directory: bin/b2keys
-      - run: go test ./...
-        working-directory: bin/b2keys
+      - run: make b2keys
 
   crosscompile:
     name: crosscompile / ${{ matrix.goos }} / ${{ matrix.goarch }}
@@ -131,9 +127,8 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: '**/go.sum'
-      - run: go build ./...
+      - run: make crosscompile-one
         env:
-          CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
       - name: Execute Linux/386 tests
