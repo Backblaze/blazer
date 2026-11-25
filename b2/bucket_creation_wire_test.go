@@ -33,6 +33,13 @@ func TestNewBucketAttributesWire(t *testing.T) {
 			wantInfo: map[string]string{"this": "that", "other": "thing"},
 		},
 		{
+			name:      "unfinished-only",
+			attrs:     &BucketAttrs{LifecycleRules: []LifecycleRule{{Prefix: "uploads/", DaysUnfinishedUntilCanceled: 7}}},
+			rules:     []map[string]any{{"fileNamePrefix": "uploads/", "daysFromStartingToCancelingUnfinishedLargeFiles": 7}},
+			response:  `{"bucketId":"bid","bucketName":"n","bucketType":"allPrivate","bucketInfo":{},"lifecycleRules":[{"fileNamePrefix":"uploads/","daysFromStartingToCancelingUnfinishedLargeFiles":7}],"revision":1}`,
+			wantRules: []LifecycleRule{{Prefix: "uploads/", DaysUnfinishedUntilCanceled: 7}},
+		},
+		{
 			name: "only-rules",
 			attrs: &BucketAttrs{LifecycleRules: []LifecycleRule{
 				{Prefix: "whee/", DaysHiddenUntilDeleted: 30},

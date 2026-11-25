@@ -18,6 +18,9 @@ func TestUnfinishedLifecycleAttrsUpdateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(attrs.LifecycleRules) != 1 || attrs.LifecycleRules[0].DaysUnfinishedUntilCanceled != 7 {
+		t.Fatalf("Attrs lifecycle rules = %+v, want cancellation after 7 days", attrs.LifecycleRules)
+	}
 	attrs.Info = map[string]string{"owner": "test"}
 	if err := bucket.Update(ctx, attrs); err != nil {
 		t.Fatal(err)

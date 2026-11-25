@@ -1,0 +1,3 @@
+kind: Changed
+body: '**Breaking:** Add DaysUnfinishedUntilCanceled to b2.LifecycleRule and base.LifecycleRule so unfinished large-file lifecycle rules round-trip. Callers using unkeyed struct literals must add the field or switch to keyed literals.'
+time: 2026-11-25T12:00:00-06:00

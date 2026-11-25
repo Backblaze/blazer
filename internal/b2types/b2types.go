@@ -81,9 +81,10 @@ type Allowance struct {
 }
 
 type LifecycleRule struct {
-	DaysHiddenUntilDeleted int    `json:"daysFromHidingToDeleting,omitempty"`
-	DaysNewUntilHidden     int    `json:"daysFromUploadingToHiding,omitempty"`
-	Prefix                 string `json:"fileNamePrefix"`
+	DaysUnfinishedUntilCanceled int    `json:"daysFromStartingToCancelingUnfinishedLargeFiles,omitempty"`
+	DaysHiddenUntilDeleted      int    `json:"daysFromHidingToDeleting,omitempty"`
+	DaysNewUntilHidden          int    `json:"daysFromUploadingToHiding,omitempty"`
+	Prefix                      string `json:"fileNamePrefix"`
 }
 
 type CreateBucketRequest struct {

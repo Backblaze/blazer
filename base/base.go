@@ -939,9 +939,10 @@ func SetAPIBase(url string) AuthOption {
 }
 
 type LifecycleRule struct {
-	Prefix                 string
-	DaysNewUntilHidden     int
-	DaysHiddenUntilDeleted int
+	DaysUnfinishedUntilCanceled int
+	Prefix                      string
+	DaysNewUntilHidden          int
+	DaysHiddenUntilDeleted      int
 }
 
 // decodeDefaultRetention returns the default retention from a bucket's
@@ -995,9 +996,10 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	var b2rules []b2types.LifecycleRule
 	for _, rule := range rules {
 		b2rules = append(b2rules, b2types.LifecycleRule{
-			Prefix:                 rule.Prefix,
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+			Prefix:                      rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 		})
 	}
 	b2req := &b2types.CreateBucketRequest{
@@ -1022,9 +1024,10 @@ func (b *B2) CreateBucket(ctx context.Context, name, btype string, info map[stri
 	var respRules []LifecycleRule
 	for _, rule := range b2resp.LifecycleRules {
 		respRules = append(respRules, LifecycleRule{
-			Prefix:                 rule.Prefix,
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+			Prefix:                      rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 		})
 	}
 	bucket := &Bucket{
@@ -1098,9 +1101,10 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 		rs := make([]b2types.LifecycleRule, 0, len(b.LifecycleRules))
 		for _, rule := range b.LifecycleRules {
 			rs = append(rs, b2types.LifecycleRule{
-				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
-				Prefix:                 rule.Prefix,
+				DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+				DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
+				Prefix:                      rule.Prefix,
 			})
 		}
 		rules = &rs
@@ -1138,9 +1142,10 @@ func (b *Bucket) Update(ctx context.Context) (*Bucket, error) {
 	var respRules []LifecycleRule
 	for _, rule := range b2resp.LifecycleRules {
 		respRules = append(respRules, LifecycleRule{
-			Prefix:                 rule.Prefix,
-			DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-			DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+			Prefix:                      rule.Prefix,
+			DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+			DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+			DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 		})
 	}
 	updated := &Bucket{
@@ -1258,9 +1263,10 @@ func (b *B2) listBucketsWithState(ctx context.Context, state authState, bucketID
 		var rules []LifecycleRule
 		for _, rule := range bucket.LifecycleRules {
 			rules = append(rules, LifecycleRule{
-				Prefix:                 rule.Prefix,
-				DaysNewUntilHidden:     rule.DaysNewUntilHidden,
-				DaysHiddenUntilDeleted: rule.DaysHiddenUntilDeleted,
+				Prefix:                      rule.Prefix,
+				DaysNewUntilHidden:          rule.DaysNewUntilHidden,
+				DaysHiddenUntilDeleted:      rule.DaysHiddenUntilDeleted,
+				DaysUnfinishedUntilCanceled: rule.DaysUnfinishedUntilCanceled,
 			})
 		}
 		listed := &Bucket{

@@ -435,6 +435,10 @@ type ReplicationRules struct {
 // set of files.  Be careful when using this feature; it can (is designed to)
 // delete your data.
 type LifecycleRule struct {
+	// DaysUnfinishedUntilCanceled cancels unfinished large files after this many days.
+	// Zero disables automatic cancellation.
+	DaysUnfinishedUntilCanceled int
+
 	// Prefix specifies all the files in the bucket to which this rule applies.
 	Prefix string
 
