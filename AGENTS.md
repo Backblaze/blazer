@@ -101,6 +101,7 @@ Each line was raised by a reviewer on at least two PRs.
 
 ## Verifying your work
 
+The `verify` skill wraps `make ci`.
 Run `make ci` and paste the tail of its output. All of build, vet, gofmt, tidy, verify, lint, tests (with
 `-race`), b2keys, cross-compile and changelog-check must pass. If a test fails, fix the code, not the test.
 List any live-B2 checks you ran, and any you could not. Name the live test that covers B2-dependent
