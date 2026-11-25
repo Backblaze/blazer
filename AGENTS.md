@@ -29,6 +29,7 @@ and the backend and wire-test boundaries.
 
 ## Conventions
 
+- Write new and edited docs and godoc as described in [docs/writing-style.md](docs/writing-style.md).
 - The minimum Go version is in `go.mod` and rises only in a release that says so; CI tests the 1.26.10 floor on
   Ubuntu and Go 1.27.3 plus latest stable on Ubuntu, macOS and Windows.
 - Public API is semver. Pre-1.0, a breaking change bumps the minor version and needs a `Changed` or
