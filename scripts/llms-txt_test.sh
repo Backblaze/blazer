@@ -15,15 +15,22 @@ if ! awk '/^## / {section=1; exit} /^> / {found=1} END {exit !(found && section)
   echo 'FAIL llms.txt: blockquote must precede the first H2'
   exit 1
 fi
-paths=$(grep -Eo 'https://github\.com/Backblaze/blazer/blob/main/[^)#[:space:]]+' llms.txt | sed 's@^https://github.com/Backblaze/blazer/blob/main/@@' || true)
-if [ -z "$paths" ]; then
+links=$(grep -Eo 'https://github\.com/Backblaze/blazer/blob/[^)#[:space:]]*' llms.txt || true)
+if [ -z "$links" ]; then
   echo 'FAIL llms.txt: no repository file links found'
   exit 1
 fi
-while IFS= read -r path; do
-  if [ ! -f "$path" ]; then
+while IFS= read -r link; do
+  target=${link#https://github.com/Backblaze/blazer/blob/}
+  ref=${target%%/*}
+  if [ "$ref" != main ]; then
+    echo "FAIL llms.txt: invalid repository ref $ref (expected main)"
+    exit 1
+  fi
+  path=${target#*/}
+  if [ "$path" = "$target" ] || [ ! -f "$path" ]; then
     echo "FAIL llms.txt: missing file $path"
     exit 1
   fi
-done <<< "$paths"
+done <<< "$links"
 echo 'ok   llms.txt: structure and repository file links'
