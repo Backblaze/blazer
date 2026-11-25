@@ -22,7 +22,8 @@ A named test supplies evidence only for its assertions. This document does not c
 - **R4. Limits.** Negative `ChunkSize` returns an error before upload. The documented part-size limits are 5,000,000 to 5,000,000,000 bytes.
   The final part can be smaller than the minimum. B2 permits part numbers 1 through 10,000.
   The Writer does not locally enforce those positive size limits or a 10,000-part cap.
-  Source: `b2/writer.go:61`, `b2/writer.go:270`, `b2/writer.go:649`; service contract: `docs/b2-contracts.md:76`.
+  Source: `b2/writer.go:61`, `b2/writer.go:270`, `b2/writer.go:649`.
+  Service minimum and part numbers: `docs/b2-contracts.md:76`. Maximum: `docs/guides/large-and-resumable-uploads.md:3`.
   Test: `TestWriterNegativeChunkSizeRejectsBeforeUpload` pins negative rejection. No test pins this.
 
 - **R5. Concurrent uploads.** `ConcurrentUploads` controls the number of large-file upload workers.
@@ -167,6 +168,18 @@ A named test supplies evidence only for its assertions. This document does not c
   Source: `b2/writer.go:246`, `b2/writer.go:731`, `b2/writer.go:960`, `b2/writer.go:1135`.
   Tests: `TestProgressCallbacks`, `TestProgressMeterResetDoesNotDoubleCount`, `TestProgressResumeSkipDoesNotReadClosedBuffer`,
   `TestProgressConcurrentCloseWaitsForFinalCallback`, `TestProgressRejectedSimpleUploadWire`.
+
+- **R25. Caller concurrency.** Callers must not call `Write`, `ReadFrom` or `Close` from several goroutines at the same time on one Writer.
+  `ConcurrentUploads` applies only to internal part-upload workers.
+  The write path takes a shared `closeWrite.RLock`. The file buffer changes its size and SHA1 state without a lock.
+  Source: `b2/writer.go:318`, `b2/writer.go:633`; `b2/buffer.go:177`.
+  No test pins this.
+
+- **R26. Status progress.** `Client.Status` returns active writers in `StatusInfo.Writers`.
+  Each `WriterStatus.Progress` entry gives a chunk's completion ratio. The index is the chunk ID minus one.
+  Source: `b2/monitor.go:29`, `b2/monitor.go:99`, `b2/monitor.go:115`.
+  Tests: `TestMappingStatusCleanup` checks active-writer registration and removal.
+  `TestWriterStatusIncludesAllThreeConcurrentParts` checks `Progress` for three concurrent parts.
 
 ## Design
 
