@@ -81,6 +81,14 @@ only the capabilities and buckets your program uses.
 | [`x/...`](https://pkg.go.dev/github.com/Backblaze/blazer/x) | Experimental packages; their API may change between minor releases. |
 | [`bin/b2keys`](bin/b2keys) | A small command-line tool for creating application keys (a separate module). |
 
+## Guides
+
+- [Errors and retries](docs/guides/errors-and-retries.md)
+- [Keys and sessions](docs/guides/keys-and-sessions.md)
+- [Large and resumable uploads](docs/guides/large-and-resumable-uploads.md)
+- [Custom transport](docs/guides/custom-transport.md)
+- [Debugging](docs/guides/debugging.md)
+
 ## Examples
 
 ### Getting started
