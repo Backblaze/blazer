@@ -39,6 +39,7 @@ Tag each finding with its pass.
 - **Compliance**: the change matches the issue, `spec.md` and `plan.md`; the PR description matches the
   code; a `.changes/unreleased` entry exists and reads well for users; godoc says what is not supported;
   `AGENTS.md` is updated when the change makes it stale or breaks a convention in it.
+- **Compliance**: Check that new and edited docs and godoc follow [docs/writing-style.md](docs/writing-style.md).
 - **Direction**: if the change should not land at all (no linked issue, out of scope, wrong approach), say
   so once in round 1 instead of leaving line comments on code that will be dropped.
 
