@@ -1,6 +1,12 @@
 # Area ownership, opt-in. Add your @handle to an area to get review requests and the
 # `area-owner-approvals` check on PRs touching it. The last matching rule wins, so
 # keep the catch-all first and the specific rules after it.
+# Review and agent guidance paths have narrower owners.
 
 *            @goanpeca @sophiecarreras @ffumero2003 @david-santacruz-backblaze
 /.github/    @goanpeca @sophiecarreras
+/AGENTS.md   @goanpeca @sophiecarreras
+/CLAUDE.md   @goanpeca @sophiecarreras
+/REVIEW.md   @goanpeca @sophiecarreras
+/ARCHITECTURE.md @goanpeca @sophiecarreras
+/.claude/    @goanpeca @sophiecarreras
