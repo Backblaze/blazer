@@ -26,7 +26,9 @@ Do not apply them to `SECURITY.md` or `CODE_OF_CONDUCT.md` until their owners ag
 8. **Do:** Avoid unclear pronouns. Repeat the noun when “it” could mean two things.
    **Instead of:** The client sends the request when it starts. **Write:** The client sends the request when the client starts.
 9. **Do:** Use “must” for a requirement, “can” for an ability and “should” for a recommendation.
-   **Instead of:** TLS is required. The client can use TLS. **Write:** The client must use TLS.
+   **Instead of:** “The client may retry.” (ambiguous: permission or possibility?) **Write:** “The client can retry.” (ability)
+   **Instead of:** “The client is required to send the key ID.” **Write:** “The client must send the key ID.” (requirement)
+   **Instead of:** “Closing the reader is recommended.” **Write:** “You should close the reader.” (recommendation)
 10. **Do:** Put the condition before the action.
     **Instead of:** Retry the request if it times out. **Write:** If the request times out, retry the request.
 11. **Do:** Give exact numbers and units. Avoid “a few”, “many” and “soon”.
