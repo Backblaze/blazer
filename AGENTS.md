@@ -24,22 +24,8 @@ Maintainer-only commands (not run by CI):
 
 ## Architecture
 
-| Path | Role |
-| --- | --- |
-| `b2/` | Public, high-level API (`Client`, `Bucket`, `Object`, `Writer`, `Reader`). Users import this. |
-| `base/` | Low-level wire layer: one function per B2 call, request/response JSON, retry and reauth. |
-| `internal/b2types/` | JSON request/response structs shared by `base`. Wire-shape changes start here. |
-| `internal/b2wiretest/` | Recording `httptest` B2 server for wire tests; imported only from `_test.go`. |
-| `internal/retry/`, `internal/blog/` | Backoff helpers and debug logging. |
-| `x/` | Experimental packages (`consistent`, `transport`, `window`); weaker compatibility promise. |
-| `bin/b2keys/` | Key-management CLI, its own module. |
-| `.sdkharness/` | Contract checks run by the central SDK harness against the B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator)) on loopback. |
-| `.changes/` | changie fragments; `CHANGELOG.md` is generated from them. |
-| `intent/` | Per-change `intent.md`, `spec.md`, `plan.md` (see Workflow). |
-
-`b2` calls `base` through the `be*Interface` seams in `b2/backend.go`, implemented for real in
-`b2/baseline.go`. Many `b2` unit tests use the fake in `b2/b2_test.go`, so a change that only passes there has
-not exercised the wire.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for package responsibilities, dependencies,
+and the backend and wire-test boundaries.
 
 ## Conventions
 
