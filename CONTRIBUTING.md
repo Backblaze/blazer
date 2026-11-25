@@ -155,8 +155,11 @@ entry; a maintainer can apply the `skip-changelog` label when no entry is warran
 
 2. Ship the replacement and an example in the same release.
 3. Add a `Deprecated` changelog entry.
-4. Keep the old symbol for at least two minor releases before removal.
-5. Remove it in a later release. Add a `Removed` entry starting with `**Breaking:**` that says what callers must do.
+4. Do not count the deprecating release. Keep the old symbol in the next two minor releases.
+5. Remove it no earlier than the third minor release after deprecation.
+   Add a `Removed` entry starting with `**Breaking:**` that says what callers must do.
+
+   Deprecated in v0.12.0: keep it in v0.13.0 and v0.14.0, and remove it in v0.15.0 at the earliest.
 
 Blazer is pre-1.0, so breaking changes bump the minor version.
 The API compatibility check requires a new changelog fragment containing `**Breaking:**` for incompatible changes.
