@@ -60,7 +60,7 @@ func CopyToBucket(destinationBucket *Bucket) CopyOption {
 }
 
 // CopyRange copies only the byte range specified by byteRange, in the form
-// "bytes=0-99". Without it the whole source file is copied.
+// "bytes=0-99". Without CopyRange, Copy copies the whole source file.
 func CopyRange(byteRange string) CopyOption {
 	return func(o *copyOptions) { o.byteRange = byteRange }
 }
@@ -90,8 +90,8 @@ func CopySourceSSECKey(key *SSECKey) CopyOption {
 // CopyDestinationSSECKey encrypts the copied file with the supplied
 // customer-managed key. Without this option, the destination bucket's default
 // encryption applies. If the key has a caller-supplied ID, Copy stores that ID
-// as sse_c_key_id in the destination's file info. A source key ID is not copied
-// when the destination key has no ID.
+// as sse_c_key_id in the destination's file info. If the destination key has
+// no ID, Copy does not copy the source key ID.
 func CopyDestinationSSECKey(key *SSECKey) CopyOption {
 	return func(o *copyOptions) {
 		o.destinationSSECKey = key
@@ -100,11 +100,10 @@ func CopyDestinationSSECKey(key *SSECKey) CopyOption {
 }
 
 // Copy creates destinationFileName from sourceFileID without transferring the
-// file's bytes through the caller. The copy is written to the receiver bucket
-// unless CopyToBucket is given, and the source file may be in any bucket of the
-// same account.
+// file's bytes through the caller. Unless CopyToBucket is given, Copy writes to
+// the receiver bucket. The source file may be in any bucket of the same account.
 //
-// The resulting file must be smaller than 5 GB; B2 rejects a larger source with
+// The resulting file must be smaller than 5 GB. B2 rejects a larger source with
 // source_too_large unless CopyRange selects a smaller part of it. Use Compose
 // to include a server-side copied range in a large file.
 //
@@ -113,7 +112,7 @@ func CopyDestinationSSECKey(key *SSECKey) CopyOption {
 // CopyDestinationSSECKey to encrypt the destination with SSE-C; otherwise the
 // destination bucket's default encryption applies.
 //
-// A copy that is retried after a lost response can leave an extra file version.
+// If a lost response causes a retry, Copy can leave an extra file version.
 func (b *Bucket) Copy(ctx context.Context, sourceFileID, destinationFileName string, opts ...CopyOption) (*Object, error) {
 	o := copyOptions{metadataDirective: CopyMetadata}
 	for _, opt := range opts {

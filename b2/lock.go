@@ -85,7 +85,7 @@ func retentionFromBase(r *base.FileRetention) *FileRetention {
 // UpdateFileRetention sets the Object Lock retention of this file. A nil
 // retention removes it. Removing governance retention, or shortening it,
 // needs bypassGovernance and a key with the bypassGovernance capability.
-// Compliance retention can only be extended.
+// Callers can only extend compliance retention.
 func (o *Object) UpdateFileRetention(ctx context.Context, retention *FileRetention, bypassGovernance bool) error {
 	if err := retention.validate(); err != nil {
 		return err
