@@ -38,7 +38,7 @@ import (
 	"github.com/Backblaze/blazer/b2"
 )
 
-// CompareMode selects how a local file is compared with a destination object.
+// CompareMode selects how Sync compares a local file with a destination object.
 type CompareMode int
 
 const (
@@ -67,7 +67,7 @@ type options struct {
 type Option func(*options)
 
 // WithCompare selects the comparison policy. The default is CompareModTime.
-// Different comparison options in one Sync call are rejected.
+// Sync rejects different comparison options in one call.
 func WithCompare(mode CompareMode) Option {
 	return func(o *options) {
 		if o.compareSet && o.compare != mode {
@@ -77,8 +77,8 @@ func WithCompare(mode CompareMode) Option {
 	}
 }
 
-// WithConcurrency sets the maximum number of files uploaded at once. Different
-// concurrency options in one Sync call are rejected.
+// WithConcurrency sets the maximum number of files uploaded at once. Sync
+// rejects different concurrency options in one call.
 func WithConcurrency(n int) Option {
 	return func(o *options) {
 		if o.workersSet && o.concurrency != n {

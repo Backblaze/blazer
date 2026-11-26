@@ -290,8 +290,8 @@ func (g *Group) newWriter(ctx context.Context, key, name string, opts ...b2.Writ
 	}, nil
 }
 
-// NewReader creates a Reader with the current version of the object, as well
-// as that object's update key.
+// NewReader creates a Reader with the current version of the object. The
+// Reader also contains that object's update key.
 func (g *Group) NewReader(ctx context.Context, name string) (Reader, error) {
 	ci, err := g.info(ctx)
 	if err != nil {

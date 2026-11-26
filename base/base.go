@@ -883,8 +883,8 @@ func AuthorizeAccount(ctx context.Context, account, key string, opts ...AuthOpti
 type AuthOption func(*b2Options)
 
 // UserAgent sets the User-Agent HTTP header.  The default header is
-// "blazer/<version>"; the value set here will be prepended to that.  This can
-// be set multiple times.
+// "blazer/<version>". The value set here is prepended to that default.
+// This can be set multiple times.
 func UserAgent(agent string) AuthOption {
 	return func(o *b2Options) {
 		if o.userAgent == "" {
@@ -1427,9 +1427,9 @@ func validateFileLockCount(lock []FileLock) error {
 	return nil
 }
 
-// UploadFile wraps b2_upload_file. At most one FileLock may be given; it sets
-// Object Lock retention and legal hold on the new file. Extra FileLock arguments
-// return an error without sending a request.
+// UploadFile wraps b2_upload_file. Callers may give at most one FileLock.
+// It sets Object Lock retention and legal hold on the new file. Extra FileLock
+// arguments return an error without sending a request.
 func (url *URL) UploadFile(ctx context.Context, r io.Reader, size int, name, contentType, sha1 string, info map[string]string, lock ...FileLock) (*File, error) {
 	return url.UploadFileWithSSEC(ctx, r, size, name, contentType, sha1, info, nil, lock...)
 }
@@ -1684,9 +1684,9 @@ func (f *File) ListParts(ctx context.Context, next, count int) ([]*FilePart, int
 	return parts, b2resp.Next, nil
 }
 
-// CompileParts returns a LargeFile that can accept new data.  Seen is a
-// mapping of completed part numbers to SHA1 strings; size is the total size of
-// all the completed parts to this point.
+// CompileParts returns a LargeFile that can accept new data. Seen maps
+// completed part numbers to SHA1 strings. Size is the total size of all the
+// completed parts to this point.
 func (f *File) CompileParts(size int64, seen map[int]string) *LargeFile {
 	s := make(map[int]string)
 	for k, v := range seen {

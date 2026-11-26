@@ -74,7 +74,7 @@ type Simulator struct {
 	calls   map[string]int
 }
 
-// New creates an empty simulator. No sockets or external services are used.
+// New creates an empty simulator. It uses no sockets or external services.
 func New() *Simulator {
 	return &Simulator{buckets: make(map[string]*bucket), large: make(map[string]*largeFile), calls: make(map[string]int)}
 }
