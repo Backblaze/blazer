@@ -34,10 +34,9 @@ func (b *Bucket) List(ctx context.Context, opts ...ListOption) *ObjectIterator {
 	return o
 }
 
-// ObjectIterator abstracts away the tricky bits of iterating over a bucket's
-// contents.
+// ObjectIterator abstracts iteration over a bucket's contents.
 //
-// It is intended to be called in a loop:
+// Use it in a loop:
 //
 //	for iter.Next() {
 //	  obj := iter.Object()
@@ -92,10 +91,9 @@ func (o *ObjectIterator) page(ctx context.Context) error {
 	return nil
 }
 
-// Next advances the iterator to the next object.  It should be called before
-// any calls to Object().  If Next returns true, then the next call to Object()
-// will be valid.  Once Next returns false, it is important to check the return
-// value of Err().
+// Next advances the iterator to the next object. You should call Next before
+// any calls to Object(). If Next returns true, the next call to Object() will be valid.
+// Once Next returns false, check the return value of Err().
 func (o *ObjectIterator) Next() bool {
 	o.init.Do(func() {
 		o.count = o.opts.pageSize
@@ -229,8 +227,8 @@ func ListPageSize(count int) ListOption {
 	}
 }
 
-// ListLocker passes the iterator a lock which will be held during network
-// round-trips.
+// ListLocker passes the iterator a lock. The iterator holds the lock during
+// network round-trips.
 func ListLocker(l sync.Locker) ListOption {
 	return func(o *objectIteratorOptions) {
 		o.locker = l

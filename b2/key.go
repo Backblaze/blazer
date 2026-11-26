@@ -57,7 +57,7 @@ func (k *Key) Delete(ctx context.Context) error { return k.k.del(ctx) }
 // operations.
 func (k *Key) Secret() string { return k.k.secret() }
 
-// ID returns the application key ID.  This, plus the secret, is necessary to
+// ID returns the application key ID. The ID, plus the secret, is necessary to
 // authenticate to B2.
 func (k *Key) ID() string { return k.k.id() }
 
@@ -172,13 +172,13 @@ func (c *Client) CreateKey(ctx context.Context, name string, opts ...KeyOption) 
 	}, nil
 }
 
-// ListKeys lists all the keys associated with this project.  It takes the
-// maximum number of keys it should return in a call, as well as a cursor
-// (which should be empty for the initial call).  It will return up to count
-// keys, as well as the cursor for the next invocation.
+// ListKeys lists all the keys associated with this project. It takes the
+// maximum number of keys it should return in a call, as well as a cursor.
+// The cursor should be empty for the initial call. ListKeys returns up to count keys and
+// the cursor for the next invocation.
 //
-// ListKeys returns io.EOF when there are no more keys, although it may do so
-// concurrently with the final set of keys.
+// ListKeys returns io.EOF when there are no more keys. It may return io.EOF
+// with the final set of keys.
 func (c *Client) ListKeys(ctx context.Context, count int, cursor string) ([]*Key, string, error) {
 	ks, next, err := c.backend.listKeys(ctx, count, cursor)
 	if err != nil {
