@@ -5,7 +5,7 @@ description: Split a plan into independent streams for parallel Claude sessions 
 
 # Parallel sessions and subagents
 
-A **parallel session** is a full Claude Code instance on its own task in its own git worktree; sessions share nothing except the engineer steering them. A **subagent** is a scoped helper inside one session, with its own context window and tool limits, for jobs that recur across tasks. Sessions raise how many tasks are in flight; subagents keep each session focused. The engineer's job becomes steering and reviewing.
+A **parallel session** is a full Claude Code instance on its own task in its own git worktree. Sessions share nothing except the engineer steering them. A **subagent** is a scoped helper inside one session, with its own context window and tool limits, for jobs that recur across tasks. Sessions raise how many tasks are in flight; subagents keep each session focused. The engineer's job becomes steering and reviewing.
 
 ## Prerequisites
 
@@ -15,13 +15,13 @@ A **parallel session** is a full Claude Code instance on its own task in its own
 
 1. Read `plan.md` (or the task list). Group steps by the files they touch.
 2. Independent groups become parallel sessions. Tasks that share files run in one session, sequentially.
-3. Start with two or three sessions. The ceiling is how many streams the engineer can review properly; add more only while review keeps up.
+3. Start with two or three sessions. The ceiling is how many streams the engineer can review properly. Add more only while review keeps up.
 4. Give each its own worktree and branch:
    ```bash
    claude --worktree feature-auth
    claude --worktree fix-rate-limit
    ```
-5. Give each session its slice of the plan and its own proof (tests or checks) so it can finish without the others.
+5. Give each session its slice of the plan and its own proof (tests or checks). This lets it finish without the others.
 
 ## Define subagents
 
