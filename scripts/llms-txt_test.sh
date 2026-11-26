@@ -34,3 +34,15 @@ while IFS= read -r link; do
   fi
 done <<< "$links"
 echo 'ok   llms.txt: structure and repository file links'
+
+missing=0
+for file in llms.txt AGENTS.md; do
+  if ! grep -Fq 'https://github.com/backblaze-labs/b2-mcp' "$file"; then
+    echo "FAIL $file: missing b2-mcp link"
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  exit 1
+fi
+echo 'ok   llms.txt and AGENTS.md: b2-mcp link'

@@ -28,6 +28,8 @@ Maintainer-only commands (not run by CI):
 See [ARCHITECTURE.md](ARCHITECTURE.md) for package responsibilities, dependencies,
 and the backend and wire-test boundaries.
 
+[b2-mcp](https://github.com/backblaze-labs/b2-mcp) is a Model Context Protocol server for B2, incubating in Backblaze Labs.
+
 ## Conventions
 
 - Write new and edited docs and godoc as described in [docs/writing-style.md](docs/writing-style.md).
