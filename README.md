@@ -18,7 +18,7 @@ maintained by Backblaze.
 import "github.com/Backblaze/blazer/b2"
 ```
 
-Blazer targets the B2 Native API. Unless you specifically need the Native API, you should use the
+Blazer targets the B2 Native API. If you do not need the Native API, you should use the
 [MinIO Go Client SDK](https://github.com/minio/minio-go) with B2's
 [S3 Compatible API](https://www.backblaze.com/docs/cloud-storage-s3-compatible-api).
 
@@ -63,10 +63,9 @@ first six years._
 go get github.com/Backblaze/blazer/b2
 ```
 
-Blazer supports the Go version in [`go.mod`](go.mod) and newer; CI tests the Go 1.26.10 minimum on
-Ubuntu and Go 1.27.3 plus the current stable release on Ubuntu, macOS, and Windows. Releases follow
-[semantic versioning](https://semver.org) and are listed in the
-[changelog](CHANGELOG.md).
+Blazer supports the Go version in [`go.mod`](go.mod) and newer. CI tests the Go 1.26.10 minimum on
+Ubuntu. CI also tests Go 1.27.3 and the current stable release on Ubuntu, macOS, and Windows. Releases follow
+[semantic versioning](https://semver.org). The [changelog](CHANGELOG.md) lists releases.
 
 You need a B2 [application key](https://www.backblaze.com/docs/cloud-storage-application-keys). Give it
 only the capabilities and buckets your program uses.
@@ -144,7 +143,7 @@ func copyFile(ctx context.Context, bucket *b2.Bucket, src, dst string) error {
 ```
 
 If the file is no larger than the writer's `ChunkSize` (100 MB by default), Blazer buffers it and sends
-it with `b2_upload_file`. Larger files are uploaded in `ChunkSize` parts with B2's large file API, which
+it with `b2_upload_file`. Blazer uploads larger files in `ChunkSize` parts with B2's large file API. The API
 always produces at least two parts.
 
 ### Copy a file into B2, with multiple concurrent uploads
@@ -211,9 +210,9 @@ func downloadFile(ctx context.Context, bucket *b2.Bucket, downloads int, src, ds
 }
 ```
 
-The temporary file is created in the destination directory so a failed download leaves the destination
-untouched. Existing permission bits are preserved; new files have mode `0600`. On Windows, replacement
-can fail if the destination is open.
+The example creates the temporary file in the destination directory. A failed download leaves the destination
+untouched. The example preserves existing permission bits. New files have mode `0600`. On Windows, if the destination is open, replacement
+can fail.
 
 ### List all objects in a bucket
 
@@ -269,7 +268,7 @@ if err != nil {
 log.Printf("uploaded %d, skipped %d, failed %d", len(res.Uploaded), len(res.Skipped), len(res.Failed))
 ```
 
-Add `sync.WithDryRun()` to see what would be uploaded without writing anything.
+Add `sync.WithDryRun()` to see what the sync would upload without writing anything.
 
 ### Grant temporary auth to a file
 
@@ -283,11 +282,9 @@ authorization token for the prefix of the files you want to share.
 token, err := bucket.AuthToken(ctx, "photos", time.Hour)
 ```
 
-If successful, `token` is then an authorization token valid for one hour, which
-can be set in HTTP GET requests.
+If successful, `token` is an authorization token valid for one hour. You can set the token in HTTP GET requests.
 
-The hostname to use when downloading files via HTTP is account-specific and can
-be found via the BaseURL method:
+The download hostname for HTTP is account-specific. Use the BaseURL method to find it:
 
 ```go
 base := bucket.BaseURL()
