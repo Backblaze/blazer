@@ -96,9 +96,8 @@ A named test supplies evidence only for its assertions. This document does not c
   A cancelled worker stops taking further jobs. The result can contain work recorded before cancellation.
   Source: `b2/sync/sync.go:200-215`, `b2/sync/sync.go:227-279`, `b2/sync/sync.go:297-329`, `b2/sync/sync.go:370-387`.
   Tests: `b2/sync/sync_stress_test.go:121` `TestSyncDryRunAndCancellation` covers pre-cancellation and cancellation during walking;
-  `b2/sync/sync_result_test.go:48` `TestSyncReturnsCancellationAfterWalk` covers cancellation after walking; and
+  `b2/sync/sync_result_test.go:48` `TestSyncReturnsCancellationAfterWalk` covers cancellation after walking and pins the final context check after the workers finish (`b2/sync/sync.go:326`: without that check the test fails with `error = <nil>, want context canceled`); and
   `b2/sync/sync_test.go:1121` `TestHashReaderStopsAfterCancellation` covers the hash reader.
-  No test pins this: the final context check after workers finish. Search: `rg -n -i 'cancel|context|worker|upload' b2/sync/*_test.go`; the matches do not assert that final check.
 
 - **R14. Error identity.** On an unsupported platform, `Sync` returns a wrapped `errors.ErrUnsupported`, so callers can use `errors.Is(err, errors.ErrUnsupported)`.
   For cancellation, `Sync` returns `ctx.Err()` directly, so callers can use `errors.Is` with the context error. For a per-file failure, callers inspect `Result.Failed[i].Err`; the aggregate `sync: N files failed` error does not wrap that file error.
