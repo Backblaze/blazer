@@ -271,7 +271,7 @@ func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c cl
 			if err := accountInfoError(r.accountInfo); err != nil && !errors.Is(err, errUnavailableAccountInfoSession) {
 				return err
 			}
-			if ok && usableCachedAuthData(data, account) {
+			if ok && usableCachedAuthData(data, account, c.allowHTTP) {
 				if root, ok := r.b2i.(*b2Root); ok {
 					root.restoreAccount(data, c)
 					r.account, r.key, r.options = account, key, c
@@ -300,10 +300,13 @@ func (r *beRoot) authorizeAccount(ctx context.Context, account, key string, c cl
 	return withBackoff(ctx, r, f)
 }
 
-func usableCachedAuthData(data AuthData, account string) bool {
+func usableCachedAuthData(data AuthData, account string, allowHTTP bool) bool {
 	return data.ApplicationKeyID == account && data.AccountID != "" &&
 		data.AuthToken != "" && data.APIURL != "" && data.DownloadURL != "" &&
-		data.S3URL != "" && data.AbsMinPartSize > 0 && data.RecommendedPartSize > 0
+		data.S3URL != "" && data.AbsMinPartSize > 0 && data.RecommendedPartSize > 0 &&
+		validateServiceURL(data.APIURL, allowHTTP) == nil &&
+		validateServiceURL(data.DownloadURL, allowHTTP) == nil &&
+		validateServiceURL(data.S3URL, allowHTTP) == nil
 }
 
 func accountInfoError(info AccountInfo) error {

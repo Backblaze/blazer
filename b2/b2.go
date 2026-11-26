@@ -103,6 +103,7 @@ type clientOptions struct {
 	expireTokens    bool
 	capExceeded     bool
 	apiBase         string
+	allowHTTP       bool
 	userAgents      []string
 	writerOpts      []WriterOption
 	accountInfo     AccountInfo
@@ -160,7 +161,9 @@ func UserAgent(agent string) ClientOption {
 // APIBase returns a ClientOption specifying the URL root of API requests.
 // HTTPS is required except for HTTP endpoints on localhost or a loopback IP.
 // An empty URL uses the default B2 endpoint. For non-loopback HTTP endpoints,
-// use InsecureAPIBase instead.
+// use InsecureAPIBase instead. The same rule applies to AccountInfo sessions.
+// If a saved API, download or S3 address uses non-loopback HTTP, the client
+// discards the session and authorizes again.
 func APIBase(rawURL string) ClientOption {
 	return apiBase(rawURL, false)
 }
@@ -168,31 +171,39 @@ func APIBase(rawURL string) ClientOption {
 // InsecureAPIBase is APIBase with an explicit opt-in to plain HTTP as well as
 // HTTPS, including non-loopback endpoints. APIBase already allows loopback HTTP.
 // HTTP sends credentials and data without encryption; use it only for trusted
-// test or self-hosted endpoints.
+// test or self-hosted endpoints. This opt-in also applies to API, download and
+// S3 addresses restored from AccountInfo.
 func InsecureAPIBase(rawURL string) ClientOption {
 	return apiBase(rawURL, true)
 }
 
 func apiBase(rawURL string, allowHTTP bool) ClientOption {
 	return func(o *clientOptions) {
-		if rawURL != "" {
-			u, err := url.Parse(rawURL)
-			if err != nil {
-				o.optionErr = errors.New("b2: invalid APIBase URL")
-				return
-			}
-			if u.Scheme != "https" && u.Scheme != "http" {
-				o.optionErr = errors.New("b2: unsupported APIBase URL scheme; use HTTP or HTTPS")
-				return
-			}
-			loopback := strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()).IsLoopback()
-			if u.Scheme == "http" && !allowHTTP && !loopback {
-				o.optionErr = errors.New("b2: APIBase requires HTTPS except for loopback hosts; use InsecureAPIBase to allow non-loopback HTTP")
-				return
-			}
+		if err := validateServiceURL(rawURL, allowHTTP); err != nil {
+			o.optionErr = err
+			return
 		}
 		o.apiBase = rawURL
+		o.allowHTTP = allowHTTP
 	}
+}
+
+func validateServiceURL(rawURL string, allowHTTP bool) error {
+	if rawURL == "" {
+		return nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return errors.New("b2: invalid APIBase URL")
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return errors.New("b2: unsupported APIBase URL scheme; use HTTP or HTTPS")
+	}
+	loopback := strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()).IsLoopback()
+	if u.Scheme == "http" && !allowHTTP && !loopback {
+		return errors.New("b2: APIBase requires HTTPS except for loopback hosts; use InsecureAPIBase to allow non-loopback HTTP")
+	}
+	return nil
 }
 
 // Transport sets the underlying HTTP transport mechanism.  If unset,

@@ -148,3 +148,86 @@ func TestAPIBaseSchemePolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoredSessionSchemePolicy(t *testing.T) {
+	const (
+		authorizeURL = "https://authorize.example"
+		badURL       = "http://attacker.example"
+		cachedToken  = "session-token"
+		freshToken   = "fresh-token"
+	)
+	tests := []struct {
+		name     string
+		change   func(*AuthData)
+		insecure bool
+		reuse    bool
+	}{
+		{name: "HTTP API address", change: func(data *AuthData) { data.APIURL = badURL }},
+		{name: "HTTP download address", change: func(data *AuthData) { data.DownloadURL = badURL }},
+		{name: "HTTP S3 address", change: func(data *AuthData) { data.S3URL = badURL }},
+		{name: "HTTP API address with opt-in", change: func(data *AuthData) { data.APIURL = badURL }, insecure: true, reuse: true},
+		{name: "HTTP download address with opt-in", change: func(data *AuthData) { data.DownloadURL = badURL }, insecure: true, reuse: true},
+		{name: "HTTP S3 address with opt-in", change: func(data *AuthData) { data.S3URL = badURL }, insecure: true, reuse: true},
+		{name: "HTTPS addresses", change: func(*AuthData) {}, reuse: true},
+		{name: "loopback HTTP addresses", change: func(data *AuthData) {
+			data.APIURL = "http://127.0.0.1:8080"
+			data.DownloadURL = "http://localhost:8080"
+			data.S3URL = "http://[::1]:8080"
+		}, reuse: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &InMemoryAccountInfo{}
+			data := sampleAuthData()
+			test.change(&data)
+			store.Set(data)
+
+			authorizeCalls := 0
+			var requests []string
+			transport := apiBaseSchemeTransport(func(req *http.Request) (*http.Response, error) {
+				requests = append(requests, req.URL.String())
+				if req.URL.Path != "/b2api/v4/b2_authorize_account" {
+					t.Fatalf("unexpected request to %s", req.URL)
+				}
+				authorizeCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {"application/json"}},
+					Body: io.NopCloser(strings.NewReader(`{"accountId":"account","authorizationToken":"` + freshToken +
+						`","apiInfo":{"storageApi":{"absoluteMinimumPartSize":5000000,"recommendedPartSize":100000000,` +
+						`"apiUrl":"https://api.example","downloadUrl":"https://download.example","s3ApiUrl":"https://s3.example"}}}`)),
+					Request: req,
+				}, nil
+			})
+			endpoint := APIBase(authorizeURL)
+			if test.insecure {
+				endpoint = InsecureAPIBase(authorizeURL)
+			}
+			client, err := NewClient(t.Context(), "key-id", "application-key-secret", endpoint, Transport(transport), WithAccountInfo(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantAuthorizeCalls, wantToken := 1, freshToken
+			if test.reuse {
+				wantAuthorizeCalls, wantToken = 0, cachedToken
+			}
+			if authorizeCalls != wantAuthorizeCalls {
+				t.Errorf("authorization calls = %d, want %d", authorizeCalls, wantAuthorizeCalls)
+			}
+			got := client.backend.(*beRoot).b2i.(*b2Root).authData()
+			if got.AuthToken != wantToken {
+				t.Errorf("restored token = %q, want %q", got.AuthToken, wantToken)
+			}
+			if !test.reuse {
+				if len(requests) == 0 || requests[0] != authorizeURL+"/b2api/v4/b2_authorize_account" {
+					t.Errorf("first request = %v, want authorization at %s", requests, authorizeURL)
+				}
+				for _, request := range requests {
+					if strings.HasPrefix(request, badURL) {
+						t.Errorf("request sent to rejected address: %s", request)
+					}
+				}
+			}
+		})
+	}
+}
