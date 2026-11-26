@@ -1,7 +1,7 @@
 # Blazer
 
 Go client library for the Backblaze B2 Native API (`github.com/Backblaze/blazer`). This file is the map for
-coding agents and new contributors; `CLAUDE.md` points here. Keep it under about 150 lines and link out for detail.
+coding agents and new contributors. `CLAUDE.md` points here. Keep it under about 150 lines and link out for detail.
 
 ## Commands
 
@@ -12,7 +12,7 @@ CI checks and local gate:
 - Individual targets: `make build`, `make vet`, `make fmt-check` (`make fmt` fixes formatting),
   `make tidy-check`, `make verify`, `make lint`, `make test`, `make b2keys`, `make crosscompile`, and
   `make scripts-test`. Lint checks findings new since `origin/main` by default.
-- Run `make docs-lint` to report issues in changed `docs/` Markdown and `ARCHITECTURE.md`; unchanged files do not get stale warnings.
+- Run `make docs-lint` to report issues in changed `docs/` Markdown and `ARCHITECTURE.md`. Unchanged files do not get stale warnings.
 - Integration tests in `b2/integration_test.go` require `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY`;
   otherwise they skip.
 
@@ -31,7 +31,7 @@ and the backend and wire-test boundaries.
 ## Conventions
 
 - Write new and edited docs and godoc as described in [docs/writing-style.md](docs/writing-style.md).
-- The minimum Go version is in `go.mod` and rises only in a release that says so; CI tests the 1.26.10 floor on
+- The minimum Go version is in `go.mod` and rises only in a release that says so. CI tests the 1.26.10 floor on
   Ubuntu and Go 1.27.3 plus latest stable on Ubuntu, macOS and Windows.
 - Public API is semver. Pre-1.0, a breaking change bumps the minor version and needs a `Changed` or
   `Removed` changelog entry that says what callers must do.
@@ -58,11 +58,11 @@ Each line was raised by a reviewer on at least two PRs.
 2. **Tests that do not pin the fix.** Revert the change and the new test must fail. Prove it in the PR.
    Assert the request body sent on the wire (`httptest` server or `RoundTripper` stub through `NewClient`),
    not only the fake backend or a decoded response.
-   New wire tests use `internal/b2wiretest`; existing per-feature fakes stay until a test is rewritten.
+   New wire tests use `internal/b2wiretest`. Existing per-feature fakes stay until a test is rewritten.
 3. **Read-modify-write on `b2_update_bucket`.** Omit fields the caller did not change (`lifecycleRules`,
    `defaultRetention`, `defaultServerSideEncryption`, `replicationConfiguration`). Sending cached values
    needs extra capabilities and can regenerate rule IDs. Test two updates in a row on the same handle.
-4. **JSON nil vs empty.** `nil` slice with `omitempty` drops the field; without it sends `null`. B2 often
+4. **JSON nil vs empty.** A `nil` slice with `omitempty` drops the field. Without it, the slice sends `null`. B2 often
    needs `[]` to clear and an omitted field to keep. Pick deliberately and test each form.
 5. **Retry and reauth parity.** New calls go through the same retry/reauth wrapper as their siblings, honor
    `Retry-After`, and part uploads retry with a fresh upload URL like `Writer` does.
@@ -73,7 +73,7 @@ Each line was raised by a reviewer on at least two PRs.
 8. **Copy-paste of request paths.** Extract a shared helper (download, attrs post-processing, bucket decode)
    so the next header or field change lands in one place.
 9. **Docs vs live API.** B2 docs and live responses differ (v4 master keys return `allowed` with null
-   fields). Pin the real shape with a fixture; say in the PR what you verified live.
+   fields). Pin the real shape with a fixture. Say in the PR what you verified live.
 10. **PR text that disagrees with code** (`> 0` vs `> 1`). Re-read the description after the last commit.
 11. **Over-generic abstractions.** Prefer a parameter on the existing helper to a new framework.
 12. **Secrets past `String()`.** `%d`, `%x` and `%+v` on a struct bypass `String`; a zero-value key type is
@@ -82,7 +82,7 @@ Each line was raised by a reviewer on at least two PRs.
     `nil` vs empty and `base` exports are public. Mark it `**Breaking:**` and say what callers must do.
 14. **Explicit `nil` and hidden state.** An option given `nil` is an error, not "unset"; configuration the
     key cannot read (`isClientAuthorizedToRead: false`) is hidden, not absent. Never overwrite either.
-15. **Proof that did not run.** CI does not run the `.sdkharness` simulator contract; run the scenarios for
+15. **Proof that did not run.** CI does not run the `.sdkharness` simulator contract. Run the scenarios for
     what you changed. A skipped check is NOT RUN, never PASS. See [docs/testing.md](docs/testing.md).
 
 ## Workflow (AI-native SDLC)
