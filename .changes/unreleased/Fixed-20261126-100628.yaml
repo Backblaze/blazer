@@ -1,0 +1,3 @@
+kind: Fixed
+body: Return independent RPC snapshots from Client.Status.
+time: 2026-11-26T10:06:28.412519-06:00

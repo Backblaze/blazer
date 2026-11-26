@@ -132,7 +132,7 @@ func (c *Client) Status() *StatusInfo {
 	}
 
 	for _, c := range c.sMethods {
-		si.RPCs[c.d] = c.retrieve()
+		si.RPCs[c.d] = append(MethodList(nil), c.retrieve()...)
 	}
 
 	return si
