@@ -48,7 +48,7 @@ type Event struct {
 const MaxWebhookBodySize = 1 << 20
 
 // VerifySignature verifies a B2 webhook signature for the raw request body.
-// The v1= prefix is exact; hex digits in the signature may be either case.
+// The v1= prefix is exact. Hex digits in the signature can be either case.
 // Call this before ParseEvent, and cap HTTP reads at MaxWebhookBodySize.
 // B2 does not specify a timestamp freshness window; consumers should deduplicate
 // at-least-once deliveries by eventId after verification.
@@ -80,9 +80,9 @@ func VerifySignature(body []byte, signatureHeader, signingSecret string) error {
 	return nil
 }
 
-// ParseEvent parses a B2 webhook event-notification payload.
-// Call VerifySignature on the same raw body first; a valid JSON payload alone
-// is not evidence that it came from B2.
+// ParseEvent parses a B2 webhook event-notification payload. Call
+// VerifySignature on the same raw body first. Valid JSON alone does not prove
+// that the payload came from B2.
 func ParseEvent(body []byte) (*EventNotification, error) {
 	if len(body) > MaxWebhookBodySize {
 		return nil, fmt.Errorf("webhook body too large")

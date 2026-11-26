@@ -120,12 +120,12 @@ func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatu
 // The keys authenticating the bucket clients need listBuckets and
 // readBucketReplications to read configurations. Clients that perform updates
 // need writeBuckets and writeBucketReplications for the update-bucket requests.
-// These are management capabilities, distinct from the file capabilities of the
+// These management capabilities are distinct from the file capabilities of the
 // supplied replication keys. Adding a source rule requires update permission for
-// both buckets, including retries: the destination update is repeated even if its
-// mapping already matches. Repairing just a missing destination mapping needs
-// update permission only for the destination. An exact existing rule and mapping
-// need no update permission.
+// both buckets, including retries. SetupReplication repeats the destination
+// update even if its mapping already matches. Repairing a missing destination
+// mapping needs update permission only for the destination. An exact existing
+// rule and mapping need no update permission.
 //
 // The helper preserves existing rules and key mappings. It rejects unreadable
 // configurations, conflicting source keys or destination mappings, and an existing
@@ -137,9 +137,9 @@ func ReplicationStatus(ctx context.Context, src *Bucket) ([]ReplicationRuleStatu
 // rule defaults to priority 128; later rules default to five above the highest
 // existing priority, capped at 2147483647.
 //
-// Setup is not atomic: the destination mapping is stored before the source rule.
-// If the source update fails, the mapping remains; retry with the same key IDs and
-// options to finish setup.
+// SetupReplication is not atomic. It stores the destination mapping before the
+// source rule. If the source update fails, the mapping remains. Retry with the
+// same key IDs and options to finish setup.
 func SetupReplication(ctx context.Context, src, dst *Bucket, sourceKeyID, destinationKeyID string, opts ...ReplicationOption) error {
 	if src == nil || dst == nil {
 		return fmt.Errorf("setup replication: source and destination buckets are required")

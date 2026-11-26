@@ -26,8 +26,8 @@ import (
 
 const composeMaxLargeFileSize int64 = 10_000_000_000_000
 
-// ComposePart describes one part of a composed large file. Parts are used in
-// the order given to Compose.
+// ComposePart describes one part of a composed large file. Compose uses parts
+// in the order given.
 type ComposePart struct {
 	reader       io.Reader
 	size         int64
@@ -41,16 +41,16 @@ func PartFromReader(r io.Reader, size int64) ComposePart {
 }
 
 // PartFromCopy copies byteRange from sourceFileID as one part. The range has
-// the form "bytes=0-4999999". An empty range copies the entire source and is
-// allowed only for the final part. Its size is not looked up before Compose
-// starts; B2 enforces its size limits after the large file has started.
+// the form "bytes=0-4999999". Only the final part can use an empty range to
+// copy the entire source. Compose does not look up that source's size before it
+// starts. B2 enforces its size limits after the large file has started.
 func PartFromCopy(sourceFileID, byteRange string) ComposePart {
 	return ComposePart{sourceFileID: sourceFileID, byteRange: byteRange}
 }
 
-// ComposeOption configures metadata or Object Lock for Compose. Encryption is
-// not currently supported; this variadic option slot permits adding it later
-// without changing Compose's signature.
+// ComposeOption configures metadata or Object Lock for Compose. Compose does
+// not currently support encryption. This variadic option slot permits adding it
+// later without changing Compose's signature.
 type ComposeOption func(*composeOptions)
 
 type composeOptions struct {
@@ -62,9 +62,9 @@ type composeOptions struct {
 }
 
 // ComposeWithAttrs sets the composed file's content type, file info, SHA1 and
-// last-modified time. SHA1 and LastModified are always stored as
-// large_file_sha1 and src_last_modified_millis when set; file-info size limits
-// are left to the server. An empty ContentType keeps application/octet-stream. A
+// last-modified time. When set, SHA1 and LastModified are stored as
+// large_file_sha1 and src_last_modified_millis. The server enforces file-info
+// size limits. An empty ContentType keeps application/octet-stream. A
 // nil Attrs returns an error before a request is made. It does not copy
 // Attrs.Retention or Attrs.LegalHold; use ComposeFileRetention and
 // ComposeLegalHold.
@@ -210,14 +210,14 @@ func validateComposeTotalSize(parts []ComposePart) error {
 }
 
 // Compose creates a large file from uploaded and server-side copied parts in
-// the supplied order. It requires at least two parts; every part except the
-// last must be at least five million bytes. At most 10000 parts of at most
+// the supplied order. Compose requires at least two parts. Every part except
+// the last must be at least five million bytes. At most 10000 parts of at most
 // five billion bytes each are allowed. Copy ranges from the same source file
 // may overlap. Compose defaults the content type to application/octet-stream.
 // The known total of uploaded parts and ranged copies may not exceed 10 TB
-// (10,000,000,000,000 bytes); whole-file copies have an unknown size and are
-// not counted toward that limit. For a final whole-file copy, validation of the
-// part size and total file size is deferred to B2 after the large file starts.
+// (10,000,000,000,000 bytes). Compose does not count whole-file copies toward
+// that limit because their size is unknown. For a final whole-file copy, B2
+// validates the part size and total file size after the large file starts.
 // A service rejection cancels the unfinished file like any other part failure.
 func (b *Bucket) Compose(ctx context.Context, name string, parts []ComposePart, opts ...ComposeOption) (object *Object, err error) {
 	options := composeOptions{}

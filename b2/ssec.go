@@ -25,8 +25,8 @@ import (
 const ssecKeySize = 32
 
 // SSECKey is a caller-provided AES-256 key for server-side encryption with
-// customer-managed keys. It is used only for the request on which it is passed;
-// Client and Bucket never retain it.
+// customer-managed keys. An SSECKey applies only to the request that receives
+// it. Client and Bucket never retain the key.
 //
 // SSECKey's formatted representation is always redacted.
 type SSECKey struct {
@@ -50,9 +50,9 @@ func NewSSECKey(key []byte) (*SSECKey, error) {
 	return k, nil
 }
 
-// NewSSECKeyWithID attaches a caller-chosen identifier to an SSE-C key. The
-// identifier is saved as sse_c_key_id in file info for every SSE-C upload,
-// visible to file-info readers, and must uniquely identify the key for safe
+// NewSSECKeyWithID attaches a caller-chosen identifier to an SSE-C key. Every
+// SSE-C upload stores the identifier as sse_c_key_id in file info. File-info
+// readers can read it. The identifier must uniquely identify the key for safe
 // large-file resume.
 // Choose an opaque stable ID, not the key or a key-derived value. An empty ID
 // behaves like NewSSECKey and cannot resume an SSE-C large file. The key and ID
