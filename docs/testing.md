@@ -23,12 +23,12 @@ The rules every PR follows (TDD loop, five kinds, evidence) are in [testing-stan
 
 Object Lock behavior in `b2/lock.go` is live-only for service semantics. The existing
 `TestObjectLockLive` in `b2/lock_test.go` exercises retention and legal hold uploads and updates
-against B2; it skips without credentials. Local validation and wire tests cannot prove B2 enforces
+against B2. Without credentials, the test skips. Local validation and wire tests cannot prove B2 enforces
 those settings.
 
 `make ci` runs build, vet, gofmt, tidy, verify, lint, the race tests, b2keys, cross-compiles and the
-changelog check. Cross-compiling proves the code builds for a platform, not that it runs there; native
-Windows and macOS runs happen in CI.
+changelog check. Cross-compiling proves that the code builds for a platform. It does not prove that the
+code runs there. CI also runs native Windows and macOS tests.
 
 ## Showing a test pins the fix
 
@@ -46,8 +46,8 @@ server that returns an empty `200`, must not satisfy an assertion meant for a sp
 
 ## Known-defect tests
 
-A known-defect test asserts the correct behavior of code that is still wrong, so it fails today. It is
-kept out of the default run so `make ci` stays green, and it stays runnable on demand:
+A known-defect test asserts the correct behavior of code that is still wrong, so it fails today. The default
+run excludes the test so `make ci` stays green. You can run the test on demand:
 
 ```sh
 make known-defects
@@ -69,7 +69,7 @@ does not prove it fixed.
 ## Repo-owned SDK harness contract
 
 `.sdkharness/tests.tsv` lists one row per scenario: level (`conformance`, `resilience`, `health`), scenario
-id, target and the executable that runs it. Each scenario runs against a fresh simulator and prints one
+id, target and the executable that runs the scenario. Each scenario runs against a fresh simulator and prints one
 `SDKHARNESS_RESULT` line. The central SDK harness runs every row daily against a pinned commit of
 [`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator).
 
@@ -87,7 +87,7 @@ simulator's test credentials and an existing bucket. Resilience scenarios need t
 control URL in `SDKHARNESS_SIMULATOR_CONTROL_URL`.
 
 When you add or remove a row, update the counts in `b2/sdkharness_contract_test.go` in the same change. Two
-PRs that each add a row will conflict on those counts; the second to merge sets them to the merged total.
+PRs that each add a row will conflict on those counts. The second PR to merge sets the counts to the merged total.
 
 GitHub CI does not run the simulator contract, so a change can be green in CI and still fail a scenario.
 Run the scenarios for the area you changed before asking for review.
@@ -106,7 +106,7 @@ as flaky or pre-existing only when the same test has failed intermittently acros
 until then record it as unresolved and note the re-run.
 
 In CI, `.github/workflows/test-live.yml` runs them on every push to `main` (each merged PR), weekly, and
-on demand. Pull requests do not trigger them, so the live key is not automatically exposed to PR code.
+on demand. Pull requests do not trigger the tests, so the live key is not automatically exposed to PR code.
 A manual `workflow_dispatch` run can still target any branch with the key, so anyone with write access
 can run unmerged code against it; restricting the `live-tests` environment to `main` would close that.
 The job fails if any test fails or skips, or if any top-level test in `b2/integration_test.go`,
@@ -126,7 +126,7 @@ go test -count=1 -run '^TestListHiddenDelimiterFolderBoundaryLive$' ./b2
 
 ## When a PR needs a live test
 
-Wire tests prove what blazer sends; only a live test proves how B2 answers. Add or extend a live test when
+Wire tests prove what blazer sends. Only a live test proves how B2 answers. Add or extend a live test when
 the PR:
 
 - adds a B2 call, or changes the request body, headers or query of an existing one;
@@ -144,10 +144,10 @@ Writing one:
   uniquely named bucket and returns a cleanup function) or `base/integration_test.go`. The live workflow
   requires every top-level test in those files and `b2/lock_test.go` to pass, so a live test anywhere else
   would not be checked.
-- Keep it short and give it a deadline; the live suite runs serially on every merge.
+- Keep the test short and give it a deadline. The live suite runs serially on every merge.
 - Clean up everything it creates, on a fresh context, even when it fails.
-- Pull requests do not run live tests; a new test first runs after merge, unless a maintainer starts
-  `test-live` on the branch by hand.
+- Pull requests do not run live tests. Unless a maintainer starts `test-live` on the branch by hand, a new
+  test first runs after merge.
 
 ## Reporting what you ran
 
