@@ -40,8 +40,8 @@ var ErrInvalidAccountInfo = errUnavailableAccountInfoSession
 
 // AccountInfo stores an authorized session. It never stores the application
 // key secret; callers still supply that key to NewClient for reauthorization.
-// All methods, including an optional Err method, must support concurrent calls,
-// including when the store is shared by multiple clients.
+// All methods, including an optional Err method, must support concurrent calls.
+// This includes calls from multiple clients that share the store.
 //
 // AuthData must return ok=false for absent or unusable data. A store may also
 // implement Err() error to report its most recent operation's error, or nil after
@@ -50,7 +50,7 @@ var ErrInvalidAccountInfo = errUnavailableAccountInfoSession
 // ErrInvalidAccountInfo does not override ok=true: an otherwise complete session
 // for the requested key may still be reused. Incomplete or mismatched sessions
 // cause reauthorization. Custom stores must return ok=false for invalid data.
-// Errors observed after Set or Clear are returned, including ErrInvalidAccountInfo.
+// The client returns errors observed after Set or Clear, including ErrInvalidAccountInfo.
 // A method call and its subsequent Err check are separate operations. When a
 // store is shared across clients, another caller can overwrite an error or see
 // it before the original caller checks it. Concurrent safety does not provide
@@ -99,18 +99,18 @@ func cloneAuthData(data AuthData) AuthData {
 
 // AccountInfoFile stores one authorized session in JSON. The file contains a
 // live authorization token, but never the application key secret. Keep the
-// file and its parent directory private. File I/O failures are available via
-// Err because AccountInfo's Set and Clear methods have no error result. On
-// Windows, privacy depends on the directory's ACLs rather than mode bits; put
-// the session file under the user's profile directory, such as os.UserConfigDir().
+// file and its parent directory private. Err reports file I/O failures because
+// AccountInfo's Set and Clear methods have no error result. On Windows, privacy
+// depends on the directory's ACLs rather than mode bits. Put the session file
+// under the user's profile directory, such as os.UserConfigDir().
 type AccountInfoFile struct {
 	path string
 	mu   sync.Mutex
 	err  error
 }
 
-// NewAccountInfoFile selects an opt-in session file. Its parent directory is
-// created with mode 0700; an existing parent must already be private. On Windows,
+// NewAccountInfoFile selects an opt-in session file. The store creates its parent
+// directory with mode 0700. An existing parent must already be private. On Windows,
 // these mode bits do not create a private ACL; use a directory under the user's
 // profile, such as os.UserConfigDir().
 func NewAccountInfoFile(path string) *AccountInfoFile {
