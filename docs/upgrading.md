@@ -32,13 +32,13 @@ client, err := b2.NewClient(ctx, id, key, b2.InsecureAPIBase("http://b2.internal
 ```
 
 `InsecureAPIBase` accepts HTTP and HTTPS. HTTP transmits credentials and data without
-encryption; use HTTPS whenever the endpoint supports it.
+encryption. When the endpoint supports HTTPS, use HTTPS.
 
 ## Upgrading to v0.10.0
 
 v0.10.0 adds the parity capabilities and includes breaking changes. **Three require a
-source change** (they cause compile errors); the rest change runtime behavior for specific
-call patterns — mostly turning a previously silent, risky behavior into an explicit error
+source change** because they cause compile errors. The rest change runtime behavior for specific
+call patterns. Most turn a previously silent, risky behavior into an explicit error
 ("fail closed"). If you do not use the call patterns below, nothing changes for you.
 
 ### Source changes required
@@ -46,8 +46,8 @@ call patterns — mostly turning a previously silent, risky behavior into an exp
 #### `WriterOption` is now an interface
 
 `WriterOption` changed from `func(*Writer)` to an interface so client defaults can be
-validated without executing callbacks. Existing `With…` calls are unchanged; only a custom
-bare-function option needs wrapping, and option values are no longer directly callable.
+validated without executing callbacks. Existing `With…` calls are unchanged. Only a custom
+bare-function option needs wrapping. Option values are no longer directly callable.
 
 ```go
 // Before
@@ -77,8 +77,8 @@ read := func(ctx context.Context) *b2.Reader { return obj.NewReader(ctx) }
 
 #### `(*base.B2).CreateBucket` takes a replication configuration
 
-The new final argument is required. Pass `nil` to keep the previous behavior when no
-replication configuration is needed. In these examples, `b` is a `*base.B2` and `ctx`
+The new final argument is required. When no replication configuration is needed, pass `nil`
+to keep the previous behavior. In these examples, `b` is a `*base.B2` and `ctx`
 is a `context.Context`.
 
 Before:
@@ -95,7 +95,7 @@ bucket, err := b.CreateBucket(ctx, "bucket", "allPrivate", nil, nil, nil, nil, f
 
 ### Behavior changes (fail closed)
 
-These keep the same signatures; a call that used to succeed silently can now return an
+These keep the same signatures. A call that used to succeed silently can now return an
 error. In each case the old behavior was the surprising one.
 
 #### `CopyToBucket(nil)` now errors
@@ -119,7 +119,7 @@ key, err := client.CreateKey(ctx, name, b2.BucketIDs(id1, id2)) // non-empty IDs
 
 #### Invalid key and download-authorization lifetimes are rejected
 
-`base.ErrInvalidDuration` is now returned for negative lifetimes, positive lifetimes below
+Blazer now returns `base.ErrInvalidDuration` for negative lifetimes, positive lifetimes below
 one second, and lifetimes of 1000 days or more. This covers `b2.Lifetime`, `b2.Deadline`,
 `Bucket.AuthToken`, `Object.AuthURL`, and the `base` key/authorization calls.
 
@@ -144,8 +144,8 @@ requests through unchanged.
   `ReplicationConfig` when you do not want its rules copied.
 - `(*b2.Bucket).Update` omits replication settings when `BucketAttrs.ReplicationConfig` is
   nil (previously it could resend the cached configuration). Use nil to leave replication
-  unchanged; supply role data with normal bucket-update and `writeBucketReplications`
-  permissions to change it. Partial updates that preserve an unspecified role also need
+  unchanged. To change replication, supply role data with normal bucket-update and `writeBucketReplications`
+  permissions. Partial updates that preserve an unspecified role also need
   `readBucketReplications`.
 
 ```go
@@ -170,14 +170,14 @@ r := obj.NewRangeReader(ctx, offset, -1)
 
 `(*base.URL).UploadFile` and `(*base.Bucket).StartLargeFile` (and their SSE-C variants) now
 reject more than one `base.FileLock` instead of silently ignoring the extras. Combine
-retention and legal hold in a single `FileLock`; zero or one argument works as before.
+retention and legal hold in a single `FileLock`. Zero or one argument works as before.
 
 #### `Writer.Close` waits for in-flight work
 
 `Writer.Close` now waits for in-flight part uploads and, with `WithCancelOnError`, for
 `b2_cancel_large_file` and `errf` to finish. Keep `errf` prompt and make it return without
 calling `Close` or waiting on the goroutine that calls `Close` (either deadlocks). Bound the
-cancellation RPC with a deadline on the context returned by `ctxf`; that deadline does not
+cancellation RPC with a deadline on the context returned by `ctxf`. That deadline does not
 bound `errf`.
 
 ### Logging changes
@@ -194,8 +194,8 @@ The `b2/sync` package is new in v0.10.0. Its default comparison and `CompareModT
 modification times alone at millisecond resolution. To detect size or content changes when
 times are unchanged, pass `WithCompare(CompareSize)` or `WithCompare(CompareSHA1)`.
 
-`Sync` supports Linux, macOS, and Windows. On other targets it returns an error wrapping
-`errors.ErrUnsupported` (with `GOOS/GOARCH`) before touching the filesystem or B2; those
+`Sync` supports Linux, macOS, and Windows. On other targets, it returns an error wrapping
+`errors.ErrUnsupported` (with `GOOS/GOARCH`) before touching the filesystem or B2. Those
 targets still build.
 
 ```go
@@ -208,4 +208,4 @@ res, err := b2sync.Sync(ctx, bucket, "prefix/", "/local/root",
 - **Go 1.26.10 floor.** v0.9.0 requires a patched Go toolchain; build with Go 1.26.10 or
   newer.
 - **`(*base.B2).CreateBucket` gained arguments.** Low-level callers must pass the new
-  parameters; high-level `b2` package users are unaffected.
+  parameters. High-level `b2` package users are unaffected.
