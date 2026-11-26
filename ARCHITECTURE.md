@@ -43,9 +43,9 @@ and `x/window`, among other internal helpers. `base` imports `internal/b2types`,
 and `x/b2sim` do not import `b2` in their production code. These are actual import
 directions, not a rule that all experimental packages sit above `b2`.
 
-The interfaces in [`b2/backend.go`](b2/backend.go) form the high-level backend seam;
-[`b2/baseline.go`](b2/baseline.go) adapts it to `base`, and the fake in
+The interfaces in [`b2/backend.go`](b2/backend.go) form the high-level backend seam.
+[`b2/baseline.go`](b2/baseline.go) adapts the seam to `base`. The fake in
 [`b2/b2_test.go`](b2/b2_test.go) supports unit tests. A test that passes only against
 that fake exercises high-level logic but not HTTP requests, serialization or response
-handling. Wire tests use `internal/b2wiretest` to exercise those boundaries; they still
-do not establish how the live B2 service responds.
+handling. Wire tests use `internal/b2wiretest` to exercise those boundaries. Wire tests do not
+establish how the live B2 service responds.

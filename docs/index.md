@@ -17,13 +17,13 @@ reviewers keep finding. The files here hold the detail behind those rules.
 | [design-docs/threat-model-credentials.md](design-docs/threat-model-credentials.md) | You review credential flows and controls. |
 | [exec-plans/tech-debt.md](exec-plans/tech-debt.md) | You review known defects. |
 | [writing-style.md](writing-style.md) | You write or edit documentation or godoc. |
-| [b2-contracts.md](b2-contracts.md) | You touch a B2 call, encryption, file info, bucket settings, downloads, retries or large files. It lists what B2 and the reference SDKs do, with sources and the tests that pin each fact. |
-| [testing.md](testing.md) | You write or run tests. It explains the test levels, what each one proves, how to run the repo-owned SDK harness contract and the live tests, and how to show a test pins a fix. |
-| [testing-standard.md](testing-standard.md) | You write or review tests. It sets the TDD loop, the five kinds of test, what evidence a PR carries and who reviews what. |
+| [b2-contracts.md](b2-contracts.md) | You touch a B2 call, encryption, file info, bucket settings, downloads, retries or large files. The file lists B2 and reference SDK behavior. It gives sources and tests that pin each fact. |
+| [testing.md](testing.md) | You write or run tests. The guide explains test levels and what each level proves. It shows how to run the repo-owned SDK harness contract and live tests. It shows how to prove a test pins a fix. |
+| [testing-standard.md](testing-standard.md) | You write or review tests. The standard sets the TDD loop and five kinds of test. It states what evidence a PR carries and who reviews what. |
 | [delete-options.md](delete-options.md) | You use governance-bypass deletion or migrate pre-v0.9.0 delete interfaces and function values. |
 | [object-lock.md](object-lock.md) | You use per-file retention or legal hold, resume a locked upload, or adapt a low-level upload interface to the Object Lock signatures. |
-| [review-lessons.md](review-lessons.md) | You review a PR or prepare one for review. It groups the problems earlier reviews found, with links to the PRs where they were raised. |
-| [upgrading.md](upgrading.md) | You upgrade across a release and your build or a call starts failing. It lists, per release, only what callers must change, with before/after code. |
+| [review-lessons.md](review-lessons.md) | You review a PR or prepare one for review. The file groups problems from earlier reviews. It links to the PRs that raised them. |
+| [upgrading.md](upgrading.md) | You upgrade across a release and your build or a call starts failing. The guide lists only what callers must change for each release. It includes before/after code. |
 
 ## Additional documents
 
