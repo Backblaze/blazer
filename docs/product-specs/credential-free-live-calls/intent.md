@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: credential-free tests for calls only covered by live tests"
+description: "Intent behind the spec for: credential-free tests for calls only covered by live tests."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: credential-free tests for calls only covered by live tests
 Author: Felipe Fumero. Issue: #203. Parent: #97. Status: ready for review.
 

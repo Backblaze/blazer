@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: Object listing iterator contract"
+description: "Numbered requirements, code citations and pinning tests for: Object listing iterator contract."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: Object listing iterator contract
 From: [intent.md](intent.md) (Felipe Fumero). Issue: #528. Status: ready for review.
 

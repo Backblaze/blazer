@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: expose a key's bucket restriction and name prefix"
+description: "Intent behind the spec for: expose a key's bucket restriction and name prefix."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: expose a key's bucket restriction and name prefix
 Author: Felipe Fumero. Issue: #227. Related: #220. Status: draft.
 

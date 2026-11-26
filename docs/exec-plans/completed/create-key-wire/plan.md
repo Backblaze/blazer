@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: pin the b2_create_key request, response and errors (from intent.md and spec.md)"
+description: "Completed execution plan: pin the b2_create_key request, response and errors."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: pin the b2_create_key request, response and errors (from intent.md and spec.md)
 
 Branch: `test-issue-192-create-key-wire`, stacked on `test-issue-191-shared-recording-server`. Status: ready

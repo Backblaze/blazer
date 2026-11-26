@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: credential-free tests for calls only covered by live tests"
+description: "Numbered requirements, code citations and pinning tests for: credential-free tests for calls only covered by live tests."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: credential-free tests for calls only covered by live tests
 From: intent.md (Felipe Fumero). Issue: #203. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.

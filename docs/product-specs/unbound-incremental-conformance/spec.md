@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: a conformance check for unbound (unknown-length) uploads"
+description: "Numbered requirements, code citations and pinning tests for: a conformance check for unbound (unknown-length) uploads."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: a conformance check for unbound (unknown-length) uploads
 From: intent.md (Felipe Fumero). Issue: #213. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.

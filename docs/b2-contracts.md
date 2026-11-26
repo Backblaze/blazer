@@ -1,3 +1,11 @@
+---
+type: reference
+title: "B2 contracts"
+description: "Facts about B2 behavior and SDK conventions that blazer has to get right, with the evidence for each."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # B2 contracts
 
 Facts about B2 behavior and SDK conventions that blazer has to get right, with the evidence for each.

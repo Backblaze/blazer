@@ -1,3 +1,11 @@
+---
+type: reference
+title: "Writing style"
+description: "These rules help people read Blazer documentation and godoc."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Writing style
 
 These rules help people read Blazer documentation and godoc. They are inspired by

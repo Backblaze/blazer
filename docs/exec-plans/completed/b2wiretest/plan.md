@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: a shared recording B2 server for wire tests (from intent.md and spec.md)"
+description: "Completed execution plan: a shared recording B2 server for wire tests."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: a shared recording B2 server for wire tests (from intent.md and spec.md)
 
 Branch: `test-issue-191-shared-recording-server`. One PR for issue #191 carries this folder and the code.

@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: cover the remaining base request and response mapping edges (from intent.md and spec.md)"
+description: "Completed execution plan: cover the remaining base request and response mapping edges."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: cover the remaining base request and response mapping edges (from intent.md and spec.md)
 
 Branch: `test-issue-202-base-mapping-edges`, from `main`. One PR for #202 carries this folder and the tests.

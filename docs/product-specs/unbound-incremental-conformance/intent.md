@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: a conformance check for unbound (unknown-length) uploads"
+description: "Intent behind the spec for: a conformance check for unbound (unknown-length) uploads."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: a conformance check for unbound (unknown-length) uploads
 Author: Felipe Fumero. Issue: #213. Status: draft.
 

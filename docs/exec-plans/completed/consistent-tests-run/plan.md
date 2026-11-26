@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: run the x/consistent tests by default (from intent.md and spec.md)"
+description: "Completed execution plan: run the x/consistent tests by default."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: run the x/consistent tests by default (from intent.md and spec.md)
 
 Branch: `test-issue-198-consistent-tests-run`, from `main` (it does not use #191's helper). One PR for

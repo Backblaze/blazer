@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: replace self-referential expected values in five tests (from intent.md and spec.md)"
+description: "Completed execution plan: replace self-referential expected values in five tests."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: replace self-referential expected values in five tests (from intent.md and spec.md)
 
 Branch: `test-issue-200-independent-expected-values`, from `main`. One PR for #200 carries this folder and

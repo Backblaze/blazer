@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: cover the remaining b2 request-mapping edges found by mutation"
+description: "Numbered requirements, code citations and pinning tests for: cover the remaining b2 request-mapping edges found by mutation."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: cover the remaining b2 request-mapping edges found by mutation
 From: intent.md (Felipe Fumero). Issue: #201. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.

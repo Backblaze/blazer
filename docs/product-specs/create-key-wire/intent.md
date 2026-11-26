@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: pin the b2_create_key request, response and errors"
+description: "Intent behind the spec for: pin the b2_create_key request, response and errors."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: pin the b2_create_key request, response and errors
 Author: Felipe Fumero. Issue: #192. Parent: #97. Depends on: #191. Status: ready for review.
 

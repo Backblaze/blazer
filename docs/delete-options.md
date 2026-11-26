@@ -1,3 +1,11 @@
+---
+type: reference
+title: "Governance-bypass deletion"
+description: "object.Delete(ctx) deletes an ordinary version without requesting a retention bypass."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Governance-bypass deletion
 
 `object.Delete(ctx)` deletes an ordinary version without requesting a retention bypass.

@@ -1,3 +1,11 @@
+---
+type: reference
+title: "Testing standard"
+description: "How a change to Blazer is tested and how its tests are reviewed."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Testing standard
 
 How a change to Blazer is tested and how its tests are reviewed. It builds on [testing.md](testing.md)

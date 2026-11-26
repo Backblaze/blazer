@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: expose a key's bucket restriction and name prefix (from intent.md and spec.md)"
+description: "Completed execution plan: expose a key's bucket restriction and name prefix."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: expose a key's bucket restriction and name prefix (from intent.md and spec.md)
 
 Branch: `feat-b2-issue-227-key-restrictions`, stacked on #220's branch (`fix-base-issue-220-listkeys-capabilities`,

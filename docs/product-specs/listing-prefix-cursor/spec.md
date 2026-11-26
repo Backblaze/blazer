@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: assert the listing prefix and cursor on every page, in b2 and sync"
+description: "Numbered requirements, code citations and pinning tests for: assert the listing prefix and cursor on every page, in b2 and sync."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: assert the listing prefix and cursor on every page, in b2 and sync
 From: intent.md (Felipe Fumero). Issue: #196. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.

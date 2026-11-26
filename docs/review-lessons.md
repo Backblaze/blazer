@@ -1,3 +1,11 @@
+---
+type: reference
+title: "Review lessons"
+description: "Problems that earlier reviews of blazer found, grouped by theme, with the PRs where they came up."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Review lessons
 
 Problems that earlier reviews of blazer found, grouped by theme, with the PRs where they came up. Use it

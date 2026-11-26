@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: review and merge process scaled by risk"
+description: "Intent behind the spec for: review and merge process scaled by risk."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: review and merge process scaled by risk
 Author: Gonzalo Peña-Castellanos (with Claude). Status: draft, for @goanpeca and @sophiecarreras.
 Source: [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/)

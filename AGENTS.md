@@ -46,7 +46,7 @@ and the backend and wire-test boundaries.
   [docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test).
 - Comments are short and explain non-obvious decisions. Godoc on every exported identifier, including what
   is not supported.
-- Detail lives in [`docs/`](docs/README.md): B2 facts with sources in `b2-contracts.md`, test levels and
+- Detail lives in [`docs/`](docs/index.md): B2 facts with sources in `b2-contracts.md`, test levels and
   how to run them in `testing.md`, problems earlier reviews found in `review-lessons.md`.
 
 ## Things agents get wrong here

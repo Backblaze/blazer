@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: prove the Writer sends retention and legal hold on every upload path"
+description: "Numbered requirements, code citations and pinning tests for: prove the Writer sends retention and legal hold on every upload path."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: prove the Writer sends retention and legal hold on every upload path
 From: intent.md (Felipe Fumero). Issue: #193. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.

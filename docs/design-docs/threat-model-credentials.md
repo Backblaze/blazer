@@ -1,3 +1,11 @@
+---
+type: design-doc
+title: "Credential threat model"
+description: "Credentials can leak through logs, error messages, formatted values, HTTP endpoints or response bodies."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Credential threat model
 
 ## Assets and flow

@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: Reader download contract"
+description: "Intent behind the spec for: Reader download contract."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: Reader download contract
 Author: Felipe Fumero. Issue: [#528](https://github.com/Backblaze/blazer/issues/528). Status: draft.
 

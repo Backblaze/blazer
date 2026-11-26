@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: pin the SHA1 on upload parts and make Reader.Verify catch a bad hash"
+description: "Intent behind the spec for: pin the SHA1 on upload parts and make Reader.Verify catch a bad hash."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: pin the SHA1 on upload parts and make Reader.Verify catch a bad hash
 Author: Felipe Fumero. Issue: #195. Parent: #97. Depends on: #191. Status: draft.
 

@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: prove the Writer sends retention and legal hold on every upload path"
+description: "Intent behind the spec for: prove the Writer sends retention and legal hold on every upload path."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: prove the Writer sends retention and legal hold on every upload path
 Author: Felipe Fumero. Issue: #193. Parent: #97. Depends on: #191. Status: draft.
 
