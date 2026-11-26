@@ -8,7 +8,7 @@ import (
 )
 
 // RangeDownload returns a B2-style download response for a fixture's body.
-// A range covering the whole body is returned as HTTP 200; partial ranges are 206.
+// A range covering the whole body returns HTTP 200; partial ranges return 206.
 func RangeDownload(body, byteRange string) Response {
 	start, end := int64(0), int64(len(body)-1)
 	if byteRange != "" {
