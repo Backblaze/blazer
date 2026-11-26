@@ -379,6 +379,10 @@ func retentionDiffers(current *b2types.Retention, want *Retention) bool {
 	return current.Period != nil && (current.Period.Duration != want.Period.Duration || current.Period.Unit != want.Period.Unit)
 }
 
+func encryptionDiffers(current *b2types.ServerSideEncryption, want *ServerSideEncryption) bool {
+	return current == nil || current.Algorithm != want.Algorithm || current.Mode != want.Mode
+}
+
 func ssecToBase(key *SSECKey) *b2types.ServerSideEncryption {
 	if key == nil {
 		return nil
@@ -479,11 +483,15 @@ func (b *b2Bucket) updateBucket(ctx context.Context, attrs *BucketAttrs) error {
 		b.b.DefaultRetention = nil
 	}
 
-	if attrs.DefaultServerSideEncryption != nil {
+	// Like retention, send encryption only when the caller changed it: attrs read
+	// from the bucket carry the cached value back in.
+	if attrs.DefaultServerSideEncryption != nil && encryptionDiffers(previousSSE, attrs.DefaultServerSideEncryption) {
 		b.b.DefaultServerSideEncryption = &b2types.ServerSideEncryption{
 			Algorithm: attrs.DefaultServerSideEncryption.Algorithm,
 			Mode:      attrs.DefaultServerSideEncryption.Mode,
 		}
+	} else {
+		b.b.DefaultServerSideEncryption = nil
 	}
 
 	// Object Lock can only be enabled, never disabled, and sending true needs the

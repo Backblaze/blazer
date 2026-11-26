@@ -12,9 +12,7 @@ stale_after: 2027-05-26T00:00:00+00:00
 
 ## Failing today
 
-| Test | Status at this revision | Tracking |
-| --- | --- | --- |
-| `TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption` | An unrelated update sends cached default encryption. | [#533](https://github.com/Backblaze/blazer/issues/533) |
+No tagged test fails now.
 
 ## Failing documentation checks
 
@@ -32,4 +30,4 @@ stale_after: 2027-05-26T00:00:00+00:00
 | `upgrade-sync-before` | The check passes at this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
 | `upgrade-breaking-claim` | The check passes at this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
 
-Sources: [bucket tests](../../b2/known_defect_bucket_test.go), [reader test](../../b2/known_defect_reader_test.go), and [base test](../../base/known_defect_test.go).
+Sources: [reader test](../../b2/known_defect_reader_test.go) and [base test](../../base/known_defect_test.go).
