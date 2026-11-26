@@ -25,6 +25,9 @@ name: Require area-owner approvals
 #   defense-in-depth, if (despite the catch-all) no rule matches, the gate fails safe
 #   (red) rather than passing, add a rule in .github/CODEOWNERS to resolve it.
 #
+# The rules live in scripts/area-owner-approvals.py, tested offline by
+# scripts/area-owner-approvals_test.sh (`make scripts-test`).
+#
 # To change ownership, edit .github/CODEOWNERS only.
 
 on:
@@ -47,6 +50,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # The PR checkout supplies the script (as the workflow file itself does under pull_request),
+      # so like the rest of this soft gate it is not tamper-proof.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          sparse-checkout: scripts/area-owner-approvals.py
+          sparse-checkout-cone-mode: false
       - name: Compute area-owner approval status
         env:
           GH_TOKEN: ${{ github.token }}
@@ -114,107 +125,7 @@ jobs:
             case $perm in admin | maintain | write) echo "$owner" >> "$WRITERS_FILE" ;; esac
           done
 
-          python3 - <<'PY'
-          import json, os
-          from pathspec.patterns import GitWildMatchPattern
-
-          tmp = os.environ["RUNNER_TEMP"]
-          author = os.environ.get("AUTHOR", "").lower()
-          head_sha = os.environ["HEAD_SHA"]
-          with open(os.environ["WRITERS_FILE"]) as f:
-              writers = {line.strip().lower() for line in f if line.strip()}
-
-          # --- parse CODEOWNERS into ordered (pattern, [owners_lc]) rules ---
-          rules = []
-          with open(os.environ["CODEOWNERS_FILE"]) as f:
-              for line in f:
-                  line = line.strip()
-                  if not line or line.startswith("#"):
-                      continue
-                  parts = line.split()
-                  pattern = parts[0]
-                  owners = [o.lstrip("@").lower() for o in parts[1:]]
-                  rules.append((pattern, owners))
-
-          # GitHub's CODEOWNERS engine is gitignore-style; defer to pathspec's
-          # gitwildmatch so `*`, `genblaze-*`, anchored dirs, etc. all match correctly.
-          def matches(pattern, path):
-              return GitWildMatchPattern(pattern).match_file(path)
-
-          def owners_for(path):
-              chosen = None
-              for pattern, owners in rules:   # last match wins
-                  if matches(pattern, path):
-                      chosen = (pattern, owners)
-              return chosen
-
-          # --- changed files -> touched areas with owners ---
-          areas = {}  # pattern -> set(owners_lc)
-          with open(os.path.join(tmp, "files.txt")) as f:
-              for line in f:
-                  path = line.strip()
-                  if not path:
-                      continue
-                  res = owners_for(path)
-                  if not res:
-                      continue
-                  pattern, owners = res
-                  if owners:
-                      areas.setdefault(pattern, set()).update(owners)
-
-          # --- latest review state per user (an APPROVED review on an older commit is stale) ---
-          with open(os.path.join(tmp, "reviews.json")) as f:
-              reviews = json.load(f)
-          state_by_user = {}
-          for r in sorted(reviews, key=lambda r: r.get("submitted_at") or ""):
-              login = ((r.get("user") or {}).get("login") or "").lower()
-              st = r.get("state")
-              if st in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
-                  if st == "APPROVED" and r.get("commit_id") != head_sha:
-                      st = "STALE_APPROVED"  # not the head commit: does not count
-                  state_by_user[login] = st
-
-          # --- evaluate each touched area ---
-          blocked = []  # (pattern, "changes"|"awaiting", [users])
-          for pattern, owners in areas.items():
-              o = set(owners) & writers
-              if not o:
-                  blocked.append((pattern, "nowriters", sorted(owners)))
-                  continue
-              o.discard(author)  # author implicitly approves their own area
-              if not o:
-                  continue
-              changes = sorted(u for u in o if state_by_user.get(u) == "CHANGES_REQUESTED")
-              approved = [u for u in o if state_by_user.get(u) == "APPROVED"]
-              if changes:
-                  blocked.append((pattern, "changes", changes))
-              elif approved:
-                  continue
-              else:
-                  blocked.append((pattern, "awaiting", sorted(o)))
-
-          if not areas:
-              # Fail-safe: with the `*` catch-all this is near-unreachable, but if no rule
-              # matched we go red rather than waving the PR through (defense-in-depth).
-              state, desc = "failure", "No CODEOWNERS rule matched the changed files, add a rule in .github/CODEOWNERS."
-          elif not blocked:
-              state, desc = "success", "All required area owners have approved."
-          else:
-              state = "failure"
-              parts = []
-              for pattern, kind, users in blocked:
-                  if kind == "changes":
-                      parts.append(f"{pattern}: changes requested by {','.join(users)}")
-                  elif kind == "nowriters":
-                      parts.append(f"{pattern}: no owner with write access ({','.join(users)})")
-                  else:
-                      parts.append(f"{pattern}: awaiting {','.join(users)}")
-              desc = "; ".join(parts)
-
-          with open(os.path.join(tmp, "gate.out"), "w") as f:
-              f.write(state + "\n")
-              f.write(desc + "\n")
-          PY
+          python3 "$GITHUB_WORKSPACE/scripts/area-owner-approvals.py"
 
           state=$(sed -n '1p' "$RUNNER_TEMP/gate.out")
           description=$(sed -n '2p' "$RUNNER_TEMP/gate.out")
