@@ -2,11 +2,11 @@ Summary:
 
 ## Motivation
 
-Why this change is needed. Link the issue (`Fixes #123`) and, if one exists, `docs/product-specs/<slug>/`.
+Why this change is needed. Link the issue (`Fixes #123`). If a product spec exists, link `docs/product-specs/<slug>/`.
 
 ## Changes
 
-What changed. If this PR is stacked on another, name it and the merge order.
+What changed. If this PR is stacked on another, name the other PR and the merge order.
 
 ## Testing
 
@@ -20,7 +20,7 @@ change is reverted. List any live-B2 checks you ran, and any you could not. See
 - [ ] Each new test states its evidence level (L1 to L5). No test was added only for coverage.
 
 Live test: name the live test this PR adds or extends, or say why it needs none (see "When a PR needs a
-live test" in `docs/testing.md`). Link a manual `test-live` run on this branch if a maintainer ran one.
+live test" in `docs/testing.md`). If a maintainer ran a manual `test-live` run on this branch, link the run.
 
 ## Risk
 
@@ -40,5 +40,5 @@ Whether reverting this commit is enough, or whether callers would need to pin th
 - [ ] New or changed behavior is pinned by a test that asserts the request sent to B2.
 - [ ] If this PR adds or changes exported API or the request sent to B2, the description says what callers must do and uses `**Breaking:**` for breaking changes.
 - [ ] Behavior that depends on B2 has a live test, or the description says why not.
-- [ ] Godoc, README and `AGENTS.md` are updated if needed.
+- [ ] If needed, Godoc, README and `AGENTS.md` are updated.
 - [ ] The description matches the final code.
