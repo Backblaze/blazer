@@ -101,9 +101,10 @@ func (s *Server) ReplySequence(call string, rs ...Response) {
 	s.replySequence(call, false, rs...)
 }
 
-// StrictReplySequence registers responses that must be used exactly once each.
-// It reports an error for an extra request or an unused response at test cleanup.
-// Replacing it reports any unused responses from the earlier sequence.
+// StrictReplySequence registers responses that each serve exactly one request.
+// An extra request fails the test when it arrives and gets a 400 response. An
+// unused response fails the test at cleanup.
+// Replacing the sequence reports any unused responses from the earlier sequence.
 func (s *Server) StrictReplySequence(call string, rs ...Response) {
 	s.replySequence(call, true, rs...)
 }

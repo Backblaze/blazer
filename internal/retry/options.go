@@ -53,7 +53,7 @@ func emptyOption(c *Config) {}
 
 // Attempts set count of retry. Setting to 0 will retry until the retried function succeeds.
 // Default is 1 (one attampt)
-// Number of attempts can be override by the dynamicAttempts function
+// The dynamicAttempts function can override the number of attempts.
 func Attempts(attempts uint) Option {
 	return func(c *Config) {
 		c.attempts = attempts
@@ -89,7 +89,7 @@ func DynamicDelay(dynamicDelay DynamicDelayFunc) Option {
 	}
 }
 
-// OnRetry function callback are called each retry
+// OnRetry sets the callback called on each retry.
 func OnRetry(onRetry OnRetryFunc) Option {
 	if onRetry == nil {
 		return emptyOption
@@ -99,8 +99,8 @@ func OnRetry(onRetry OnRetryFunc) Option {
 	}
 }
 
-// RetryIf controls whether a retry should be attempted after an error
-// (assuming there are any retry attempts remaining)
+// RetryIf controls whether to attempt a retry after an error
+// (assuming there are any retry attempts remaining).
 func RetryIf(retryIf RetryIfFunc) Option {
 	if retryIf == nil {
 		return emptyOption
@@ -110,9 +110,9 @@ func RetryIf(retryIf RetryIfFunc) Option {
 	}
 }
 
-// WithAfter provides a way to swap out time.After implementations.
-// This primarily is useful for mocking/testing, where you may not want to explicitly wait for a set duration
-// for retries.
+// WithAfter lets callers replace the time.After implementation.
+// This is primarily useful for mocking or testing, where callers may not want
+// to wait for a set duration for retries.
 func WithAfter(after AfterFunc) Option {
 	return func(c *Config) {
 		c.after = after

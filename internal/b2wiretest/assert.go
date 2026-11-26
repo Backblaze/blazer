@@ -14,7 +14,7 @@ import (
 
 // AssertJSON decodes r.Body and checks a non-empty, dot-separated path in its JSON object.
 // A hand-built Request must set Body. Numbers compare by value with large integers kept exact.
-// Dots always separate path segments; keys containing literal dots cannot be addressed.
+// Dots always separate path segments; the path cannot address keys containing literal dots.
 func AssertJSON(t testing.TB, r Request, path string, want any) {
 	t.Helper()
 	if path == "" {
