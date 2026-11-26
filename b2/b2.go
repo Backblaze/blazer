@@ -465,6 +465,8 @@ func (e b2err) Error() string {
 
 func (e b2err) Unwrap() error { return e.err }
 
+func (e b2err) Is(target error) bool { return target == fs.ErrNotExist && e.notFoundErr }
+
 // IsNotExist reports whether a given error indicates that an object or bucket
 // does not exist.
 func IsNotExist(err error) bool {

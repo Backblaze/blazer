@@ -8,7 +8,6 @@
 | --- | --- | --- |
 | `TestKnownDefect_RejectedUpdateDoesNotLeakIntoNextUpdate` | A rejected visibility update is sent again by a later unrelated update. | [#532](https://github.com/Backblaze/blazer/issues/532) |
 | `TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption` | An unrelated update sends cached default encryption. | [#533](https://github.com/Backblaze/blazer/issues/533) |
-| `TestKnownDefect_NotFoundErrorUnwrapsToFSErrNotExist` | A not-found error does not match `fs.ErrNotExist`. | [#534](https://github.com/Backblaze/blazer/issues/534) |
 
 ## Failing documentation checks
 
