@@ -138,8 +138,9 @@ func FailureRate(rate float64) FailureOption {
 	}
 }
 
-// Response simulates a given status code. The returned http.Response has
-// its Status, StatusCode, and Body (with any predefined message) set.
+// Response simulates a given status code when a failure is triggered. The default
+// failure rate is zero. The returned http.Response has its Status, StatusCode,
+// and Body (with any predefined message) set.
 func Response(status int) FailureOption {
 	return func(o *options) {
 		o.status = status
@@ -173,9 +174,8 @@ func Trigger(ctx context.Context) FailureOption {
 }
 
 // AfterNBytes will call effect once (roughly) n bytes have gone over the wire.
-// Both sent and received bytes are counted against the total.  Only bytes in
-// the body of an HTTP request are currently counted; this may change in the
-// future.  effect will only be called once, and it will block (allowing
+// Both sent and received body bytes are counted against the total.
+// effect will only be called once, and it will block (allowing
 // callers to simulate connection hangs).
 func AfterNBytes(n int, effect func()) FailureOption {
 	return func(o *options) {
