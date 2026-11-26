@@ -2,7 +2,6 @@ package base
 
 import (
 	"encoding/json"
-	"flag"
 	"strings"
 	"testing"
 )
@@ -44,7 +43,7 @@ func FuzzRedactSSECJSON(f *testing.F) {
 		}
 		check(value)
 	})
-	if count == 0 && flag.Lookup("test.fuzz").Value.String() == "" {
+	if count == 0 && checkFuzzCorpus() {
 		f.Fatal("no valid JSON input reached the redaction invariant")
 	}
 }
