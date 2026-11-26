@@ -55,12 +55,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # The PR checkout supplies the script (as the workflow file itself does under pull_request),
-      # so like the rest of this soft gate it is not tamper-proof.
+      # The default ref is the PR merge ref, where GitHub also takes this workflow file from, so the
+      # script always matches the workflow (a branch older than the script still gets both). Like the
+      # rest of this soft gate, it is not tamper-proof.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
           sparse-checkout: scripts/area-owner-approvals.py
           sparse-checkout-cone-mode: false
       - name: Compute area-owner approval status
