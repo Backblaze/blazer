@@ -1,3 +1,11 @@
+---
+type: reference
+title: "Testing blazer"
+description: "A green test run is only evidence for what it exercised."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Testing blazer
 
 A green test run is only evidence for what it exercised. This file says what each kind of test proves,

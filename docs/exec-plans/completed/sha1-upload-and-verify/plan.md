@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: pin the SHA1 on upload parts and make Reader.Verify catch a bad hash (from intent.md and spec.md)"
+description: "Completed execution plan: pin the SHA1 on upload parts and make Reader.Verify catch a bad hash."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: pin the SHA1 on upload parts and make Reader.Verify catch a bad hash (from intent.md and spec.md)
 
 Branch: `test-issue-195-sha1-upload-and-verify`, stacked on `test-issue-191-shared-recording-server`. One

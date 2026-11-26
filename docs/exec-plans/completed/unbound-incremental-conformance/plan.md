@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: a conformance check for unbound uploads (from intent.md and spec.md)"
+description: "Completed execution plan: a conformance check for unbound uploads."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: a conformance check for unbound uploads (from intent.md and spec.md)
 
 Branch: `test-issue-213-unbound-incremental-conformance`, from `main`. One PR for #213 carries this folder,

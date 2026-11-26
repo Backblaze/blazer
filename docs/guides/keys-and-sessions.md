@@ -1,3 +1,11 @@
+---
+type: guide
+title: "Keys and sessions"
+description: "Use an application key with only the capabilities and bucket scope your application needs."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Keys and sessions
 
 Use an application key with only the capabilities and bucket scope your application needs. Avoid master keys for routine work. Protect the key ID and secret.

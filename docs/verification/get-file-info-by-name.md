@@ -1,3 +1,11 @@
+---
+type: verification
+title: "GetFileInfoByName verification"
+description: "Evidence for #340, recorded 2026-11-10."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # GetFileInfoByName verification
 
 Evidence for #340, recorded 2026-11-10. This verifies the existing implementation;

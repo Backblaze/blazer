@@ -1,3 +1,11 @@
+---
+type: guide
+title: "Custom transport"
+description: "Pass an http.RoundTripper with b2.Transport."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Custom transport
 
 Pass an `http.RoundTripper` with `b2.Transport`. For example, configure connection and response-header timeouts:

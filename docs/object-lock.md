@@ -1,3 +1,11 @@
+---
+type: reference
+title: "Per-file Object Lock"
+description: "Use b2.WithFileRetention and b2.WithLegalHold to set a file's locks at upload."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Per-file Object Lock
 
 Use `b2.WithFileRetention` and `b2.WithLegalHold` to set a file's locks at upload.

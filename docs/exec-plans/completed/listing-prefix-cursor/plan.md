@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: assert the listing prefix and cursor on every page, in b2 and sync (from intent.md and spec.md)"
+description: "Completed execution plan: assert the listing prefix and cursor on every page, in b2 and sync."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: assert the listing prefix and cursor on every page, in b2 and sync (from intent.md and spec.md)
 
 Branch: `test-issue-196-listing-prefix-cursor`, stacked on `test-issue-191-shared-recording-server`. One

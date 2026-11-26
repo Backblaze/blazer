@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Technical debt"
+description: "make known-defects runs tagged Go tests and documentation checks."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Technical debt
 
 `make known-defects` runs tagged Go tests and documentation checks. Each listed item links its issue.

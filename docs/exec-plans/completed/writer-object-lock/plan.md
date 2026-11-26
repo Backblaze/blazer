@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: prove the Writer sends retention and legal hold on every upload path (from intent.md and spec.md)"
+description: "Completed execution plan: prove the Writer sends retention and legal hold on every upload path."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: prove the Writer sends retention and legal hold on every upload path (from intent.md and spec.md)
 
 Branch: `test-issue-193-writer-object-lock`, stacked on `test-issue-191-shared-recording-server`. One PR

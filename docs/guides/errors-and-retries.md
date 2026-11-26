@@ -1,3 +1,11 @@
+---
+type: guide
+title: "Errors and retries"
+description: "Use b2.IsNotExist(err) for missing objects and b2.IsUpdateConflict(err) for bucket update conflicts."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Errors and retries
 
 Use `b2.IsNotExist(err)` for missing objects and `b2.IsUpdateConflict(err)` for bucket update conflicts. Call these on the original error: they do not inspect an outer error wrapper at this revision. A not-found error that `b2.IsNotExist` recognizes also matches `errors.Is(err, fs.ErrNotExist)`. Unlike `IsNotExist`, `errors.Is` still works after you wrap the error with `%w`. The low-level `base` package exposes `Action`, `Code`, `MsgCode`, `Backoff`, `MaxRetries`, `MaxReuploads` and `Idempotent`. `base.ErrOutcomeUnknown` can be checked with `errors.Is`: reconcile the operation before trying again.

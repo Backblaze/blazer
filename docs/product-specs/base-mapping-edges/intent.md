@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: cover the remaining base request and response mapping edges"
+description: "Intent behind the spec for: cover the remaining base request and response mapping edges."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: cover the remaining base request and response mapping edges
 Author: Felipe Fumero. Issue: #202. Parent: #97. Status: draft.
 

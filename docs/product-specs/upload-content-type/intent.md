@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: assert the Content-Type sent on every upload"
+description: "Intent behind the spec for: assert the Content-Type sent on every upload."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: assert the Content-Type sent on every upload
 Author: Felipe Fumero. Issue: #197. Parent: #97. Depends on: #191. Status: draft.
 

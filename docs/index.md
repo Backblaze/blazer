@@ -1,3 +1,11 @@
+---
+type: index
+title: "Blazer contributor docs"
+description: "Read AGENTS.md first: commands, architecture, conventions and the short list of mistakes reviewers keep finding."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Blazer contributor docs
 
 Read [AGENTS.md](../AGENTS.md) first: commands, architecture, conventions and the short list of mistakes

@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: cover the remaining b2 request-mapping edges (from intent.md and spec.md)"
+description: "Completed execution plan: cover the remaining b2 request-mapping edges."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: cover the remaining b2 request-mapping edges (from intent.md and spec.md)
 
 Branch: `test-issue-201-b2-mapping-edges`, from #191's branch (`test-issue-191-shared-recording-server`); #191

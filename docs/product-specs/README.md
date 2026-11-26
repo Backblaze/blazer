@@ -1,3 +1,11 @@
+---
+type: reference
+title: "Change intents"
+description: "Each non-trivial change gets a folder docs/product-specs/<change-slug>/ holding its intent and spec."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Change intents
 
 Each non-trivial change gets a folder `docs/product-specs/<change-slug>/` holding its intent and spec. The three files are written in order; `plan.md` lives in `docs/exec-plans/active/<change-slug>/plan.md` while in progress and moves to `docs/exec-plans/completed/<change-slug>/plan.md` after merge. A

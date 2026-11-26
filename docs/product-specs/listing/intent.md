@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: Object listing iterator contract"
+description: "Intent behind the spec for: Object listing iterator contract."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: Object listing iterator contract
 Author: Felipe Fumero. Issue: [#528](https://github.com/Backblaze/blazer/issues/528). Status: draft.
 

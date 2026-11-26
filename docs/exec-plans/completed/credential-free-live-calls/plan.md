@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: credential-free tests for live-only calls (from intent.md and spec.md)"
+description: "Completed execution plan: credential-free tests for live-only calls."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: credential-free tests for live-only calls (from intent.md and spec.md)
 
 Branch: `test-issue-203-credential-free-live-calls`, from #191's branch (`test-issue-191-shared-recording-server`);

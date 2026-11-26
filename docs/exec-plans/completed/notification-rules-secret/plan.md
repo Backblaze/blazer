@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: round-trip the notification rule signing secret and suspension fields (from intent.md and spec.md)"
+description: "Completed execution plan: round-trip the notification rule signing secret and suspension fields."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: round-trip the notification rule signing secret and suspension fields (from intent.md and spec.md)
 
 Branch: `test-issue-194-notification-rules-secret`, stacked on `test-issue-191-shared-recording-server`.

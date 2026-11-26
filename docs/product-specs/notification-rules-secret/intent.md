@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: round-trip the notification rule signing secret and suspension fields"
+description: "Intent behind the spec for: round-trip the notification rule signing secret and suspension fields."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: round-trip the notification rule signing secret and suspension fields
 Author: Felipe Fumero. Issue: #194. Parent: #97. Depends on: #191. Status: draft.
 

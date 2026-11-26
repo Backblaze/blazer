@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: round-trip the notification rule signing secret and suspension fields"
+description: "Numbered requirements, code citations and pinning tests for: round-trip the notification rule signing secret and suspension fields."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: round-trip the notification rule signing secret and suspension fields
 From: intent.md (Felipe Fumero). Issue: #194. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.

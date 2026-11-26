@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: cover the remaining b2 request-mapping edges found by mutation"
+description: "Intent behind the spec for: cover the remaining b2 request-mapping edges found by mutation."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: cover the remaining b2 request-mapping edges found by mutation
 Author: Felipe Fumero. Issue: #201. Parent: #97. Status: draft.
 

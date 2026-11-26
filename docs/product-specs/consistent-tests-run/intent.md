@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: run the x/consistent tests by default"
+description: "Intent behind the spec for: run the x/consistent tests by default."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: run the x/consistent tests by default
 Author: Felipe Fumero. Issue: #198. Parent: #97. Related: #186. Status: draft.
 

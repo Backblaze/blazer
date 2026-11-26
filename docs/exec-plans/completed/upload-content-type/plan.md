@@ -1,3 +1,11 @@
+---
+type: exec-plan
+title: "Plan: assert the Content-Type sent on every upload (from intent.md and spec.md)"
+description: "Completed execution plan: assert the Content-Type sent on every upload."
+status: completed
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Plan: assert the Content-Type sent on every upload (from intent.md and spec.md)
 
 Branch: `test-issue-197-upload-headers`, stacked on `test-issue-191-shared-recording-server`. One PR for

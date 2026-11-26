@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: a shared recording B2 server for wire tests"
+description: "Intent behind the spec for: a shared recording B2 server for wire tests."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: a shared recording B2 server for wire tests
 Author: Felipe Fumero. Issue: #191. Parent: #97. Status: draft.
 

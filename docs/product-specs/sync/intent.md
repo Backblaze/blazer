@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: Sync product contract"
+description: "Intent behind the spec for: Sync product contract."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: Sync product contract
 Author: Felipe Fumero. Issue: [#528](https://github.com/Backblaze/blazer/issues/528). Status: draft.
 

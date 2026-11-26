@@ -1,3 +1,11 @@
+---
+type: index
+title: "Design documents"
+description: "Index of recorded design decisions and threat models."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Design documents
 
 ## Accepted decisions

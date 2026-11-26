@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: replace self-referential expected values in five tests"
+description: "Intent behind the spec for: replace self-referential expected values in five tests."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: replace self-referential expected values in five tests
 Author: Felipe Fumero. Issue: #200. Parent: #97. Status: draft.
 

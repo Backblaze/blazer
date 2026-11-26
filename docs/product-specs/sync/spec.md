@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: Sync product contract"
+description: "Numbered requirements, code citations and pinning tests for: Sync product contract."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: Sync product contract
 From: [intent.md](intent.md) (Felipe Fumero). Status: ready for review.
 

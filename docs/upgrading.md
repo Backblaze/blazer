@@ -1,3 +1,11 @@
+---
+type: guide
+title: "Upgrading Blazer"
+description: "Blazer follows semantic versioning."
+status: active
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Upgrading Blazer
 
 Blazer follows semantic versioning. Before 1.0, a minor release may include breaking

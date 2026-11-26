@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: a shared recording B2 server for wire tests"
+description: "Numbered requirements, code citations and pinning tests for: a shared recording B2 server for wire tests."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: a shared recording B2 server for wire tests
 From: intent.md (Felipe Fumero). Issue: #191. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md` (no policy skills apply to a test helper).

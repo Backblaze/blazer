@@ -1,3 +1,11 @@
+---
+type: product-intent
+title: "Intent: assert the listing prefix and cursor on every page, in b2 and sync"
+description: "Intent behind the spec for: assert the listing prefix and cursor on every page, in b2 and sync."
+status: draft
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Intent: assert the listing prefix and cursor on every page, in b2 and sync
 Author: Felipe Fumero. Issue: #196. Parent: #97. Depends on: #191. Related: #184. Status: draft.
 

@@ -1,3 +1,11 @@
+---
+type: product-spec
+title: "Spec: replace self-referential expected values in five tests"
+description: "Numbered requirements, code citations and pinning tests for: replace self-referential expected values in five tests."
+status: ready-for-review
+owner: ["@goanpeca", "@sophiecarreras", "@ffumero2003", "@david-santacruz-backblaze"]
+stale_after: 2027-05-26T00:00:00+00:00
+---
 # Spec: replace self-referential expected values in five tests
 From: intent.md (Felipe Fumero). Issue: #200. Status: ready for review.
 Skills applied: none beyond `AGENTS.md`, `REVIEW.md` and `docs/testing.md`.
