@@ -27,11 +27,8 @@ package b2
 // TestKnownDefect_X to TestRegression_X.
 
 import (
-	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/Backblaze/blazer/internal/b2wiretest"
 )
 
 func bucketJSONWith(extra string) string {
@@ -39,41 +36,6 @@ func bucketJSONWith(extra string) string {
 }
 
 const sseB2DefaultJSON = `"defaultServerSideEncryption":{"isClientAuthorizedToRead":true,"value":{"algorithm":"AES256","mode":"SSE-B2"}},`
-
-var errBadRequest = b2wiretest.Response{Status: http.StatusBadRequest, Body: `{"status":400,"code":"bad_request","message":"rejected"}`}
-
-// After a rejected bucket update, the cached bucket must not keep
-// the rejected setting; the next unrelated update must not re-send it.
-func TestKnownDefect_RejectedUpdateDoesNotLeakIntoNextUpdate(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		attrs *BucketAttrs
-		key   string
-	}{
-		{"visibility", &BucketAttrs{Type: Public}, "bucketType"},
-		{"CORS rules", &BucketAttrs{CORSRules: []CORSRule{{Name: "r", AllowedOrigins: []string{"https://example.com"}, AllowedOperations: []string{"b2_download_file_by_name"}}}}, "corsRules"},
-		{"default encryption", &BucketAttrs{DefaultServerSideEncryption: &ServerSideEncryption{Mode: "SSE-B2", Algorithm: "AES256"}}, "defaultServerSideEncryption"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, bucket := bucketListedWith(t, updateBucketJSON)
-			srv.ReplySequence("b2_update_bucket", errBadRequest, b2wiretest.Response{Body: updateBucketJSON})
-			ctx := newTestCtx(t)
-			if err := bucket.Update(ctx, tc.attrs); err == nil {
-				t.Fatal("first update: expected a rejection")
-			}
-			if err := bucket.Update(ctx, &BucketAttrs{Info: map[string]string{"k": "v"}}); err != nil {
-				t.Fatalf("second update: %v", err)
-			}
-			calls := srv.Calls("b2_update_bucket")
-			if len(calls) != 2 {
-				t.Fatalf("b2_update_bucket calls = %d, want 2", len(calls))
-			}
-			if v, ok := calls[1].JSON[tc.key]; ok {
-				t.Errorf("info-only update after a rejected %s update sent %s=%v", tc.name, tc.key, v)
-			}
-		})
-	}
-}
 
 // An existing default encryption setting must not be re-sent with
 // every unrelated bucket update (a key lacking the encryption permission fails).

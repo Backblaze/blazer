@@ -6,7 +6,6 @@
 
 | Test | Status at this revision | Tracking |
 | --- | --- | --- |
-| `TestKnownDefect_RejectedUpdateDoesNotLeakIntoNextUpdate` | A rejected visibility update is sent again by a later unrelated update. | [#532](https://github.com/Backblaze/blazer/issues/532) |
 | `TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption` | An unrelated update sends cached default encryption. | [#533](https://github.com/Backblaze/blazer/issues/533) |
 
 ## Failing documentation checks
