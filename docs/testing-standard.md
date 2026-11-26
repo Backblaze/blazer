@@ -56,7 +56,9 @@ Do not write "tests pass" without the output. Do not write "this test catches bu
 - The expected value comes from the specification or a literal, never from the code under test.
 - No assertion that cannot fail: no loop that may run zero times, no nil-only check on a call that can fail
   in other ways, no assertion inside a branch the test never reaches, no skipped body.
-- No sleeps for timing, no real clock, no shared state between tests, no order dependence, no unseeded randomness.
+- No sleeps for timing, no shared state between tests, no order dependence, no unseeded randomness. Use real
+  time only for a bounded wait on a deadline or timeout under test, with a ceiling far above the expected
+  time (as `base/outbound_timeout_test.go` does); never sleep and hope that something has finished.
 - Never put a real credential in a test, fixture or log.
 - Coverage is a floor, not proof. A test added only to raise coverage is not wanted.
 
