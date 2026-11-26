@@ -9,7 +9,7 @@ Always give the session a way to check its own work before a person sees it. A l
 
 ## Set up
 
-1. Wrap verification in one command per concern that exits non-zero on failure (`make test`, `npm test`, `make lint`, `make build`). Create the targets if only a command sequence exists today.
+1. Wrap verification in one command per concern that exits non-zero on failure (`make test`, `npm test`, `make lint`, `make build`). If only a command sequence exists today, create the targets.
 2. List them in `AGENTS.md` (see `sdlc-claude-md`) with a sample of healthy output, plus the instruction: run the tests before reporting a task complete and show the output.
 3. State a quantifiable target for the task so Claude can check without asking: "all tests in X pass", "screenshot matches the attached mock", "the endpoint returns 200 with the new field". Take targets from `plan.md` Proof when it exists.
 4. For UI work, give Claude a browser or screenshot tool (e.g. via MCP) and the mock: implement, screenshot, compare, adjust. Two or three rounds is normal.
@@ -29,7 +29,7 @@ An agent fixing code must not be able to weaken the check on that code. Either:
 
 ## Report format
 
-When finishing, paste the literal output of the build, test and lint commands (or the screenshot diff). Evidence comes from the toolchain, not from the agent's summary.
+When you finish, paste the literal output of the build, test and lint commands (or the screenshot diff). Evidence comes from the toolchain, not from the agent's summary.
 
 ## Governance
 

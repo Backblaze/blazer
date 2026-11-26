@@ -5,7 +5,7 @@ description: Turn an idea, ticket, pain point or incident into a committed inten
 
 # Capture as intent.md
 
-`intent.md` is a short proto-spec in the originator's own terms: what is wanted, why, and under which constraints. It is human readable and machine actionable, and it kicks off the rest of the chain.
+`intent.md` is a short proto-spec in the originator's own terms: what is wanted, why, and under which constraints. It is human readable and machine actionable. It starts the rest of the chain.
 
 ## Steps
 
