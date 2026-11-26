@@ -5,7 +5,7 @@ The changelog is assembled from `.changes/unreleased` fragments with [changie](h
 
 ## What a release commit contains
 
-Release commits update these files; the supported security line changes when the minor version changes:
+Release commits update these files. The supported security line changes when the minor version changes:
 
 | File | Change | Done by |
 | --- | --- | --- |
@@ -14,8 +14,8 @@ Release commits update these files; the supported security line changes when the
 | `bin/b2keys/go.mod` | `require github.com/Backblaze/blazer vX.Y.Z` | `changie merge` (replacement in `.changie.yaml`) |
 | `SECURITY.md` | Supported minor release line in the text and table | Manually when the supported minor line changes |
 
-Past releases were pushed straight to `main`. From now on the release commit goes through a PR like any
-other change, so CI and a code owner see it before it is tagged.
+Past releases were pushed straight to `main`. From now on, the release commit goes through a PR like any
+other change. CI and a code owner see the release commit before tagging.
 
 ## Versioning
 
@@ -42,9 +42,9 @@ non-zero to hold:
 | Repository security advisories | An advisory is in triage or draft that this release does not fix | Fixing it in this release (see below) |
 | Secret scanning | Any alert is open | Revoking the secret, then closing the alert |
 
-Alerts with no patched version yet do not hold the release; the gate lists them as notes. A section the
-script cannot read (for example secret scanning without security access) is reported as UNVERIFIED and must
-be checked by hand on the Security tab; it never passes silently.
+Alerts with no patched version yet do not hold the release. The gate lists them as notes. If the script
+cannot read a section (for example secret scanning without security access), the gate reports it as UNVERIFIED.
+That section must be checked by hand on the Security tab. The gate never passes it silently.
 
 Every release aims to clear the gate, not just pass it at the last minute. When a release is planned, open
 an issue in that release's milestone for each finding that is already public (for example a Dependabot alert
@@ -53,14 +53,14 @@ track those in the private advisory, so an unfixed vulnerability is not disclose
 cannot be fixed in time needs a code owner's written dismissal reason on the alert.
 
 A draft advisory fixed by the pending release stays private through tagging. List its id in
-`RELEASE_FIXES_ADVISORIES=GHSA-xxxx-xxxx-xxxx make release-check`; the gate reports it instead of holding,
-and the code owner approving the release PR confirms the fix is in it. Publish the advisory right after
-the tag is pushed (step 7). The gate prints only advisory ids, never summaries.
+`RELEASE_FIXES_ADVISORIES=GHSA-xxxx-xxxx-xxxx make release-check`. The gate reports the advisory instead of
+holding. The code owner approving the release PR confirms the fix is in the release. After pushing the tag,
+publish the advisory right away (step 7). The gate prints only advisory ids, never summaries.
 
 ## Release tag signing
 
-Release tags must be annotated and SSH-signed by a key enrolled in [`MAINTAINERS`](MAINTAINERS),
-an OpenSSH `allowed_signers` file. Unsigned tags, lightweight tags and unenrolled keys fail the
+Release tags must be annotated and SSH-signed by a key enrolled in [`MAINTAINERS`](MAINTAINERS).
+This file is an OpenSSH `allowed_signers` file. Unsigned tags, lightweight tags and unenrolled keys fail the
 release workflow. SSH signing requires Git 2.34+ and OpenSSH with `ssh-keygen -Y` support.
 OpenPGP and X.509 signatures are not enrolled by this workflow.
 
@@ -96,15 +96,15 @@ git config gpg.ssh.allowedSignersFile "$(pwd)/MAINTAINERS"
 ssh-add ~/.ssh/blazer-release
 ```
 
-The tag workflow validates the exact tag object from the push, verifies its signature with
-`git verify-tag`, requires the release commit to be on `main`, and checks that its versioned notes
-exist and `DefaultUserAgent` matches the tag. It repeats verification immediately before publishing.
+The tag workflow validates the exact tag object from the push. It verifies the signature with
+`git verify-tag` and requires the release commit to be on `main`. It checks that the versioned notes
+exist and `DefaultUserAgent` matches the tag. The workflow repeats verification immediately before publishing.
 `gh release create --verify-tag` checks tag existence, not its signature; it does not replace this gate.
 
 Key enrollment and release-workflow changes are security-sensitive and require code-owner review.
-Repository administrators should restrict creation of `v*` tags to releasers and prohibit tag updates
-and deletion with a tag ruleset. The workflow gates GitHub Release publication; it cannot undo a pushed
-Go module tag or prevent a privileged actor from bypassing Actions. Verify locally before pushing.
+Repository administrators should use a tag ruleset to restrict creation of `v*` tags to releasers.
+They should also prohibit tag updates and deletion. The workflow gates GitHub Release publication.
+It cannot undo a pushed Go module tag or prevent a privileged actor from bypassing Actions. Verify locally before pushing.
 
 ## Local health check
 
