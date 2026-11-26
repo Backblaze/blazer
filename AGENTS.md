@@ -115,6 +115,7 @@ stricter one applies.
 - Five kinds of test: unit, integration, contract, system, security. Say in the PR which you ran and which
   are NOT RUN.
 - TDD loop: write the test, watch it fail (RED), make the smallest fix (GREEN), refactor, then revert the
-  fix and watch the test fail again (PROVE). Paste both failures. A bug fix starts with a failing test.
+  fix and watch the test fail again (PROVE). Paste both failures. A test of existing behavior proves itself
+  by a hand-made break of the line it names instead. A bug fix starts with a failing test.
 - Never delete, skip, loosen or retire a test to get green. State each new test's evidence level (L1 to L5).
 - Reviewing tests: see "Reviewing tests" in [REVIEW.md](REVIEW.md).
