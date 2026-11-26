@@ -30,4 +30,4 @@ No tagged test fails now.
 | `upgrade-sync-before` | The check passes at this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
 | `upgrade-breaking-claim` | The check passes at this revision; its known-defect marker needs review. | [#539](https://github.com/Backblaze/blazer/issues/539) |
 
-Sources: [bucket tests](../../b2/known_defect_bucket_test.go), [reader test](../../b2/known_defect_reader_test.go), and [base test](../../base/known_defect_test.go).
+Sources: [reader test](../../b2/known_defect_reader_test.go) and [base test](../../base/known_defect_test.go).
