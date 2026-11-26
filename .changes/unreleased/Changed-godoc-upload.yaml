@@ -1,0 +1,3 @@
+kind: Changed
+body: 'The godoc of the b2 upload types is simpler to read; behavior does not change.'
+time: 2026-11-26T10:00:00-06:00

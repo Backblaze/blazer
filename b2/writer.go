@@ -36,8 +36,7 @@ var ErrClosed = errors.New("file already closed")
 // file API if the file exceeds ChunkSize bytes.  Due to that and other
 // Backblaze API details, there is a large buffer.
 //
-// Changes to public Writer attributes must be made before the first call to
-// Write.
+// Callers must change public Writer attributes before the first call to Write.
 type Writer struct {
 	// ConcurrentUploads is number of different threads sending data concurrently
 	// to Backblaze for large files.  This can increase performance greatly, as
@@ -71,12 +70,11 @@ type Writer struct {
 	ChunkSize int
 
 	// UseFileBuffer controls whether to use an in-memory buffer (the default) or
-	// scratch space on the file system.  If this is true, b2 will save chunks in
-	// FileBufferDir.
+	// scratch space on the file system. If true, b2 saves chunks in FileBufferDir.
 	UseFileBuffer bool
 
-	// FileBufferDir specifies the directory where scratch files are kept.  If
-	// blank, os.TempDir() is used.
+	// FileBufferDir specifies the directory for scratch files. If blank, b2 uses
+	// os.TempDir().
 	FileBufferDir string
 
 	contentType    string
@@ -1010,7 +1008,7 @@ func (ssecWriterOption) validateDefault() error {
 }
 
 // WithSSEB2 encrypts this upload with a B2-managed key using algorithm. It
-// overrides the bucket's default for this upload only; the setting is used for
+// overrides the bucket's default for this upload only. The setting applies to
 // a simple upload request or the large-file start request. It carries no
 // customer-managed key material.
 // Only "AES256" is supported. Invalid values cause the operation that starts
