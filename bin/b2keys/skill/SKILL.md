@@ -5,7 +5,7 @@ description: Create a scoped B2 application key with the b2keys tool. Use when a
 
 # Create a B2 application key
 
-Use `bin/b2keys` to create a key. Never use a master key for routine work.
+Use the `b2keys` tool to create a key. Install it with `go install github.com/Backblaze/blazer/bin/b2keys@latest`, or run it from a checkout with `go run ./bin/b2keys`. Never use a master key for routine work.
 
 ## Flags
 
@@ -22,8 +22,7 @@ Use `bin/b2keys` to create a key. Never use a master key for routine work.
 
 ```sh
 umask 077
-cd bin/b2keys
-go run . create -bucket BUCKET -prefix PREFIX -duration 1h KEY_NAME readFiles > /secure/path/b2keys-output
+b2keys create -bucket BUCKET -prefix PREFIX -duration 1h KEY_NAME readFiles > /secure/path/b2keys-output
 ```
 
 The output file contains a secret. Keep it private and delete it when no longer needed.
