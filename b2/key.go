@@ -53,7 +53,7 @@ func (k *Key) Expires() time.Time { return k.k.expires() }
 func (k *Key) Delete(ctx context.Context) error { return k.k.del(ctx) }
 
 // Secret returns the value that should be passed into NewClient().  It is only
-// available on newly created keys; it is not available from ListKey
+// available on newly created keys; it is not available from ListKeys
 // operations.
 func (k *Key) Secret() string { return k.k.secret() }
 
