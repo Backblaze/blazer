@@ -39,8 +39,8 @@ const maxShortReadAttempts = 21
 // Reader reads one file version from B2. An already resolved Object keeps its
 // version; otherwise the first download response pins the version for all chunks.
 type Reader struct {
-	// ConcurrentDownloads is the number of simultaneous downloads to pull from
-	// B2.  Values greater than one will cause B2 to make multiple HTTP requests
+	// ConcurrentDownloads is the number of simultaneous downloads the client
+	// makes from B2. Values greater than one make multiple HTTP requests
 	// for a given file, increasing available bandwidth at the cost of buffering
 	// the downloads in memory.
 	ConcurrentDownloads int
@@ -55,7 +55,8 @@ type Reader struct {
 	// Updates may be coalesced, so an intermediate value is not guaranteed.
 	// Neither reaching total nor receiving a terminal callback indicates success;
 	// always check read errors.
-	// For a finite range, total is the actual available byte count (not the
+	// For a zero-length range, total is 0 and the Reader makes no HEAD request.
+	// For another finite range, total is the actual available byte count (not the
 	// requested upper bound) when a HEAD request can determine it; otherwise
 	// total is -1. Set Progress before the first Read. Calling Close from this
 	// callback is unsupported because Close waits for the callback to finish.
@@ -439,7 +440,9 @@ func (r *Reader) status() *ReaderStatus {
 }
 
 // Verify checks the SHA1 hash on download and compares it to the SHA1 hash
-// submitted on upload.  If the two differ, this returns an error.  If the
+// submitted on upload. If the two differ, this returns an error only when the
+// read starts at offset zero, reads past the end of the object, and the
+// reported hash has 40 characters. Otherwise, this returns (nil, false). If the
 // correct hash could not be calculated (if, for example, the entire object was
 // not read, or if the object was uploaded as a "large file" and thus the SHA1
 // hash was not sent), this returns (nil, false).

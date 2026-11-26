@@ -36,7 +36,7 @@ var ErrClosed = errors.New("file already closed")
 // file API if the file exceeds ChunkSize bytes.  Due to that and other
 // Backblaze API details, there is a large buffer.
 //
-// Callers must change public Writer attributes before the first call to Write.
+// Callers must change public Writer attributes before the first non-empty call to Write.
 type Writer struct {
 	// ConcurrentUploads is number of different threads sending data concurrently
 	// to Backblaze for large files.  This can increase performance greatly, as
@@ -679,9 +679,10 @@ func (w *Writer) sendChunk() error {
 }
 
 // ReadFrom reads all of r into w, returning the first error or no error if r
-// returns io.EOF. If r supports seeking, ReadFrom streams r directly over the
-// wire instead of buffering it locally, reducing memory usage. If seeking fails,
-// as it does for OS pipes, ReadFrom uses the ordinary buffered path.
+// returns io.EOF. If r supports seeking, Resume is false, and seeking succeeds,
+// ReadFrom streams r directly over the wire instead of buffering it locally,
+// reducing memory usage. If seeking fails, as it does for OS pipes, ReadFrom
+// uses the ordinary buffered path.
 //
 // Do not issue multiple calls to ReadFrom, or mix ReadFrom and Write.  If you
 // have multiple readers you want to concatenate into the same B2 object, use
@@ -971,9 +972,9 @@ func WithLegalHold(legalHold LegalHold) WriterOption {
 // The callback runs on one owner goroutine, never under a transfer lock. Values
 // are monotonic non-decreasing and end with a final call before Close returns.
 // Updates may be coalesced, so an intermediate value is not guaranteed.
-// The total is known for ReadFrom readers that implement io.Seeker
-// (including resume), and is -1 otherwise. Calling Close from this callback
-// is unsupported because Close waits for the callback to finish.
+// The total is known when a size probe succeeds for a ReadFrom reader that
+// implements io.Seeker (including resume), and is -1 otherwise. Calling Close
+// from this callback is unsupported because Close waits for the callback to finish.
 func WithProgress(cb func(bytesComplete, bytesTotal int64)) WriterOption {
 	return WriterOptionFunc(func(w *Writer) {
 		w.progress = cb

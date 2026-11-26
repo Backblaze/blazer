@@ -196,18 +196,7 @@ func ListPrefix(pfx string) ListOption {
 	}
 }
 
-// ListDelimiter denotes the path separator.  If set, object listings will be
-// truncated at this character.
-//
-// For example, if the bucket contains objects foo/bar, foo/baz, and foo,
-// then a delimiter of "/" will cause the listing to return "foo" and "foo/".
-// Otherwise, the listing would have returned all object names.
-//
-// Note that objects returned that end in the delimiter may not be actual
-// objects, e.g. you cannot read from (or write to, or delete) an object
-// "foo/", both because no actual object exists and because B2 disallows object
-// names that end with "/".  If you want to ensure that all objects returned
-// are actual objects, leave this unset.
+// ListDelimiter sets the delimiter that the client sends with object-listing requests.
 func ListDelimiter(delimiter string) ListOption {
 	return func(o *objectIteratorOptions) {
 		o.delimiter = delimiter
