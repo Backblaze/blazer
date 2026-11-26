@@ -33,6 +33,7 @@ See the [upgrade guide](https://github.com/Backblaze/blazer/blob/v0.10.0/docs/up
 
 ### Added
 
+- `base.NewAuthorizedAccount` constructs an authorized account from cached authorization data. `(*base.FileChunk).UploadPartWithSSEC`, `(*base.Bucket).DownloadFileByNameWithSSEC`, `DownloadFileByIDWithSSEC`, and `CopyFileWithSSEC` add low-level SSE-C upload-part, download, and copy operations.
 - `b2.SetupReplication` merges caller-owned source and destination key IDs into bucket replication configurations, and `b2.ReplicationStatus` reads configured rules. Both reject unreadable existing configuration; setup rejects conflicting options and key mappings.
 - `b2/sync.Sync` pushes a local directory tree into a B2 prefix with configurable comparison, concurrency, dry-run reporting, and per-file failure results. It follows a symlinked root but not symlinks below it; changed large files are re-uploaded rather than resumed.
 - `b2.WithAccountInfo` allows a client to reuse an authorized session through the default in-memory store or an opt-in `AccountInfoFile`. The file backend stores tokens and endpoints atomically with private POSIX permissions and never stores the application key. On Windows, session privacy depends on the directory ACLs; place the file under the user's profile directory, such as `os.UserConfigDir()`. A missing, corrupt or oversized cached session triggers normal authorization and replacement; oversized reads remain bounded.
