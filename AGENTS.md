@@ -12,6 +12,7 @@ CI checks and local gate:
 - Individual targets: `make build`, `make vet`, `make fmt-check` (`make fmt` fixes formatting),
   `make tidy-check`, `make verify`, `make lint`, `make test`, `make b2keys`, `make crosscompile`, and
   `make scripts-test`. Lint checks findings new since `origin/main` by default.
+- Run `make docs-lint` to report issues in changed `docs/` Markdown and `ARCHITECTURE.md`; unchanged files do not get stale warnings.
 - Integration tests in `b2/integration_test.go` require `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY`;
   otherwise they skip.
 

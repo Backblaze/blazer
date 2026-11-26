@@ -22,6 +22,7 @@ When a test fails, fix the code, not the test. Paste the output tail into the PR
 - `crosscompile`: a target platform failed to build.
 - `changelog-check`: the required entry is missing or fragments failed validation.
 - `scripts-test`: a script test failed or could not complete.
+- `docs-lint`: review advisory findings in changed documentation.
 
 ## Live and separate checks
 
