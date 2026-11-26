@@ -12,7 +12,7 @@ How a change to Blazer is tested and how its tests are reviewed. It builds on [t
 (what each test level proves and how to run it) and on the rules in [AGENTS.md](../AGENTS.md) and
 [REVIEW.md](../REVIEW.md). Where both speak, the stricter rule applies.
 
-Five kinds of test are expected: **unit, integration, contract, system, security**. Resilience (fault
+Expect five kinds of test: **unit, integration, contract, system, security**. Resilience (fault
 injection) and health (golden path) checks are kinds of system test, not a sixth kind.
 
 ## The loop (TDD)
@@ -22,8 +22,8 @@ injection) and health (golden path) checks are kinds of system test, not a sixth
 3. **REFACTOR**: clean up with the tests green, then run the whole unit suite again.
 4. **PROVE**: revert the production change. The new test must fail again. Paste that output. A test that
    passes with or without the change is a defect, not a result. A test that pins behavior that already
-   exists has no production change to revert: break the production line it names by hand instead, run the
-   test alone, paste the failure, and do not commit the break (evidence level L3). If no single line can
+   exists has no production change to revert. Instead, break the production line the test names by hand.
+   Run the test alone, paste the failure, and do not commit the break (evidence level L3). If no single line can
    be broken, say so and state L1. This hand-made break is not the optional mutation testing below.
 5. A bug fix starts with a failing regression test, committed before the fix.
 6. A skipped test is NOT RUN, never PASS. Say so in the pull request.
@@ -41,9 +41,9 @@ injection) and health (golden path) checks are kinds of system test, not a sixth
 
 CodeQL and govulncheck run as static checks and complement, not replace, the security tests.
 
-A kind with nothing to test in a given change is stated as "not applicable" with a reason in the PR.
-GitHub CI does not run the simulator contract (see [testing.md](testing.md)), so contract and system
-evidence comes from running the scenarios yourself.
+For a kind with nothing to test in a given change, state "not applicable" with a reason in the PR.
+GitHub CI does not run the simulator contract (see [testing.md](testing.md)). Contract and system evidence
+comes from running the scenarios yourself.
 
 ## Evidence in every pull request
 
@@ -60,7 +60,7 @@ Do not write "tests pass" without the output. Do not write "this test catches bu
 
 ## Rules for every test
 
-- The name states the claim, and the assertion checks exactly that claim, nothing weaker.
+- The name states the claim. The assertion checks exactly that claim, nothing weaker.
 - The expected value comes from the specification or a literal, never from the code under test.
 - No assertion that cannot fail: no loop that may run zero times, no nil-only check on a call that can fail
   in other ways, no assertion inside a branch the test never reaches, no skipped body.
@@ -72,10 +72,10 @@ Do not write "tests pass" without the output. Do not write "this test catches bu
 
 ## Coverage and mutation
 
-CI collects `-coverprofile` and publishes the coverage badge but sets no floor, and
-[CONTRIBUTING.md](../CONTRIBUTING.md) says coverage is not enforced. Reviewers still look at it: a PR
+CI collects `-coverprofile` and publishes the coverage badge but sets no floor.
+[CONTRIBUTING.md](../CONTRIBUTING.md) says coverage is not enforced. Reviewers still look at coverage: a PR
 should not lower coverage on the files it changes without a reason. Mutation testing (for example
-Gremlins on `base` and `b2`) is optional, run offline, and its score is for information; it is not a PR check.
+Gremlins on `base` and `b2`) is optional and runs offline. Its score is for information; it is not a PR check.
 
 ## Who reviews
 
