@@ -37,6 +37,7 @@
 
 ## Optional
 
+- [b2-mcp](https://github.com/backblaze-labs/b2-mcp): a Model Context Protocol server for B2.
 - [Contributing](https://github.com/Backblaze/blazer/blob/main/CONTRIBUTING.md): Review contribution terms and guidance.
 - [Release process](https://github.com/Backblaze/blazer/blob/main/RELEASE.md): Review the release process.
 - [Security policy](https://github.com/Backblaze/blazer/blob/main/SECURITY.md): Review the security policy.

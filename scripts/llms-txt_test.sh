@@ -34,3 +34,23 @@ while IFS= read -r link; do
   fi
 done <<< "$links"
 echo 'ok   llms.txt: structure and repository file links'
+
+missing=0
+for file in llms.txt AGENTS.md; do
+  if ! grep -Fq 'https://github.com/backblaze-labs/b2-mcp' "$file"; then
+    echo "FAIL $file: missing b2-mcp link"
+    missing=1
+  elif ! grep -F 'b2-mcp' "$file" | grep -Fq 'a Model Context Protocol server for B2.'; then
+    echo "FAIL $file: b2-mcp wording differs from README.md"
+    missing=1
+  fi
+done
+# The AGENTS.md entry belongs in the Commands section, before Architecture.
+if ! awk '/^## Commands/{c=1} /^## Architecture/{c=0} c && /b2-mcp/{f=1} END{exit !f}' AGENTS.md; then
+  echo 'FAIL AGENTS.md: b2-mcp is not in the Commands section'
+  missing=1
+fi
+if [ "$missing" -ne 0 ]; then
+  exit 1
+fi
+echo 'ok   llms.txt and AGENTS.md: b2-mcp link'
