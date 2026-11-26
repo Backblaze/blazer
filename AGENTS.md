@@ -23,12 +23,14 @@ Maintainer-only commands (not run by CI):
 - `make changelog-new` creates an entry; see [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries).
 - `go run ./internal/bin/cleanup` removes live-test leftovers.
 
+External tools:
+
+- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — a Model Context Protocol server for B2.
+
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for package responsibilities, dependencies,
 and the backend and wire-test boundaries.
-
-[b2-mcp](https://github.com/backblaze-labs/b2-mcp) is a Model Context Protocol server for B2, incubating in Backblaze Labs.
 
 ## Conventions
 
