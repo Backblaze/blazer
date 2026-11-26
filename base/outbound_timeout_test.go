@@ -12,9 +12,11 @@ import (
 	"time"
 )
 
-// Every outbound B2 call in base is bounded by the caller's context: when the
-// server stops answering, the call must return context.DeadlineExceeded soon
-// after the deadline instead of hanging. The server here is a real local
+// Five outbound B2 calls in base (authorize account, list buckets, list file
+// names, get upload URL and download by name) are bounded by the caller's
+// context: when the server stops answering, each must return
+// context.DeadlineExceeded soon after the deadline instead of hanging. Other
+// calls also go through makeNetRequest but are not checked here. The server here is a real local
 // listener whose handler blocks, so the real transport and request path run.
 // (A call made with a context that has no deadline has no bound at all; that is
 // a library gap, not covered here.)

@@ -12,7 +12,7 @@ What changed. If this PR is stacked on another, name it and the merge order.
 
 Paste the tail of `make ci`. For each behavior this PR adds or fixes, name the test that fails when the
 change is reverted. List any live-B2 checks you ran, and any you could not. See
-[docs/testing-standard.md](docs/testing-standard.md).
+`docs/testing-standard.md`.
 
 - [ ] Revert proof: the new test failed before the fix and fails again with the production change reverted, or, for a test of existing behavior, fails when the line it names is broken by hand (output above).
 - [ ] Kinds: for unit, integration, contract, system and security, each is run (output above) or marked "NOT RUN" or "not applicable" with a reason.
