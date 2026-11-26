@@ -5,11 +5,11 @@ description: Entry point for the AI-native SDLC workflow (intent.md -> spec.md -
 
 # AI-native SDLC
 
-Humans stay accountable for every judgment call. Claude does the drafting, checking and plumbing, and every stage leaves a committed Markdown artifact that the next stage consumes.
+Humans stay accountable for every judgment call. Claude does the drafting, checking and plumbing. Each stage leaves a committed Markdown artifact that the next stage consumes.
 
 ## The artifact chain
 
-Each change gets a folder `docs/product-specs/<change-slug>/` for its intent and spec; its plan lives in `docs/exec-plans/active/<change-slug>/` until merged, then in `docs/exec-plans/completed/<change-slug>/`.
+Each change gets a folder `docs/product-specs/<change-slug>/` for its intent and spec. The plan lives in `docs/exec-plans/active/<change-slug>/` until merged. After merge, the plan lives in `docs/exec-plans/completed/<change-slug>/`.
 
 | Artifact | Written by | Approved by | Skill |
 |---|---|---|---|
@@ -21,12 +21,12 @@ Each change gets a folder `docs/product-specs/<change-slug>/` for its intent and
 
 ## Pick the next step from what exists
 
-Look in `docs/product-specs/<slug>/`, `docs/exec-plans/{active,completed}/<slug>/` and the repo, then route:
+Look in `docs/product-specs/<slug>/`, `docs/exec-plans/{active,completed}/<slug>/` and the repo. Then route:
 
 1. No folder, only an idea or a ticket: `sdlc-intent`.
 2. `intent.md` approved, no `spec.md`: `sdlc-spec`.
 3. `spec.md` approved, no `plan.md`: `sdlc-plan`.
-4. `plan.md` approved: build. Use `sdlc-feedback-loop` so the session verifies its own work, and `sdlc-subagents` to parallelise.
+4. `plan.md` approved: build. Use `sdlc-feedback-loop` so the session verifies its own work. Use `sdlc-subagents` to parallelise.
 5. Diff ready: `sdlc-pr-review`.
 6. Releasing: follow `RELEASE.md`.
 
@@ -36,12 +36,12 @@ Foundations that any stage leans on: `sdlc-claude-md` (shared context in `AGENTS
 
 `sdlc-spec` needs an approved `intent.md`; `sdlc-plan` works from a spec or, for small changes, a plain
 description; `sdlc-subagents` and `sdlc-pr-review` lean on `AGENTS.md`, `REVIEW.md` and `make ci`. If a
-prerequisite is missing, say so and offer to run that skill first instead of working around it.
+prerequisite is missing, say so. Offer to run that skill first instead of working around the missing prerequisite.
 
 ## Ground rules for every stage
 
 - Put the artifact in the repo and name its author. Git history is the audit record.
-- One source of truth per artifact. If Jira, ServiceNow or a requirements tool already holds the record, either declare it authoritative and write outcomes back through MCP, or link both ways (record ID in the file, commit SHA in the record).
+- One source of truth per artifact. If Jira, ServiceNow or a requirements tool already holds the record, declare it authoritative and write outcomes back through MCP. Alternatively, link both ways (record ID in the file, commit SHA in the record).
 - Advisory controls (skills, `CLAUDE.md`) get a deterministic backstop where the rule must always hold: a hook at the edit, a required check at the PR.
 - A human makes each accept or reject decision that moves an artifact to the next stage. Never mark one approved on their behalf.
-- Every play has a leading and a lagging indicator. Name them when you set the play up so the team can tell whether it worked.
+- Every play has a leading and a lagging indicator. When you set the play up, name both indicators so the team can tell whether the play worked.
