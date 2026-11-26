@@ -54,6 +54,9 @@ func run() error {
 	if b2key == "" {
 		b2key = os.Getenv("B2_ACCOUNT_KEY")
 	}
+	if b2key == "" {
+		b2key = os.Getenv("B2_SECRET_KEY")
+	}
 
 	args := flag.Args()
 	if len(args) != 2 {
