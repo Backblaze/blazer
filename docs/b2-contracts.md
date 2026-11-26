@@ -9,7 +9,7 @@ stale_after: 2027-05-26T00:00:00+00:00
 # B2 contracts
 
 Facts about B2 behavior and SDK conventions that blazer has to get right, with the evidence for each.
-Read the section for the area you are changing before you start; add to it when a review or a live run
+Before you start, read the section for the area you are changing. Add to it when a review or a live run
 teaches something new. [AGENTS.md](../AGENTS.md) holds the short rules; this file holds the detail.
 
 Each entry says what is true, where it comes from, and the test that pins it in blazer. Evidence kinds:
@@ -37,13 +37,13 @@ Each entry says what is true, where it comes from, and the test that pins it in 
 - An omitted encryption setting means "use the bucket default"; it is not "no encryption". reference:
   [CLI `console_tool.py`][CLIEncryption].
 - Before a resumed large file reuses existing parts, verify its encryption mode, algorithm and key
-  identity; when that cannot be verified, refuse to resume. A matching name or matching part hashes is
+  identity. When you cannot verify those values, refuse to resume. A matching name or matching part hashes is
   not enough. reference: [b2sdk `executor.py`][PyResume]; tests:
   `TestSSEB2ResumeRejectsWrongOrUnverifiableEncryption`, `TestOverriddenSSECResumeUsesEffectiveEncryption`.
 
 ## File info written by SDKs
 
-- `large_file_sha1` is SDK-managed file info that must match the uploaded content; B2 does not compute a
+- `large_file_sha1` is SDK-managed file info that must match the uploaded content. B2 does not compute a
   SHA1 for large files. blazer exposes it in `Attrs.Info` as well as in the normalized SHA1. reference:
   [b2sdk `emerger.py`][PySHA]; tests: `TestAttrsPublicMetadataPathsKeepFileInfoIndependent`,
   `TestSyncSHA1LargeFileRoundTrip`.
@@ -66,8 +66,8 @@ Each entry says what is true, where it comes from, and the test that pins it in 
 
 ## Downloads
 
-- Ask for stored bytes (`Accept-Encoding: identity`). Go decompresses `gzip` transparently, which would
-  make the returned bytes, `Content-Length` and SHA1 disagree with what B2 stores. reference: b2sdk
+- Ask for stored bytes (`Accept-Encoding: identity`). Go decompresses `gzip` transparently. This would make the returned bytes, `Content-Length` and SHA1
+  disagree with what B2 stores. reference: b2sdk
   disables decompression too ([`b2http.py`][PyHTTP]); test: `TestDownloadGzipReturnsStoredBytes`.
 - `NewRangeReader(ctx, offset, 0)` reads zero bytes; a negative length reads to the end of the file.
 
@@ -76,14 +76,14 @@ Each entry says what is true, where it comes from, and the test that pins it in 
 - `Retry-After` is honored as sent by the server, with a bounded number of attempts. Test it as received
   on the wire, not as a mocked duration. reference: [b2sdk `b2http.py`][PyHTTP].
 - A failed part upload gets a fresh upload URL, and later parts keep using the new one.
-- An expired or invalid token (401) triggers reauthorization; a permission error (403) does not.
+- An expired or invalid token (401) triggers reauthorization. A permission error (403) does not.
   Simultaneous 401s should share one reauthorization (#144). reference: [b2sdk `session.py`][PySession], [`exception.py`][PyErrors].
 
 ## Large files
 
 - Parts are numbered 1 to 10000; every part except the last is at least the account's
   `absoluteMinimumPartSize` (5,000,000 bytes on B2); the recommended size comes from authorization. The
-  harness simulator uses much smaller defaults for speed, so only its realistic-limits profile proves a
+  harness simulator uses much smaller defaults for speed. Only its realistic-limits profile proves a
   limit.
 
 ## What each kind of test proves
