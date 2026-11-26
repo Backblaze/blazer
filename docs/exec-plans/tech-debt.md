@@ -12,9 +12,7 @@ stale_after: 2027-05-26T00:00:00+00:00
 
 ## Failing today
 
-| Test | Status at this revision | Tracking |
-| --- | --- | --- |
-| `TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption` | An unrelated update sends cached default encryption. | [#533](https://github.com/Backblaze/blazer/issues/533) |
+No tagged test fails now.
 
 ## Failing documentation checks
 
