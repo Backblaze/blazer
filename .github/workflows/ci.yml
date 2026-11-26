@@ -48,6 +48,12 @@ jobs:
         env:
           BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^' }}
 
+      - name: Check changed documentation
+        continue-on-error: true
+        run: make docs-lint
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^' }}
+
   test:
     name: test / Go ${{ matrix.go-version }} / ${{ matrix.os }}
     if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}

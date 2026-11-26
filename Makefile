@@ -6,9 +6,9 @@ CHANGIE := go run github.com/miniscruff/changie@$(CHANGIE_VERSION)
 BASE_REF ?= origin/main
 TEST_FLAGS ?=
 
-.PHONY: known-defects known-defects-32bit release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile crosscompile-one changelog-check changelog-new scripts-test api-compat
+.PHONY: known-defects known-defects-32bit release-check ci build vet fmt fmt-check tidy-check verify lint test b2keys crosscompile crosscompile-one changelog-check changelog-new scripts-test api-compat docs-lint
 
-ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check scripts-test
+ci: build vet fmt-check tidy-check verify lint test b2keys crosscompile changelog-check scripts-test docs-lint
 
 build:
 	go build ./...
@@ -63,6 +63,9 @@ changelog-new:
 # Runs the shell tests for scripts/ (scripts/*_test.sh).
 scripts-test:
 	for t in scripts/*_test.sh; do "$$t" || exit 1; done
+
+docs-lint:
+	BASE_REF="$(BASE_REF)" scripts/docs-lint.sh --warn-only
 
 api-compat:
 	BASE_REF="$(BASE_REF)" scripts/api-compat.sh
