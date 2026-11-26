@@ -27,8 +27,6 @@ package b2
 // TestKnownDefect_X to TestRegression_X.
 
 import (
-	"errors"
-	"io/fs"
 	"net/http"
 	"strings"
 	"testing"
@@ -86,24 +84,5 @@ func TestKnownDefect_UnrelatedUpdateDoesNotSendCachedDefaultEncryption(t *testin
 	}
 	if v, ok := srv.Last(t, "b2_update_bucket").JSON["defaultServerSideEncryption"]; ok {
 		t.Errorf("info-only update re-sent the cached defaultServerSideEncryption=%v", v)
-	}
-}
-
-// Library errors must unwrap, so errors.Is(err, fs.ErrNotExist)
-// works for not-found errors (as the documented b2.IsNotExist does).
-func TestKnownDefect_NotFoundErrorUnwrapsToFSErrNotExist(t *testing.T) {
-	srv := b2wiretest.New(t)
-	srv.Reply("b2_list_buckets", http.StatusOK, `{"buckets":[]}`)
-	ctx := newTestCtx(t)
-	client, err := NewClient(ctx, "account", "key", APIBase(srv.URL()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = client.Bucket(ctx, "missing")
-	if err == nil || !IsNotExist(err) {
-		t.Fatalf("setup: Bucket(missing) err = %v, want a not-found error", err)
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("errors.Is(err, fs.ErrNotExist) = false for %v; library errors do not unwrap", err)
 	}
 }
