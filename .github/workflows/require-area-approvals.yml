@@ -47,6 +47,11 @@ jobs:
       github.event.pull_request.draft == false &&
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
+    # One run per PR at a time, so an older run cannot post its status after a newer one. Set on the
+    # job, not the workflow, so a skipped run (draft, Dependabot) never cancels a real one.
+    concurrency:
+      group: area-owner-approvals-${{ github.event.pull_request.number || github.event.review.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
