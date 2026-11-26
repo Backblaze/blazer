@@ -117,10 +117,10 @@ type clientOptions struct {
 // A cache miss (ok=false with nil Err or an error matching ErrInvalidAccountInfo)
 // triggers reauthorization. The sentinel does not invalidate ok=true data;
 // otherwise complete sessions for the requested key may still be reused.
-// Other read errors and errors observed after Set or Clear are returned.
-// Err reflects the most recent operation from any caller; when a store is shared
-// across clients, another call can overwrite an error or expose it to a different
-// client before it is checked. Use separate stores for per-client error isolation.
+// The client returns other read errors and errors observed after Set or Clear.
+// Err reflects the most recent operation from any caller. When clients share a
+// store, another call can overwrite an error or expose it to a different client
+// before the originating client checks it. Use separate stores for per-client error isolation.
 func WithAccountInfo(ai AccountInfo) ClientOption {
 	return func(o *clientOptions) {
 		if o.accountInfoSet {
@@ -147,9 +147,9 @@ func WithAccountInfo(ai AccountInfo) ClientOption {
 // A ClientOption allows callers to adjust various per-client settings.
 type ClientOption func(*clientOptions)
 
-// UserAgent sets the User-Agent HTTP header.  The default header is
-// "blazer/<version>"; the value set here will be prepended to that.  This can
-// be set multiple times.
+// UserAgent sets the User-Agent HTTP header. The default header is
+// "blazer/<version>". Each supplied value is prepended to the default.
+// Callers can set this option multiple times.
 //
 // A user agent is generally of the form "<product>/<version> (<comments>)".
 func UserAgent(agent string) ClientOption {
@@ -206,8 +206,8 @@ func validateServiceURL(rawURL string, allowHTTP bool) error {
 	return nil
 }
 
-// Transport sets the underlying HTTP transport mechanism.  If unset,
-// http.DefaultTransport is used.
+// Transport sets the underlying HTTP transport mechanism. If unset,
+// the client uses http.DefaultTransport.
 func Transport(rt http.RoundTripper) ClientOption {
 	return func(c *clientOptions) {
 		c.transport = rt
