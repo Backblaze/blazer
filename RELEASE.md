@@ -20,12 +20,12 @@ other change. CI and a code owner see the release commit before tagging.
 ## Versioning
 
 Semantic versioning. Before 1.0, a breaking change bumps the minor version. changie picks the bump from
-the fragment kinds (`Added`, `Changed`, `Deprecated`, `Removed` → minor; `Fixed`, `Security` → patch);
-pass an explicit version to `changie batch` to override it.
+the fragment kinds (`Added`, `Changed`, `Deprecated`, `Removed` → minor; `Fixed`, `Security` → patch).
+To override the bump, pass an explicit version to `changie batch`.
 
-A major version is never computed by `auto`. `v1.0.0` is a deliberate `changie batch v1.0.0`. From v2 on,
-Go requires the module path to change to `github.com/Backblaze/blazer/vN` in the same release, so a major
-release is planned work, not a changelog bump. Entries starting with `**Breaking:**` tell the release
+`auto` never computes a major version. `v1.0.0` is a deliberate `changie batch v1.0.0`. From v2 on,
+Go requires the module path to change to `github.com/Backblaze/blazer/vN` in the same release. A major
+release needs planning; it is not a changelog bump. Entries starting with `**Breaking:**` tell the release
 manager what callers must change.
 
 ## Security and quality gate
@@ -109,8 +109,8 @@ It cannot undo a pushed Go module tag or prevent a privileged actor from bypassi
 ## Local health check
 
 Before tagging, run the repository-owned golden path against a fresh loopback simulator with an
-existing scratch bucket. Start/provision it as described in the [harness README](.sdkharness/README.md),
-then run from the Blazer checkout:
+existing scratch bucket. Start and provision the simulator as described in the [harness README](.sdkharness/README.md).
+Then run from the Blazer checkout:
 
 ```bash
 SDKHARNESS_TEST_LEVEL=health SDKHARNESS_SCENARIO=golden-path \
@@ -120,12 +120,12 @@ SDKHARNESS_SIMULATOR_URL="http://127.0.0.1:<port>" B2_BUCKET_NAME=sdkharness-hea
 
 Require `SDKHARNESS_RESULT` with level `health`, scenario `golden-path` and verdict `PASS`.
 `FAIL` or `SKIP` is not a successful health check. The dispatcher uses fixed simulator credentials,
-rejects non-loopback endpoints and clears ambient B2 credentials; this is not a live-account check.
+rejects non-loopback endpoints and clears ambient B2 credentials. This is not a live-account check.
 
 ## Steps
 
-1. Make sure `main` is green and every PR meant for the release has merged. Run `make release-check`;
-   if it holds, fix or dismiss the findings first (see the gate above).
+1. Make sure `main` is green and every PR meant for the release has merged. Run `make release-check`.
+   If it holds, fix or dismiss the findings first (see the gate above).
 2. Branch from `main`: `git switch -c release/vX.Y.Z origin/main`.
 3. Batch the fragments and rebuild the changelog and version strings:
 
@@ -135,13 +135,13 @@ rejects non-loopback endpoints and clears ambient B2 credentials; this is not a 
    go run github.com/miniscruff/changie@v1.24.0 merge
    ```
 
-4. Check the diff covers the files above as needed plus `.changes/`, and explain any other release-process
-   changes in the PR. Edit `.changes/vX.Y.Z.md` for readability if needed and run `merge` again.
+4. Check that the diff covers the files above as needed plus `.changes/`. Explain any other release-process
+   changes in the PR. If needed, edit `.changes/vX.Y.Z.md` for readability and run `merge` again.
    Confirm `DefaultUserAgent = "blazer/X.Y.Z"` and the `bin/b2keys/go.mod` requirement match the release;
    `.changie.yaml` already updates both. The tag workflow rejects a stale User-Agent instead of
    modifying a published tag. Run `make ci` and the local health check above.
 5. Commit as `Version X.Y.Z` and open a PR with the changelog section and the `make release-check` output as
-   its body; leave out any advisory ids until they are published. A code owner approves.
+   its body. Leave out any advisory ids until they are published. A code owner approves.
 6. After it merges (`main` requires linear history, so squash or rebase), tag the release PR's merge
    commit, not the tip of `main`, which may already include later PRs:
 
@@ -157,13 +157,13 @@ rejects non-loopback endpoints and clears ambient B2 credentials; this is not a 
 
 7. The [Release workflow](.github/workflows/release.yml) runs on the tag push. Its read-only
    `verify-tag` job must pass before the separate `publish` job creates the GitHub Release with the
-   body from the tagged `.changes/vX.Y.Z.md`. No manual `gh release create` is needed. Check that both
-   jobs succeed and the Release body matches those notes. If verification fails, resolve the cause;
-   never move or replace the published tag. A rerun never edits an existing Release.
+   body from the tagged `.changes/vX.Y.Z.md`. You do not need a manual `gh release create`. Check that both
+   jobs succeed and the Release body matches those notes. If verification fails, resolve the cause.
+   Never move or replace the published tag. A rerun never edits an existing Release.
 
    Then publish each advisory listed in `RELEASE_FIXES_ADVISORIES`, naming vX.Y.Z as the patched version.
 
-8. Ask the Go proxy to index it, then check pkg.go.dev shows the version:
+8. Ask the Go proxy to index the release. Then check pkg.go.dev shows the version:
 
    ```bash
    GOPROXY=https://proxy.golang.org go list -m github.com/Backblaze/blazer@vX.Y.Z
@@ -173,7 +173,7 @@ rejects non-loopback endpoints and clears ambient B2 credentials; this is not a 
 
 - Release while `make release-check` holds, or with an UNVERIFIED section nobody checked by hand.
 
-- Move or delete a published tag. The Go checksum database has already recorded it; release a new patch
+- Move or delete a published tag. The Go checksum database has already recorded it. Release a new patch
   version instead.
 - Release from a branch other than `main`.
 - Edit a released `.changes/vX.Y.Z.md` without a reason recorded in the PR.
