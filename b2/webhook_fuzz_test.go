@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"reflect"
 	"testing"
 )
@@ -69,7 +68,7 @@ func FuzzParseEvent(f *testing.F) {
 			t.Fatalf("unstable parse round trip: %v", err)
 		}
 	})
-	if count == 0 && flag.Lookup("test.fuzz").Value.String() == "" {
+	if count == 0 && checkFuzzCorpus() {
 		f.Fatal("no parsed event reached the round-trip invariant")
 	}
 }
