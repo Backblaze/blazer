@@ -1,0 +1,3 @@
+kind: Changed
+body: '**Breaking:** Writer.Resume now fails when two or more unfinished uploads share the object name, instead of resuming the last one the service listed. The error names the object and the file IDs. To continue, list the unfinished uploads with b2.ListUnfinished, call Object.Cancel on all but one of them, and retry.'
+time: 2026-11-26T12:00:00-06:00

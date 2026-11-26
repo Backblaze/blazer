@@ -68,10 +68,10 @@ A named test supplies evidence only for its assertions. This document does not c
   See the [checksum change spec](../sha1-upload-and-verify/spec.md).
 
 - **R12. Resume selection.** Resume applies only to large uploads. It lists unfinished files using the object name as a prefix.
-  Only exact names qualify. If several qualify, the last matching entry in iteration order is selected.
+  Only exact names qualify. If several qualify, the Writer returns an error with their IDs; cancel the extra uploads before retrying.
   If none qualifies, the Writer starts a new upload. It does not compare ordinary file info or content type before reuse.
-  Source: `b2/writer.go:446`.
-  Test: `TestResumeWriterWithoutExtantFile` (live) covers a missing candidate. No test pins this. The gaps concern multiple-candidate selection and ignored ordinary metadata.
+  Source: `b2/writer.go:449`, `b2/writer.go:476`.
+  Tests: `TestResumeWriterWithoutExtantFile` (live) covers a missing candidate; `TestWriterResumeRejectsDuplicateUnfinishedUploads` covers duplicates. No test pins this. The gap concerns ignored ordinary metadata.
 
 - **R13. Resume parts.** The Writer lists all part pages and compares the source chunk hash with each existing part's hash by part number.
   Equal hashes skip the upload. Different hashes return a resume mismatch error.
@@ -203,6 +203,6 @@ The focused [Object Lock](../writer-object-lock/spec.md) and [checksum](../sha1-
 2. R4 documents service limits that the Writer does not validate locally. Tests using tiny chunks prove control flow, not B2 acceptance. Owner: maintainers.
 3. R7 prohibits mixed or repeated input methods in godoc, without a test that enforces this caller obligation. Owner: maintainers.
 4. R10 derives SHA1 before modification time. Near the entry threshold, one or both derived fields can be omitted. Owner: maintainers.
-5. R12 selects the last exact-name candidate. The sources do not establish that candidate as the newest unfinished upload. Owner: maintainers.
+5. R12 rejects multiple exact-name candidates. Callers must cancel the extra uploads before retrying. Owner: maintainers.
 6. R23 does not promise cleanup without `WithCancelOnError`. A failed start without a returned handle cannot use that handle for cleanup. Owner: maintainers.
 7. ReadFrom counts scheduled seekable bytes before Close confirms completion (`b2/writer.go:787`). Treat its byte count as distinct from upload success. Owner: maintainers.
