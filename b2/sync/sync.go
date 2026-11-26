@@ -141,8 +141,9 @@ func shouldTransfer(local localFile, dest *b2.Attrs, mode CompareMode) bool {
 // skip-newer and replace-newer policies
 // are not available. Matching files are skipped, and cloud objects are never
 // deleted. Symlinks below the root are not followed; a
-// symlinked root is followed. Changed large files are re-uploaded in full,
-// without resuming a previous upload. A nil option returns a nil result and an
+// symlinked root is followed. By default, changed large files are re-uploaded
+// in full, without resuming a previous upload. Client default writer options
+// can enable Resume. A nil option returns a nil result and an
 // error before accessing the local root or making B2 requests. Object names
 // longer than 1024 bytes are per-file failures, including in a dry run.
 // Per-file failures are returned in Result.Failed along with an aggregate
