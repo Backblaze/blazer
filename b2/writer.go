@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +47,8 @@ type Writer struct {
 
 	// Resume an upload. Unfinished large files are billed until finished or canceled;
 	// LifecycleRule.DaysUnfinishedUntilCanceled provides server-side cleanup.
+	// If more than one unfinished upload has the same name, Resume fails.
+	// Cancel the extra uploads before retrying.
 	// If true, and the upload is a large file, and a file of
 	// the same name was started but not finished, then assume that we are
 	// resuming that file, and don't upload duplicate chunks. SSE-C resume
@@ -455,20 +458,24 @@ func (w *Writer) getLargeFile() (beLargeFileInterface, error) {
 		}
 		return w.o.b.b.startLargeFile(w.ctx, w.name, ctype, info, w.retention, w.legalHold, w.encryption)
 	}
-	var got bool
+	var ids []string
 	iter := w.o.b.List(w.ctx, ListPrefix(w.name), ListUnfinished())
 	var fi beFileInterface
 	for iter.Next() {
 		obj := iter.Object()
 		if obj.Name() == w.name {
-			got = true
+			ids = append(ids, obj.f.id())
 			fi = obj.f
 		}
 	}
 	if iter.Err() != nil {
 		return nil, iter.Err()
 	}
-	if !got {
+	if len(ids) > 1 {
+		sort.Strings(ids)
+		return nil, fmt.Errorf("b2: more than one unfinished upload has the name %q (file IDs: %q); cancel the extra uploads before retrying", w.name, ids)
+	}
+	if len(ids) == 0 {
 		w.Resume = false
 		return w.getLargeFile()
 	}
