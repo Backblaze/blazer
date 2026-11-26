@@ -5,7 +5,7 @@ description: Create, trim or audit a repo's CLAUDE.md so it holds exactly what a
 
 # The CLAUDE.md
 
-`CLAUDE.md` is the context a new joiner would need, read by the agent at the start of every session. It is version controlled and reviewed like code. Keep it under a page: Claude reads all of it every session, and stale lines waste context.
+`CLAUDE.md` is the context a new joiner would need, read by the agent at the start of every session. It is version controlled and reviewed like code. Keep it under a page. Claude reads all of it every session. Stale lines waste context.
 
 ## Create
 
@@ -55,7 +55,7 @@ If artifacts live in `docs/product-specs/`, add a line saying it holds `intent.m
 
 ## Maintenance rule
 
-When Claude makes the same mistake twice, the correction goes into `AGENTS.md` in the same PR. PR review should also flag changes that make `AGENTS.md` outdated (`sdlc-pr-review`). Trimming changes agent behavior, so watch the next few PRs for regressions.
+When Claude makes the same mistake twice, the correction goes into `AGENTS.md` in the same PR. PR review should also flag changes that make `AGENTS.md` outdated (`sdlc-pr-review`). Trimming changes agent behavior. Watch the next few PRs for regressions.
 
 ## Measure
 
