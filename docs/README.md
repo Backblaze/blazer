@@ -11,6 +11,7 @@ reviewers keep finding. The files here hold the detail behind those rules.
 | [writing-style.md](writing-style.md) | You write or edit documentation or godoc. |
 | [b2-contracts.md](b2-contracts.md) | You touch a B2 call, encryption, file info, bucket settings, downloads, retries or large files. It lists what B2 and the reference SDKs do, with sources and the tests that pin each fact. |
 | [testing.md](testing.md) | You write or run tests. It explains the test levels, what each one proves, how to run the repo-owned SDK harness contract and the live tests, and how to show a test pins a fix. |
+| [testing-standard.md](testing-standard.md) | You write or review tests. It sets the TDD loop, the five kinds of test, what evidence a PR carries and who reviews what. |
 | [delete-options.md](delete-options.md) | You use governance-bypass deletion or migrate pre-v0.9.0 delete interfaces and function values. |
 | [object-lock.md](object-lock.md) | You use per-file retention or legal hold, resume a locked upload, or adapt a low-level upload interface to the Object Lock signatures. |
 | [review-lessons.md](review-lessons.md) | You review a PR or prepare one for review. It groups the problems earlier reviews found, with links to the PRs where they were raised. |
