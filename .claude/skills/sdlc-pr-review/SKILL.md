@@ -5,7 +5,7 @@ description: Set up REVIEW.md and run structured AI review passes (bugs, securit
 
 # AI in the PR review loop
 
-Claude both gives and receives reviews. Every PR gets the same review passes with findings ranked by severity, so human attention moves up to whether the change does what the plan intended and whether the risk is acceptable. Separation of duties holds: the agent that wrote the code has no way to approve it. Code-owner approval is a repository policy and advisory guardrail, not an enforced branch-protection requirement.
+Claude both gives and receives reviews. Every PR gets the same review passes with findings ranked by severity. This lets humans focus on whether the change does what the plan intended and whether the risk is acceptable. Separation of duties holds: the agent that wrote the code has no way to approve it. Code-owner approval is a repository policy and advisory guardrail, not an enforced branch-protection requirement.
 
 ## Mode A: set up `REVIEW.md` (tech lead)
 
@@ -48,7 +48,7 @@ Hosting options: the managed Code Review service (admin enables it per repositor
 
 ## Mode C: address review comments
 
-When tagged on a comment, make the fix, push, and reply on the thread so it records both the request and the change. To shepherd your own PR: sweep unresolved comments and failing checks, fix, push, repeat until green and waiting only on code-owner approval. Never approve or merge your own PR.
+When tagged on a comment, make the fix and push. Reply on the thread so it records both the request and the change. To shepherd your own PR: sweep unresolved comments and failing checks, fix, push, repeat until green and waiting only on code-owner approval. Never approve or merge your own PR.
 
 ## Feedback into the system
 

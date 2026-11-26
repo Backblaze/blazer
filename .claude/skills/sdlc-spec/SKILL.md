@@ -10,7 +10,7 @@ Requirements and design happen in one session instead of two hand-offs. The prod
 ## Before you start
 
 - Locate `docs/product-specs/<slug>/intent.md` and confirm it is approved (ask if unclear). No intent, run `sdlc-intent` first.
-- List the policy skills available (`.claude/skills/`, plugins) for brand, security, compliance and UX, and apply every one that is relevant. If none exist, say so, because the spec will rest on stated constraints only.
+- List the policy skills available (`.claude/skills/`, plugins) for brand, security, compliance and UX. Apply every relevant policy skill. If none exist, say so, because the spec will rest on stated constraints only.
 - Read `CLAUDE.md` and the parts of the codebase the intent touches so the design integrates with what exists.
 
 ## Produce `docs/product-specs/<slug>/spec.md`
@@ -45,13 +45,13 @@ Skills applied: <skill names>.
 - Make requirements testable: observable behavior, a measurable limit, an exact field set.
 - Every constraint in the intent must appear in the coverage table. If one cannot be met, it becomes a concern, not a silent omission.
 - When two policies conflict, do not pick a winner. Describe the clash, propose a resolution, name the owner.
-- Carry unanswered intent questions forward as concerns with an owner; never guess.
-- Record which skills (and versions) were applied, so the audit trail shows the live policy was read.
+- Carry unanswered intent questions forward as concerns with an owner. Never guess.
+- Record which skills (and versions) were applied. The audit trail then shows the live policy was read.
 - Do not write code in this stage.
 
 ## Hand-off
 
-Tell the product owner to resolve flagged concerns with their policy owners first (these are the points an analyst would have escalated), then review the spec against the original idea. A human decides whether the spec and intent progress to build; ask a technical lead to weigh in for higher-risk changes. Commit `spec.md` next to `intent.md` once accepted. Next step: `sdlc-plan`.
+Tell the product owner to resolve flagged concerns with their policy owners first (these are the points an analyst would have escalated), then review the spec against the original idea. A human decides whether the spec and intent progress to build. Ask a technical lead to weigh in for higher-risk changes. Commit `spec.md` next to `intent.md` once accepted. Next step: `sdlc-plan`.
 
 ## Measure
 
