@@ -15,7 +15,8 @@ failure: it claims coverage it does not give.
 
 1. Read the linked issue and, if present, `docs/product-specs/<slug>/spec.md` and `docs/exec-plans/{active,completed}/<slug>/plan.md`.
 2. Merge the PR onto current `main` locally and run `make ci`. Say what you ran.
-3. For each behavior the PR claims to fix or add, check the author's revert proof (see "Reviewing tests"). Re-run
+3. For each behavior the PR claims to fix or add, check the author's revert proof, or the hand-made break for
+   a test of existing behavior (see "Reviewing tests" and PROVE in docs/testing-standard.md). Re-run
    it yourself for changes to `base/`, wire, auth or credential code, and name any behavior no test pins.
 4. Check that the description says what the author's own fresh-context review (`/code-review`,
    `/security-review` or a subagent) reported and how each finding was answered. If it is missing, report

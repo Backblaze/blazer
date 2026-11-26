@@ -13,7 +13,10 @@ injection) and health (golden path) checks are kinds of system test, not a sixth
 2. **GREEN**: write the smallest change that makes it pass. Never edit the test to make it pass.
 3. **REFACTOR**: clean up with the tests green, then run the whole unit suite again.
 4. **PROVE**: revert the production change. The new test must fail again. Paste that output. A test that
-   passes with or without the change is a defect, not a result.
+   passes with or without the change is a defect, not a result. A test that pins behavior that already
+   exists has no production change to revert: break the production line it names by hand instead, run the
+   test alone, paste the failure, and do not commit the break (evidence level L3). If no single line can
+   be broken, say so and state L1. This hand-made break is not the optional mutation testing below.
 5. A bug fix starts with a failing regression test, committed before the fix.
 6. A skipped test is NOT RUN, never PASS. Say so in the pull request.
 7. Never delete, skip, loosen or retire a test to get green. Fix the code. Retiring a test is a human decision.
@@ -23,7 +26,7 @@ injection) and health (golden path) checks are kinds of system test, not a sixth
 | Kind | What it is here | Where | How to run | Minimum bar for a PR |
 | --- | --- | --- | --- | --- |
 | Unit | One function or type, in process, no network, no credentials; in-process fakes allowed. Includes the wire tests (`*_wire_test.go`: an `httptest` server or `RoundTripper` stub through `NewClient`) and fuzz tests. | `b2/`, `base/`, `x/` | `go test -race -shuffle=on ./...`; full gate `make ci` | Every new or changed branch has a test. A request change has a wire assertion (AGENTS.md item 2). |
-| Integration | Our code against real B2, with a throwaway key. Skips when the two key variables are unset. | `b2/integration_test.go`, `base/integration_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/`; clean up with `go run ./internal/bin/cleanup` | Run it when the change touches the request or response path. With no credentials, write NOT RUN and why. |
+| Integration | Our code against real B2, with a throwaway key. Skips when the two key variables are unset. | `b2/integration_test.go`, `base/integration_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/ ./base/`; clean up with `go run ./internal/bin/cleanup` | Run it when the change touches the request or response path. With no credentials, write NOT RUN and why. |
 | Contract | The claims we make about the B2 API and our public surface, one check per claim: the `.sdkharness/tests.tsv` conformance rows, pinned by `b2/sdkharness_contract_test.go`. | `.sdkharness/` | `go test ./b2/ -run TestSDKHarnessContract`; a single scenario by hand as described in [testing.md](testing.md) | Each added or changed capability claim has a check. |
 | System | The built library end to end against the B2 simulator, none of our code mocked. Includes the health and resilience rows. | `.sdkharness/tests/health`, `.sdkharness/tests/resilience` | As for contract, with `run-health` or `run-resilience` ([testing.md](testing.md)) | A user-visible behavior change has one system test where the simulator models it. |
 | Security | No secret appears in any log line, error, `String()` or serialization; bad, expired and wrong-scope credentials fail closed. | `b2/ssec_test.go`, `base/log_security_test.go`, `base/download_logging_test.go`, `base/ssec_wire_test.go`, `b2/reauth_wire_test.go` | `go test -race -shuffle=on -run Redact ./b2/ ./base/`; `go test -race -shuffle=on -run Reauth ./b2/` | A change that touches auth, logging, errors, signed URLs, credentials or parsing adds or updates a security test. |
