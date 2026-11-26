@@ -36,9 +36,8 @@ type Window struct {
 }
 
 // A Reducer should take two values from the window and combine them into a
-// third value that will be stored in the window.  The values i or j may be
-// nil.  The underlying types for both arguments and the output should be
-// identical.
+// third value. The window stores that value. The values i or j may be nil.
+// The underlying types for both arguments and the output should be identical.
 //
 // If the reducer is any kind of slice or list, then data usage will grow
 // linearly with the number of events added to the window.

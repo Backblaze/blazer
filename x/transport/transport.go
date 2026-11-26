@@ -29,8 +29,8 @@ import (
 )
 
 // WithFailures returns an http.RoundTripper that wraps an existing
-// RoundTripper, causing failures according to the options given.  If rt is
-// nil, the http.DefaultTransport is wrapped.
+// RoundTripper and causes failures according to the options given. If rt is
+// nil, WithFailures wraps http.DefaultTransport.
 func WithFailures(rt http.RoundTripper, opts ...FailureOption) http.RoundTripper {
 	if rt == nil {
 		rt = http.DefaultTransport
@@ -138,8 +138,8 @@ func FailureRate(rate float64) FailureOption {
 	}
 }
 
-// Response simulates a given status code.  The returned http.Response will
-// have its Status, StatusCode, and Body (with any predefined message) set.
+// Response simulates a given status code. The returned http.Response has
+// its Status, StatusCode, and Body (with any predefined message) set.
 func Response(status int) FailureOption {
 	return func(o *options) {
 		o.status = status
