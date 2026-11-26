@@ -111,7 +111,11 @@ func TestVersionedInstallAcceptsModuleMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, content := range map[string][]byte{"go.mod": mod, "go.sum": sums, "b2keys.go": source} {
+	skill, err := os.ReadFile("skill/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string][]byte{"go.mod": mod, "go.sum": sums, "b2keys.go": source, "skill/SKILL.md": skill} {
 		entry, err := z.Create(module + "@" + version + "/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -155,5 +159,13 @@ func TestVersionedInstallAcceptsModuleMetadata(t *testing.T) {
 	out, err := help.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "create") {
 		t.Fatalf("installed b2keys help = %q, %v; want the create command", out, err)
+	}
+	if !strings.Contains(string(out), "skill") {
+		t.Fatalf("installed b2keys help = %q; want the skill command", out)
+	}
+	cmd = exec.CommandContext(ctx, filepath.Join(bin, name), "skill")
+	out, err = cmd.Output()
+	if err != nil || !bytes.Equal(out, skill) {
+		t.Fatalf("installed b2keys skill differs from embedded skill: %v", err)
 	}
 }

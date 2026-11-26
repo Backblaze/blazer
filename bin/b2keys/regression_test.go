@@ -95,3 +95,22 @@ func TestLegacySecretFallbackOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestSkillCommand(t *testing.T) {
+	for _, name := range []string{apiID, apiKey, legacyAPIID, legacyAPIKey, legacyAccountKey} {
+		t.Setenv(name, "")
+	}
+	want, err := os.ReadFile("../../.claude/skills/b2keys/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	c := &skill{out: &out}
+	fs := flag.NewFlagSet("skill", flag.ContinueOnError)
+	if got := c.Execute(context.Background(), fs); got != subcommands.ExitSuccess {
+		t.Fatalf("exit status = %v, want success", got)
+	}
+	if !bytes.Equal(out.Bytes(), want) {
+		t.Fatal("skill output differs from repository skill")
+	}
+}
