@@ -24,9 +24,9 @@ def review(user, state, commit, at):
     return r
 
 
-def check(name, reviews, head, want_state, want_desc):
+def check(name, reviews, head, want_state, want_desc, areas=AREA, author="author"):
     states = gate.review_states(reviews, head)
-    state, desc = gate.evaluate(AREA, WRITERS, "author", states)
+    state, desc = gate.evaluate(areas, WRITERS, author, states)
     if (state, desc) != (want_state, want_desc):
         print(f"FAIL {name}: got ({state!r}, {desc!r}), want ({want_state!r}, {want_desc!r})")
         sys.exit(1)
@@ -55,4 +55,16 @@ check("change request on an older commit still blocks",
 moved = [review("alice", "APPROVED", OLD, "2026-11-01T00:00:00Z")]
 check("approval goes stale when the head moves away from its commit", moved, HEAD, *AWAITING)
 check("approval counts again when the head returns to its commit", moved, OLD, *OK)
+check("approval later dismissed does not count",
+      [review("alice", "APPROVED", HEAD, "2026-11-01T00:00:00Z"),
+       review("alice", "DISMISSED", HEAD, "2026-11-02T00:00:00Z")], HEAD, *AWAITING)
+check("latest review wins by submitted_at, not list order",
+      [review("alice", "CHANGES_REQUESTED", HEAD, "2026-11-02T00:00:00Z"),
+       review("alice", "APPROVED", HEAD, "2026-11-01T00:00:00Z")],
+      HEAD, "failure", "/.github/: changes requested by alice")
+check("author counts as approved for an area only they own",
+      [], HEAD, *OK, areas={"/docs/": {"alice"}}, author="alice")
+check("area whose owners lack write access stays red",
+      [review("alice", "APPROVED", HEAD, "2026-11-01T00:00:00Z")],
+      HEAD, "failure", "/x/: no owner with write access (carol)", areas={"/x/": {"carol"}})
 PY
