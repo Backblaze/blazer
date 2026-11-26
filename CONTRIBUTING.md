@@ -23,9 +23,8 @@ agree to the following for your present and future Contributions.
 
 ## Bug Reports & Feature Requests
 
-Bug reports and feature requests are really helpful. Head over to
-[Issues](https://github.com/Backblaze/blazer/issues), and provide
-plenty of detail and context.
+Bug reports and feature requests help. Go to
+[Issues](https://github.com/Backblaze/blazer/issues) and provide detail and context.
 
 Please report security vulnerabilities privately, as described in [SECURITY.md](SECURITY.md), not as issues.
 
@@ -33,7 +32,7 @@ Please report security vulnerabilities privately, as described in [SECURITY.md](
 
 ### Fork the Repository
 
-If you are planning to submit a pull request, please begin by [forking this repository in the GitHub UI](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo), then cloning your fork:
+If you plan to submit a pull request, first [fork this repository in the GitHub UI](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo). Then clone your fork:
 
 ```shell
 git clone git@github.com:<github-username>/blazer.git
@@ -52,51 +51,51 @@ When you're ready to submit, see the section below, [Submitting a Pull Request](
 
 Changes whose behavior depends on B2 need a live test; see [docs/testing.md](docs/testing.md#when-a-pr-needs-a-live-test) for when and how.
 
-Automated tests are run with `go test`. Integration tests run against Backblaze B2, and require that you create an application key with "all buckets" access and set the following environment variables:
+Automated tests run with `go test`. Integration tests run against Backblaze B2. To run integration tests, create an application key with "all buckets" access and set the following environment variables:
 
 ```shell
 export B2_APPLICATION_KEY_ID=<your application key id>
 export B2_APPLICATION_KEY=<your application key>
 ```
 
-To simply run all tests from the `blazer` directory, do:
+To run all tests from the `blazer` directory, do:
 
 ```shell
 go test ./...
 ```
 
-The `-v` flag is useful to generate more verbose output, such as passing package tests:
+The `-v` flag can generate more verbose output, such as passing package tests:
 
 ```shell
 go test -v ./...
 ```
 
-When developing, it's often useful to have `go test` exit as soon as it encounters a failing test; add the `-failfast` flag to do this:
+If you need `go test` to exit as soon as it encounters a failing test, add the `-failfast` flag:
 
 ```shell
 go test -v -failfast ./...
 ```
 
-You can supply a regular expression to limit the tests that are to be run. For example, to run all tests with names
+You can use a regular expression to limit the tests that run. For example, run all tests with names
 containing `TestResumeWriter`:
 
 ```shell
 go test -v ./... -run 'TestResumeWriter'
 ```
 
-This will run both `TestResumeWriter` and `TestResumeWriterWithoutExtantFile`, and `TestTestResumeWriter`, if such a test existed. To run only `TestResumeWriter`, use the caret, `^`, and dollar sign, `$`, to represent the beginning and end of the test name:
+This runs both `TestResumeWriter` and `TestResumeWriterWithoutExtantFile`. If a `TestTestResumeWriter` test existed, this also runs that test. To run only `TestResumeWriter`, use the caret, `^`, and dollar sign, `$`. The caret and dollar sign represent the beginning and end of the test name:
 
 ```shell
 go test -v ./... -run '^TestResumeWriter$'
 ```
 
-By default, `go test` caches test output, rerunning tests only when the code has changed. To avoid using cached results, do:
+By default, `go test` caches test output. It reruns tests only when the code has changed. To avoid using cached results, do:
 
 ```shell
 go test -v -count=1 ./...
 ```
 
-Finally, it's good practice to test for race conditions before submitting your code. Since the [data race detector](https://go.dev/doc/articles/race_detector) may increase memory usage by 5-10x and execution time by 2-20x, we don't recommend you do so all the time!
+Before submitting your code, you should test for race conditions. The [data race detector](https://go.dev/doc/articles/race_detector) can increase memory usage by 5-10x. It can increase execution time by 2-20x. We do not recommend running it all the time.
 
 To test for race conditions:
 
@@ -104,13 +103,13 @@ To test for race conditions:
 go test -v -race ./...
 ```
 
-Automated tests should be developed for cases that clearly improve Blazer's
+You should develop automated tests for cases that clearly improve Blazer's
 reliability, user and developer experience. Otherwise, there is no specific
 enforcement of test coverage.
 
 ### Test Cleanup
 
-The tests should delete all files and buckets that they create. However, if testing fails with an error such as a segmentation fault, test files and buckets may be left in place, causing subsequent test runs to fail. The `cleanup` utility deletes test files and buckets in such a situation:
+Tests should delete all files and buckets that they create. If testing fails with an error such as a segmentation fault, test files and buckets may remain. These files and buckets can cause subsequent test runs to fail. The `cleanup` utility deletes test files and buckets in this situation:
 
 ```shell
 go build internal/bin/cleanup/cleanup.go
@@ -119,25 +118,25 @@ go build internal/bin/cleanup/cleanup.go
 
 ### Running the CI checks locally
 
-`make ci` runs the same checks as CI: build, vet, gofmt, `go mod tidy -diff`, `go mod verify`, golangci-lint
+`make ci` runs the same checks as CI. The checks are build, vet, gofmt, `go mod tidy -diff`, `go mod verify`, golangci-lint
 (new findings only), the race-enabled test suite, the `bin/b2keys` module, cross-compilation and the
-changelog check. Run it before pushing and paste the tail of its output in the PR.
+changelog check. Run it before pushing. Paste the tail of its output in the PR.
 
 ### Changelog entries
 
-`CHANGELOG.md` is generated by [changie](https://changie.dev) from small files in `.changes/unreleased/`.
+[changie](https://changie.dev) generates `CHANGELOG.md` from small files in `.changes/unreleased/`.
 Every PR that changes library code (non-test `.go` files or `go.mod`) adds one:
 
 ```shell
 make changelog-new
 ```
 
-Pick the kind (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`) and write one or two
-sentences for library users: name the exported identifiers and say what callers see. If callers must
+Pick the kind (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`). Write one or two
+sentences for library users. Name the exported identifiers and say what callers see. If callers must
 change their code, start the entry with `**Breaking:**` and say what to do instead. Commit the generated
-YAML file with your change. Do not edit `CHANGELOG.md` directly; maintainers rebuild it at release time
+YAML file with your change. Do not edit `CHANGELOG.md` directly. Maintainers rebuild it at release time
 (see [RELEASE.md](RELEASE.md)). The `changelog` check fails on a PR that changes library code without an
-entry; a maintainer can apply the `skip-changelog` label when no entry is warranted.
+entry. A maintainer can apply the `skip-changelog` label when no entry is warranted.
 
 ### Deprecating and removing public API
 
@@ -166,12 +165,12 @@ The API compatibility check requires a new changelog fragment containing `**Brea
 
 ### Working with coding agents
 
-[AGENTS.md](AGENTS.md) is the map for coding agents (and a quick start for people). Larger changes start
-with an `intent.md` under [`docs/product-specs/`](docs/product-specs/README.md), and reviews follow [REVIEW.md](REVIEW.md).
+[AGENTS.md](AGENTS.md) is the map for coding agents and a quick start for people. Larger changes start
+with an `intent.md` under [`docs/product-specs/`](docs/product-specs/README.md). Reviews follow [REVIEW.md](REVIEW.md).
 
 ### Submitting a Pull Request
 
-When you're ready to submit your pull request, add and commit your files with a relevant message, including the issue number, if the PR fixes a specific issue:
+When you are ready to submit your pull request, add and commit your files with a relevant message. Include the issue number if the PR fixes a specific issue:
 
 ```shell
 git add <new and updated files>
@@ -184,6 +183,6 @@ Now push your changes to a new branch to your GitHub repository:
 git push --set-upstream origin my-cool-fix
 ```
 
-The git response will display the pull request URL, or you can go to the branch page in your repo, `https://github.com/<github-username>/blazer/tree/my-cool-fix`, and click the 'Compare & pull request' button.
+The git response will display the pull request URL. You can also go to the branch page in your repo, `https://github.com/<github-username>/blazer/tree/my-cool-fix`, and click the 'Compare & pull request' button.
 
-After you submit your pull request, a project maintainer will review it and respond within two weeks, likely much less unless we are flooded with contributions!
+After you submit your pull request, a project maintainer will review it. A maintainer will respond within two weeks. Unless we are flooded with contributions, the response will likely come sooner.
