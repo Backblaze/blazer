@@ -17,7 +17,7 @@ Use `bin/b2keys` to create a key. Never use a master key for routine work.
 
 1. Identify the operations and choose only the capabilities they need. Use the `Needs:` lines in the README examples. The issuing key needs `writeKeys`, and bucket lookup needs `listBuckets`.
 2. Choose one bucket and a matching name prefix. For routine keys, prefer a short positive duration. Pass the key name and at least one capability after the flags.
-3. Supply the issuing key ID and secret through `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` in the environment. Obtain them from a secure source without printing them. The deprecated fallbacks are `B2_ACCOUNT_ID` and `B2_SECRET_KEY`.
+3. Supply the issuing key ID and secret through `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` in the environment. Obtain them from a secure source without printing them. The deprecated fallbacks are `B2_ACCOUNT_ID`, `B2_SECRET_KEY` and `B2_ACCOUNT_KEY` (in that secret fallback order).
 4. The tool prints the new key ID and secret to standard output. Redirect it to a restricted file outside the repository; deliver it through an approved secure channel. Never print, log, echo, or commit a key secret.
 
 ```sh

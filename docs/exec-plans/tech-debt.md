@@ -14,7 +14,6 @@
 | Check | Script message | Tracking |
 | --- | --- | --- |
 | `changelog-base-functions` | CHANGELOG Added lists the new public base functions; missing from the 0.10.0 Added list: `NewAuthorizedAccount` | [#536](https://github.com/Backblaze/blazer/issues/536) |
-| `example-exit-status` | example program exits non-zero on failure and matches the key tool's variables; legacy secret variable differs: example 'B2_ACCOUNT_KEY' vs b2keys 'B2_SECRET_KEY' | [#537](https://github.com/Backblaze/blazer/issues/537) |
 
 ## Needs review
 

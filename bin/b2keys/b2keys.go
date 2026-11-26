@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	apiID        = "B2_APPLICATION_KEY_ID"
-	apiKey       = "B2_APPLICATION_KEY"
-	legacyAPIID  = "B2_ACCOUNT_ID"
-	legacyAPIKey = "B2_SECRET_KEY"
+	apiID            = "B2_APPLICATION_KEY_ID"
+	apiKey           = "B2_APPLICATION_KEY"
+	legacyAPIID      = "B2_ACCOUNT_ID"
+	legacyAPIKey     = "B2_SECRET_KEY"
+	legacyAccountKey = "B2_ACCOUNT_KEY"
 )
 
 func main() {
@@ -53,6 +54,9 @@ func (c *create) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{})
 	}
 	if key == "" {
 		key = os.Getenv(legacyAPIKey)
+	}
+	if key == "" {
+		key = os.Getenv(legacyAccountKey)
 	}
 	if id == "" || key == "" {
 		fmt.Fprintf(os.Stderr, "both %s and %s must be set in the environment\n", apiID, apiKey)

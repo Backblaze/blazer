@@ -19,6 +19,7 @@ import (
 	"context"
 	"flag"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -50,7 +51,7 @@ func runCreate(t *testing.T, args ...string) (subcommands.ExitStatus, string) {
 
 // The "must be set" message must end with a newline.
 func TestRegression_MissingCredentialsMessageEndsWithNewline(t *testing.T) {
-	for _, name := range []string{"B2_APPLICATION_KEY_ID", "B2_APPLICATION_KEY", "B2_ACCOUNT_ID", "B2_SECRET_KEY"} {
+	for _, name := range []string{"B2_APPLICATION_KEY_ID", "B2_APPLICATION_KEY", "B2_ACCOUNT_ID", "B2_ACCOUNT_KEY", "B2_SECRET_KEY"} {
 		t.Setenv(name, "")
 	}
 	status, stderr := runCreate(t, "name", "listFiles")
@@ -62,5 +63,35 @@ func TestRegression_MissingCredentialsMessageEndsWithNewline(t *testing.T) {
 	}
 	if !strings.HasSuffix(stderr, "\n") {
 		t.Errorf("message has no line ending: %q", stderr)
+	}
+}
+
+func TestLegacySecretFallbackOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name, standard, account, secret, want string
+	}{
+		{"account key", "", "account-value", "", "account-value"},
+		{"secret key", "", "", "secret-value", "secret-value"},
+		{"secret before account", "", "account-value", "secret-value", "secret-value"},
+		{"standard first", "standard-value", "account-value", "secret-value", "standard-value"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("B2_APPLICATION_KEY_ID", "")
+			t.Setenv("B2_ACCOUNT_ID", "legacy-id")
+			t.Setenv("B2_APPLICATION_KEY", tc.standard)
+			t.Setenv("B2_ACCOUNT_KEY", tc.account)
+			t.Setenv("B2_SECRET_KEY", tc.secret)
+			var gotID, gotKey string
+			old := http.DefaultTransport
+			http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				gotID, gotKey, _ = r.BasicAuth()
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"status":400,"code":"bad_request","message":"test"}`)), Request: r}, nil
+			})
+			t.Cleanup(func() { http.DefaultTransport = old })
+			status, _ := runCreate(t, "name", "listFiles")
+			if status != subcommands.ExitFailure || gotID != "legacy-id" || gotKey != tc.want {
+				t.Errorf("status=%v, id=%q, secret matched=%v; want failure after authorization with legacy id and selected secret", status, gotID, gotKey == tc.want)
+			}
+		})
 	}
 }
