@@ -41,7 +41,9 @@ A named test supplies evidence only for its assertions. This document does not c
 
 - **R6. Dry run.** `WithDryRun` records every planned transfer in `Result.Uploaded`, leaves `Result.BytesUploaded` at zero and sends no upload request.
   It still walks files, evaluates the comparison policy and records per-file failures, including names longer than 1024 bytes.
-  Source: `b2/sync/sync.go:91-101`, `b2/sync/sync.go:251-254`, `b2/sync/sync.go:280-287`.
+  During the walk, selected transfers remain in `transfers`. If a later walk callback returns `context.Canceled`, `Sync` returns before copying those paths to `Result.Uploaded`, so the result omits them.
+  No test pins this dry-run cancellation case. Search: `rg -n 'WithDryRun\(' b2/sync/*_test.go`; the cancellation case in `TestSyncDryRunAndCancellation` does not use `WithDryRun`.
+  Source: `b2/sync/sync.go:91-101`, `b2/sync/sync.go:227-229`, `b2/sync/sync.go:251-254`, `b2/sync/sync.go:270-287`.
   Tests: `b2/sync/sync_stress_test.go:121` `TestSyncDryRunAndCancellation` and
   `b2/sync/regression_b14_b29_test.go:42` `TestRegression_DryRunFlagsNamesB2WouldReject`.
 
@@ -85,19 +87,19 @@ A named test supplies evidence only for its assertions. This document does not c
   `b2/sync/sync_test.go:975` `TestUploadFileRejectsGrowthBeforePublishing`, and
   `b2/sync/sync_test.go:1050` `TestUploadFileRejectsChangeDuringStream`.
 
-- **R12. Large-upload failure cleanup.** For an upload error, `Sync` configures Writer cleanup with a fresh context that has a 30-second timeout. If B2 rejects the cancellation, `Sync` adds that cleanup error to the file error.
+- **R12. Large-upload failure cleanup.** For an upload error, `Sync` configures Writer cleanup with a fresh context that has a 30-second timeout. After the `b2_cancel_large_file` request completes, the cleanup callback cancels that context. If B2 rejects the cancellation, `Sync` adds that cleanup error to the file error.
   A failed large-file upload does not stop other files.
-  Source: `b2/sync/sync.go:401-418`, `b2/sync/sync.go:433-457`.
+  Source: `b2/sync/sync.go:401-418`, `b2/sync/sync.go:433-457`; `b2/writer.go:173`.
   Tests: `b2/sync/sync_test.go:747` `TestSyncCancelsFailedLargeUploadAndContinues`,
   `b2/sync/sync_test.go:779` `TestSyncReportsFailedLargeUploadCleanup`, and
-  `b2/sync/sync_test.go:1018` `TestSyncCancelsMultipartCleanupContext`.
+  `b2/sync/sync_test.go:1018` `TestSyncCancelsMultipartCleanupContext` asserts the cleanup context is canceled after Sync returns.
 
 - **R13. Cancellation.** During destination listing, `Sync` returns the iterator error or, for a failed attribute read with a cancelled context, `ctx.Err()` as described in R10a. During walking or SHA1 calculation, the code checks `ctx.Err()`. After job dispatch and workers finish, it returns `ctx.Err()` if set.
   A cancelled worker stops taking further jobs. The result can contain work recorded before cancellation.
   Source: `b2/sync/sync.go:200-215`, `b2/sync/sync.go:227-279`, `b2/sync/sync.go:297-329`, `b2/sync/sync.go:370-387`.
   Tests: `b2/sync/sync_stress_test.go:121` `TestSyncDryRunAndCancellation` covers pre-cancellation and cancellation during walking;
-  `b2/sync/sync_result_test.go:48` `TestSyncReturnsCancellationAfterWalk` covers cancellation after walking and pins the final context check after the workers finish (`b2/sync/sync.go:326`: without that check the test fails with `error = <nil>, want context canceled`); and
-  `b2/sync/sync_test.go:1121` `TestHashReaderStopsAfterCancellation` covers the hash reader.
+  `b2/sync/sync_result_test.go:48` `TestSyncReturnsCancellationAfterWalk` cancels during the walk and checks that Sync returns `context.Canceled`. Removing the current final context check (`b2/sync/sync.go:326`) makes that test fail, but the test does not pin the check’s location; and
+  `b2/sync/sync_test.go:1121` `TestHashReaderStopsAfterCancellation` covers the hash reader. No test cancels after the workers finish.
 
 - **R14. Error identity.** On an unsupported platform, `Sync` returns a wrapped `errors.ErrUnsupported`, so callers can use `errors.Is(err, errors.ErrUnsupported)`.
   For cancellation, `Sync` returns `ctx.Err()` directly, so callers can use `errors.Is` with the context error. For a per-file failure, callers inspect `Result.Failed[i].Err`; the aggregate `sync: N files failed` error does not wrap that file error.
