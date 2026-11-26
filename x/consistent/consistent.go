@@ -90,8 +90,8 @@ func (g *Group) OperateStream(ctx context.Context, name string, f func(io.Reader
 			return err
 		}
 		out, err := f(r)
-		r.Close()
 		if err != nil {
+			_ = r.Close()
 			return err
 		}
 		defer io.Copy(ioutil.Discard, out) // ensure the reader is read
@@ -116,14 +116,17 @@ func (g *Group) OperateStream(ctx context.Context, name string, f func(io.Reader
 			return err
 		}
 		if err != nil {
+			_ = r.Close()
 			cancel()
 			return err
 		}
 		if _, err := io.Copy(w, out); err != nil {
+			_ = r.Close()
 			cancel() // Prevent Close from publishing a partial upload.
 			_ = w.Close()
 			return withCleanupError(err)
 		}
+		_ = r.Close()
 		err = w.Close()
 		cancel()
 		if err != nil {

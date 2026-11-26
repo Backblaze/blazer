@@ -12,27 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build knowndefect
-
 package consistent
-
-// Known-defect tests. Each test asserts the correct behaviour and currently
-// fails because of an open defect, so this file is built only with the
-// knowndefect tag and the default "go test" does not run it:
-//
-//	make known-defects
-//
-// When a defect is fixed, move its test into the regular suite (a file without
-// the build tag, for example regression_test.go in this package) and rename
-// TestKnownDefect_X to TestRegression_X.
 
 import (
 	"io"
+	"strings"
 	"testing"
 )
 
 // A callback that returns its input reader unchanged must work.
-func TestKnownDefect_OperateStreamAcceptsCallbackReturningItsInput(t *testing.T) {
+func TestRegression_OperateStreamAcceptsCallbackReturningItsInput(t *testing.T) {
 	_, g, ctx := newSimGroup(t)
 	if err := g.Operate(ctx, "obj", func([]byte) ([]byte, error) { return []byte("hello"), nil }); err != nil {
 		t.Fatal(err)
@@ -47,5 +36,22 @@ func TestKnownDefect_OperateStreamAcceptsCallbackReturningItsInput(t *testing.T)
 	}
 	if string(got) != "hello" {
 		t.Errorf("content after the identity callback = %q, want %q", got, "hello")
+	}
+}
+
+func TestOperateStreamWithDifferentReader(t *testing.T) {
+	_, g, ctx := newSimGroup(t)
+	if err := g.Operate(ctx, "obj", func([]byte) ([]byte, error) { return []byte("old"), nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.OperateStream(ctx, "obj", func(io.Reader) (io.Reader, error) { return strings.NewReader("new"), nil }); err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	if err := g.Operate(ctx, "obj", func(b []byte) ([]byte, error) { got = append(got, b...); return b, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new" {
+		t.Errorf("content = %q, want new", got)
 	}
 }
