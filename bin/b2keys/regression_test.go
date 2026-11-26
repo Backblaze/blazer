@@ -95,3 +95,62 @@ func TestLegacySecretFallbackOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestSkillCommand(t *testing.T) {
+	for _, name := range []string{apiID, apiKey, legacyAPIID, legacyAPIKey, legacyAccountKey} {
+		t.Setenv(name, "")
+	}
+	want, err := os.ReadFile("../../.claude/skills/b2keys/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	c := &skill{out: &out}
+	fs := flag.NewFlagSet("skill", flag.ContinueOnError)
+	if got := c.Execute(context.Background(), fs); got != subcommands.ExitSuccess {
+		t.Fatalf("exit status = %v, want success", got)
+	}
+	if !bytes.Equal(out.Bytes(), want) {
+		t.Fatal("skill output differs from repository skill")
+	}
+}
+
+// failingWriter stands in for a closed pipe or a full disk.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestSkillCommandReportsAWriteFailure(t *testing.T) {
+	var stderr bytes.Buffer
+	c := &skill{out: failingWriter{}, errOut: &stderr}
+	fs := flag.NewFlagSet("skill", flag.ContinueOnError)
+	if got := c.Execute(context.Background(), fs); got != subcommands.ExitFailure {
+		t.Fatalf("exit status = %v, want failure", got)
+	}
+	if !strings.Contains(stderr.String(), "cannot write the skill") {
+		t.Errorf("stderr = %q, want a message saying the skill could not be written", stderr.String())
+	}
+}
+
+// refuseRequests fails the test if the code under test sends an HTTP request.
+type refuseRequests struct{ t *testing.T }
+
+func (r refuseRequests) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.t.Errorf("skill sent an HTTP request to %s; it must work offline", req.URL)
+	return nil, io.ErrClosedPipe
+}
+
+func TestSkillCommandMakesNoNetworkRequest(t *testing.T) {
+	old := http.DefaultTransport
+	http.DefaultTransport = refuseRequests{t}
+	t.Cleanup(func() { http.DefaultTransport = old })
+	var out bytes.Buffer
+	c := &skill{out: &out}
+	fs := flag.NewFlagSet("skill", flag.ContinueOnError)
+	if got := c.Execute(context.Background(), fs); got != subcommands.ExitSuccess {
+		t.Fatalf("exit status = %v, want success", got)
+	}
+	if out.Len() == 0 {
+		t.Fatal("skill printed nothing")
+	}
+}

@@ -3,8 +3,10 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -22,9 +24,31 @@ const (
 
 func main() {
 	subcommands.Register(&create{}, "")
+	subcommands.Register(&skill{out: os.Stdout, errOut: os.Stderr}, "")
 	flag.Parse()
 	ctx := context.Background()
 	os.Exit(int(subcommands.Execute(ctx)))
+}
+
+//go:embed skill/SKILL.md
+var skillText string
+
+type skill struct{ out, errOut io.Writer }
+
+func (s *skill) Name() string           { return "skill" }
+func (s *skill) Synopsis() string       { return "print the agent skill" }
+func (s *skill) Usage() string          { return "b2keys skill\n" }
+func (s *skill) SetFlags(*flag.FlagSet) {}
+func (s *skill) Execute(_ context.Context, _ *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+	if _, err := io.WriteString(s.out, skillText); err != nil {
+		errOut := s.errOut
+		if errOut == nil {
+			errOut = os.Stderr
+		}
+		fmt.Fprintf(errOut, "b2keys: cannot write the skill: %v\n", err)
+		return subcommands.ExitFailure
+	}
+	return subcommands.ExitSuccess
 }
 
 type create struct {
