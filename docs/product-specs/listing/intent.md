@@ -21,4 +21,4 @@ Go applications use `Bucket.List`, `ObjectIterator` and `ListOption` values to l
 
 ## Open questions
 
-See the standing spec for unspecified ordering, concurrent use and error matching.
+See the standing spec for unspecified ordering and error matching, and the concurrency constraint.
