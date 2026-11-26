@@ -10,7 +10,7 @@ stale_after: 2027-05-26T00:00:00+00:00
 
 Use an application key with only the capabilities and bucket scope your application needs. Avoid master keys for routine work. Protect the key ID and secret.
 
-`WithAccountInfo` accepts a session store. `NewAccountInfoFile` persists authorization data; protect its file and parent directory. The store validates file permissions and exposes persistence errors through `Err`. The default is an in-memory store.
+`WithAccountInfo` accepts a session store. `NewAccountInfoFile` persists authorization data. Protect its file and parent directory. The store validates file permissions and exposes persistence errors through `Err`. The default is an in-memory store.
 
 ```go
 package main
