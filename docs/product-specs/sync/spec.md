@@ -34,9 +34,10 @@ A named test supplies evidence only for its assertions. This document does not c
   `b2/sync/sync_stress_test.go:64` `TestSyncRejectsInvalidInputs`.
 
 - **R5. Deletes, overwrite and resume.** `Sync` never deletes a cloud-only object. When a local file requires transfer, `Sync` creates a Writer for the same destination name and sends the local content.
-  Changed large files are uploaded again in full. `Sync` does not resume an interrupted large-file upload.
-  Source: `b2/sync/sync.go:138-145`, `b2/sync/sync.go:301`, `b2/sync/sync.go:390-413`.
-  No test pins deletion or no-resume behavior. Search: `rg -n 'b2_delete|b2_list_unfinished_large_files|\\.Delete\\(|\\.Resume\\(' b2/sync/*_test.go` returned no matches.
+  By default, `Sync` does not set `Writer.Resume`, so a changed large file starts a fresh upload. Client default writer options can set `Resume`; the Writer can then reuse matching unfinished parts.
+  The package godoc says it does not resume interrupted uploads, but client defaults can change that behavior.
+  Source: `b2/sync/sync.go:15-20`, `b2/sync/sync.go:301`, `b2/sync/sync.go:390-413`; `b2/b2.go:843-862`; `b2/writer.go:47-59`, `b2/writer.go:446-473`.
+  No test pins deletion or resume behavior under client defaults. Search: `rg -n -i 'delete|resume|unfinished|DefaultWriterOptions' b2/sync/*_test.go`; the matches do not assert either behavior.
 
 - **R6. Dry run.** `WithDryRun` records every planned transfer in `Result.Uploaded`, leaves `Result.BytesUploaded` at zero and sends no upload request.
   It still walks files, evaluates the comparison policy and records per-file failures, including names longer than 1024 bytes.
@@ -49,14 +50,15 @@ A named test supplies evidence only for its assertions. This document does not c
   Source: `b2/sync/sync.go:165`, `b2/sync/sync.go:290-329`.
   Tests: `b2/sync/sync_test.go:611` `TestSyncUsesRequestedConcurrency` and
   `b2/sync/a_worker_pool_test.go:12` `TestSyncEmptyTreeUsesBoundedWorkerPool` pin the requested limit and a bounded pool.
-  No test pins the exact default of four. Search: `rg -n 'WithConcurrency\\(4\\)|concurrency: 4|workers.*4|4.*workers' b2/sync/*_test.go` returned no matches.
+  No test pins the exact default of four. Search: `rg -n 'WithConcurrency\(4\)|concurrency: 4|workers.*4|4.*workers' b2/sync/*_test.go` returned no matches.
 
 - **R8. Hashing and upload buffering.** `CompareSHA1` reads each selected local file through a 32 KiB buffer before deciding whether to transfer. If it uploads that file, `Sync` passes the computed SHA1 and source modification time to the Writer.
-  `Sync` does not set Writer chunk or buffer options. The Writer therefore uses its 100,000,000-byte default chunk size and in-memory buffer unless the client has a default Writer option.
-  Source: `b2/sync/sync.go:260-268`, `b2/sync/sync.go:370-388`, `b2/sync/sync.go:397-425`; `b2/b2.go:843-862`, `b2/writer.go:61-77`, `b2/writer.go:269-281`.
+  `Sync` does not set Writer chunk or buffer options; client default Writer options can change them. The default chunk size is 100,000,000 bytes.
+  Without `CompareSHA1` or `Resume`, a nonempty seekable local file uses the Writer's non-buffered section-reader path when seeking succeeds. `CompareSHA1` wraps the file in `io.TeeReader`; that non-seekable reader uses the buffered path. `Resume` also uses the buffered path. The buffered path uses memory by default or a file when `UseFileBuffer` is set. Empty files and seek failures fall back to the buffered path.
+  Source: `b2/sync/sync.go:260-268`, `b2/sync/sync.go:370-388`, `b2/sync/sync.go:390-426`; `b2/b2.go:843-862`; `b2/writer.go:61-73`, `b2/writer.go:269-281`, `b2/writer.go:704-791`.
   Tests: `b2/sync/a_hash_completion_test.go:25` `TestHashReaderCompletesWithDigest` and
   `b2/sync/sync_test.go:850` `TestSyncSHA1LargeFileRoundTrip` pin SHA1 completion and use for a large upload.
-  No test pins the exact 32 KiB buffer. Search: `rg -n '32\\s*\\*\\s*1024|32768' b2/sync/*_test.go` returned no matches.
+  No test pins the exact 32 KiB buffer. Search: `rg -n '32\s*\*\s*1024|32768' b2/sync/*_test.go` returned no matches.
 
 - **R9. Results and ordering.** `Result` separates uploaded, skipped and failed relative paths. A completed non-dry-run sync sorts `Uploaded` and `Failed` by relative path before it returns.
   The implementation does not sort `Skipped`. A dry run returns before the completed-run sorting step.
@@ -72,6 +74,10 @@ A named test supplies evidence only for its assertions. This document does not c
   `b2/sync/sync_test.go:494` `TestSyncContinuesAfterSHA1ReadError`, and
   `b2/sync/sync_test.go:725` `TestSyncContinuesAfterInvalidB2Name`.
 
+- **R10a. Destination listing failure.** If destination listing returns an iterator error, `Sync` stops and returns a nil `Result` and that error. A listing error may be a context error; the iterator error is returned directly. If an attribute read during listing fails while the context is cancelled, `Sync` returns a nil `Result` and `ctx.Err()` instead. A non-context attribute error is recorded for the matching local file, as described in R10 and R14; it is not a terminal listing failure.
+  Source: `b2/sync/sync.go:196-215`, `b2/sync/sync.go:220-225`, `b2/sync/sync.go:255-257`, `b2/sync/sync.go:326-336`.
+  No test pins this: terminal destination listing failure with a nil `Result`. Search: `rg -n -i 'b2_list_file_names|list.*(error|fail)|iter\.Err|cancel' b2/sync/*_test.go`; the matches do not assert this return.
+
 - **R11. File integrity during sync.** Before hashing or uploading, `Sync` opens the walked path and verifies that the opened and current entries remain the walked regular file.
   It rejects an object that grows after the walk or whose streamed SHA1 differs from the pre-upload SHA1. It cancels the Writer and does not publish that object.
   Source: `b2/sync/sync.go:355-367`, `b2/sync/sync.go:426-457`.
@@ -86,12 +92,13 @@ A named test supplies evidence only for its assertions. This document does not c
   `b2/sync/sync_test.go:779` `TestSyncReportsFailedLargeUploadCleanup`, and
   `b2/sync/sync_test.go:1018` `TestSyncCancelsMultipartCleanupContext`.
 
-- **R13. Cancellation.** `Sync` returns the context error when cancellation occurs before or during destination listing, walking, SHA1 calculation, job dispatch or after workers finish.
+- **R13. Cancellation.** During destination listing, `Sync` returns the iterator error or, for a failed attribute read with a cancelled context, `ctx.Err()` as described in R10a. During walking or SHA1 calculation, the code checks `ctx.Err()`. After job dispatch and workers finish, it returns `ctx.Err()` if set.
   A cancelled worker stops taking further jobs. The result can contain work recorded before cancellation.
   Source: `b2/sync/sync.go:200-215`, `b2/sync/sync.go:227-279`, `b2/sync/sync.go:297-329`, `b2/sync/sync.go:370-387`.
-  Tests: `b2/sync/sync_stress_test.go:121` `TestSyncDryRunAndCancellation`,
-  `b2/sync/sync_result_test.go:48` `TestSyncReturnsCancellationAfterWalk`, and
-  `b2/sync/sync_test.go:1121` `TestHashReaderStopsAfterCancellation`.
+  Tests: `b2/sync/sync_stress_test.go:121` `TestSyncDryRunAndCancellation` covers pre-cancellation and cancellation during walking;
+  `b2/sync/sync_result_test.go:48` `TestSyncReturnsCancellationAfterWalk` covers cancellation after walking; and
+  `b2/sync/sync_test.go:1121` `TestHashReaderStopsAfterCancellation` covers the hash reader.
+  No test pins this: the final context check after workers finish. Search: `rg -n -i 'cancel|context|worker|upload' b2/sync/*_test.go`; the matches do not assert that final check.
 
 - **R14. Error identity.** On an unsupported platform, `Sync` returns a wrapped `errors.ErrUnsupported`, so callers can use `errors.Is(err, errors.ErrUnsupported)`.
   For cancellation, `Sync` returns `ctx.Err()` directly, so callers can use `errors.Is` with the context error. For a per-file failure, callers inspect `Result.Failed[i].Err`; the aggregate `sync: N files failed` error does not wrap that file error.
@@ -100,11 +107,11 @@ A named test supplies evidence only for its assertions. This document does not c
   Tests: `b2/sync/open_other_test.go:33` `TestSyncUnsupportedPlatform`,
   `b2/sync/sync_result_test.go:48` `TestSyncReturnsCancellationAfterWalk`, and
   `b2/sync/sync_test.go:459` `TestSyncContinuesAfterEntryInfoError`.
-  No test pins an `errors.As` contract. Search: `rg -n 'errors\\.As' b2/sync/*_test.go` returned no matches.
+  No test pins an `errors.As` contract. Search: `rg -n 'errors\.As' b2/sync/*_test.go` returned no matches.
 
-- **R15. Platform and local-root limits.** `Sync` supports Linux, macOS and Windows. On other targets, it returns a nil result and an error wrapping `errors.ErrUnsupported` with `GOOS/GOARCH` before it walks files or makes B2 requests.
+- **R15. Platform and local-root limits.** `Sync` supports Linux except Android, macOS except iOS, and Windows. On Android, iOS and other targets, it returns a nil result and an error wrapping `errors.ErrUnsupported` with `GOOS/GOARCH` before it walks files or makes B2 requests.
   A local root must resolve to a directory. An object name longer than 1024 bytes is a per-file failure in normal and dry runs.
-  Source: `b2/sync/sync.go:155-160`, `b2/sync/sync.go:184-194`, `b2/sync/sync.go:251-254`; `b2/sync/open_other.go:26-31`; `docs/upgrading.md:185-191`.
+  Source: `b2/sync/sync.go:155-160`, `b2/sync/sync.go:184-194`, `b2/sync/sync.go:251-254`; `b2/sync/open_unix.go:15-24`, `b2/sync/open_windows.go:15-22`, `b2/sync/open_other.go:15-27`; `docs/upgrading.md:185-191`.
   Tests: `b2/sync/open_other_test.go:33` `TestSyncUnsupportedPlatform`,
   `b2/sync/sync_stress_test.go:64` `TestSyncRejectsInvalidInputs`, and
   `b2/sync/options_names_test.go:86` `TestSyncObjectNameByteLimit`.
@@ -126,6 +133,6 @@ This document records the existing `sync` package. It introduces no implementati
 | Current behavior only | R1 through R16 cite the `286e90d` implementation and existing documents. |
 | Direction and conflict rules | R1 through R5 describe local authority, comparison and no-delete behavior. |
 | Defaults and limits | R6 through R8 and R15 describe dry runs, workers, buffering and names. |
-| Errors, partial failure and cancellation | R10 through R14 describe results, cleanup, cancellation and error matching. |
+| Errors, partial failure and cancellation | R10 through R14, including R10a, describe results, cleanup, cancellation and error matching. |
 | Concurrent use | R7 and R16 distinguish internal workers from the unspecified caller contract. |
 | Test traceability | Each requirement names opened tests or records its test gap and search. |
