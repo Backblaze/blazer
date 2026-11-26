@@ -39,8 +39,7 @@ type StatusInfo struct {
 	RPCs map[time.Duration]MethodList
 }
 
-// MethodList is an accumulation of RPC calls that have been made over a given
-// period of time.
+// MethodList is an accumulation of RPC calls made over a given period of time.
 type MethodList []method
 
 // CountByMethod returns the total RPC calls made per method.
@@ -260,11 +259,11 @@ var (
 )
 
 // ServeHTTP serves diagnostic information about the current state of the
-// client; essentially everything available from Client.Status()
+// client; essentially everything available from Client.Status().
 //
-// ServeHTTP satisfies the http.Handler interface.  This means that a Client
-// can be passed directly to a path via http.Handle (or on a custom ServeMux or
-// a custom http.Server).
+// ServeHTTP satisfies the http.Handler interface. You can pass a Client
+// directly to a path via http.Handle (or on a custom ServeMux or a custom
+// http.Server).
 func (c *Client) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	info := c.Status()
 	statusTemplate.Execute(rw, info)
