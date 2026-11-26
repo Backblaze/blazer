@@ -35,7 +35,9 @@ func (b c16OffsetBucket) downloadFileByName(_ context.Context, _ string, offset,
 // The old multiplication overflows only with 32-bit int. CI executes this test
 // on linux/386; a 64-bit run alone cannot detect the regression.
 func TestFindingC16_ChunkOffsetMultipliedIn64Bit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// The Reader cancels its own context when the fake download fails below, so
+	// the test must not wait on that context: it keeps its own timer.
+	ctx, cancel := context.WithCancel(context.Background())
 	offsets := make(chan int64, 1)
 	r := &Reader{
 		ctx: ctx, cancel: cancel,
@@ -54,7 +56,7 @@ func TestFindingC16_ChunkOffsetMultipliedIn64Bit(t *testing.T) {
 		if want := int64(3_000_000_000); got <= 0 || got != want {
 			t.Fatalf("chunk offset = %d, want positive %d", got, want)
 		}
-	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for the chunk offset")
 	}
 }

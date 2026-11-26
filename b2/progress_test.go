@@ -735,13 +735,21 @@ func progressCancellationHasNoCallbackAfterTerminal(t *testing.T) {
 			close(terminal)
 		}
 	}
-	readDone := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, reader); close(readDone) }()
+	// Read the one byte first. The reader reaches the end of the object, which
+	// stops the reporter, only on a later Read. Waiting for the first callback
+	// before that Read makes the first callback the update and the second the
+	// terminal call, whatever the scheduling order.
+	one := make([]byte, 1)
+	if n, err := reader.Read(one); n != 1 || err != nil {
+		t.Fatalf("first Read = (%d, %v), want (1, nil)", n, err)
+	}
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("callback did not start before cancellation")
 	}
+	readDone := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, reader); close(readDone) }()
 	if got := progressSnapshot(&mu, &samples); len(got) != 1 || got[0] != (progressSample{1, -1}) {
 		t.Fatalf("first progress = %+v, want one (1, -1) sample", got)
 	}
