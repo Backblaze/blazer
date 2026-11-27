@@ -31,8 +31,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Backblaze/blazer/internal/b2simtest"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
-	"github.com/Backblaze/blazer/x/b2sim"
 )
 
 const (
@@ -771,13 +771,15 @@ func TestReaderFrom(t *testing.T) {
 	}
 
 	for _, e := range table {
-		// This transport verifies streaming SHA1 trailers instead of storing them as file bytes.
-		client, err := NewClient(ctx, "test-id", "test-key", Transport(b2sim.New()))
+		// b2-simulator verifies streaming SHA1 trailers instead of storing them as file bytes.
+		sim := b2simtest.New(t)
+		client, err := NewClient(ctx, b2simtest.KeyID, b2simtest.Key, APIBase(sim.URL), Transport(sim.Transport()))
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		bucket, err := client.NewBucket(ctx, bucketName, &BucketAttrs{Type: Private})
+		// B2 reserves the "b2-" prefix of bucketName for itself.
+		bucket, err := client.NewBucket(ctx, "reader-from", &BucketAttrs{Type: Private})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -14,6 +14,8 @@ CI checks and local gate:
   `make scripts-test`. Lint checks findings new since `origin/main` by default.
 - Integration tests in `b2/integration_test.go` require `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY`;
   otherwise they skip.
+- Client tests that use `internal/b2simtest` need Node.js and `B2_SIMULATOR_DIR` (a b2-simulator checkout,
+  v0.6.0 or later) for `make test` and `make ci`; without it they fail, they do not skip.
 
 Maintainer-only commands (not run by CI):
 

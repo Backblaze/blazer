@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # The backblaze-labs/b2-simulator commit (v0.6.0) that the client tests start through internal/b2simtest.
+  SIMULATOR_REVISION: '4052c6f8f45350486460d19bc796866cbdcdd3bc'
+  B2_SIMULATOR_DIR: ${{ github.workspace }}/.b2-simulator
+
 concurrency:
   group: test-live
   cancel-in-progress: false
@@ -51,6 +56,17 @@ jobs:
         with:
           go-version: stable
           cache-dependency-path: go.sum
+      - name: Check out the pinned b2-simulator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: backblaze-labs/b2-simulator
+          ref: ${{ env.SIMULATOR_REVISION }}
+          ssh-key: ${{ secrets.SIMULATOR_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .b2-simulator
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
       - name: Check live credentials
         id: creds
         env:

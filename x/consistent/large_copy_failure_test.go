@@ -28,7 +28,7 @@ import (
 
 	"github.com/Backblaze/blazer/b2"
 	"github.com/Backblaze/blazer/base"
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
 type cleanupTransport struct {
@@ -68,8 +68,9 @@ func TestOperateStreamCancelsUnfinishedLargeUpload(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			transport := &cleanupTransport{sim: b2sim.New(), failCancel: tc.failCancel}
-			client, err := b2.NewClient(ctx, "test-id", "test-key", b2.Transport(transport), b2.DefaultWriterOptions(b2.WriterOptionFunc(func(w *b2.Writer) { w.ChunkSize = 5_000_000 })))
+			sim := b2simtest.New(t)
+			transport := &cleanupTransport{sim: sim.Transport(), failCancel: tc.failCancel}
+			client, err := b2.NewClient(ctx, b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(transport), b2.DefaultWriterOptions(b2.WriterOptionFunc(func(w *b2.Writer) { w.ChunkSize = 5_000_000 })))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,11 +109,12 @@ func TestOperateStreamCancelsUnfinishedLargeUpload(t *testing.T) {
 			if n := len(client.Status().Writers); n != 0 {
 				t.Errorf("%d writers remain open", n)
 			}
-			// The simulator rejects deleting a bucket with an unfinished upload.
+			// B2 refuses to delete a bucket that still holds an unfinished large file:
+			// 400 cannot_delete_non_empty_bucket (https://www.backblaze.com/apidocs/b2-delete-bucket).
 			deleteErr := bucket.Delete(ctx)
 			if tc.failCancel {
-				if deleteErr == nil || !strings.Contains(deleteErr.Error(), "bucket has unfinished large files") {
-					t.Errorf("bucket deletion = %v, want unfinished-upload rejection", deleteErr)
+				if status, code, _ := base.MsgCode(deleteErr); status != 400 || code != "cannot_delete_non_empty_bucket" {
+					t.Errorf("bucket deletion = %v, want 400 cannot_delete_non_empty_bucket for the unfinished upload", deleteErr)
 				}
 			} else if deleteErr != nil {
 				t.Errorf("bucket deletion after cleanup: %v", deleteErr)

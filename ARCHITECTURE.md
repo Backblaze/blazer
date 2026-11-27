@@ -22,6 +22,7 @@ Blazer is a Go client for the Backblaze B2 Native API. The public high-level API
 | [`base/`](base/) | Low-level B2 requests, responses, authorization and HTTP transport. |
 | [`internal/b2types/`](internal/b2types/) | Shared request and response types used by `base` and `b2`. |
 | [`internal/b2wiretest/`](internal/b2wiretest/) | Recording HTTP test server and assertions used by wire tests. |
+| [`internal/b2simtest/`](internal/b2simtest/) | Starts a local [b2-simulator](https://github.com/backblaze-labs/b2-simulator) for tests that drive the public client against a B2 server. |
 | [`internal/retry/`](internal/retry/) | Retry and backoff helpers used by `b2`. |
 | [`internal/blog/`](internal/blog/) | Debug logging used by `base` and `b2`. |
 | [`x/consistent/`](x/consistent/) | Experimental consistency helpers built on `b2`. |

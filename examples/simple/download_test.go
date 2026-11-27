@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/Backblaze/blazer/b2"
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
 type brokenDownloadTransport struct{ next http.RoundTripper }
@@ -46,13 +46,12 @@ func (tr brokenDownloadTransport) RoundTrip(req *http.Request) (*http.Response, 
 
 func TestSimpleDownloadProcess(t *testing.T) {
 	if mode := os.Getenv("B11_HELPER_MODE"); mode != "" {
-		sim := b2sim.New()
-		sim.Seed("example")
-		client, err := b2.NewClient(context.Background(), "id", "key", b2.Transport(sim))
+		sim := b2simtest.New(t)
+		client, err := b2.NewClient(context.Background(), b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(sim.Transport()))
 		if err != nil {
 			panic(err)
 		}
-		bucket, err := client.Bucket(context.Background(), "example")
+		bucket, err := client.NewBucket(context.Background(), "example", nil)
 		if err != nil {
 			panic(err)
 		}
@@ -68,12 +67,13 @@ func TestSimpleDownloadProcess(t *testing.T) {
 				panic(err)
 			}
 		}
-		http.DefaultTransport = sim
+		// main uses the default API base; this transport sends api.backblazeb2.com to the simulator.
+		http.DefaultTransport = sim.Transport()
 		if mode == "midstream" {
-			http.DefaultTransport = brokenDownloadTransport{sim}
+			http.DefaultTransport = brokenDownloadTransport{sim.Transport()}
 		}
-		_ = os.Setenv("B2_APPLICATION_KEY_ID", "id")
-		_ = os.Setenv("B2_APPLICATION_KEY", "key")
+		_ = os.Setenv("B2_APPLICATION_KEY_ID", b2simtest.KeyID)
+		_ = os.Setenv("B2_APPLICATION_KEY", b2simtest.Key)
 		flag.CommandLine = flag.NewFlagSet("simple", flag.ContinueOnError)
 		os.Args = []string{"simple", "b2://example/object", os.Getenv("B11_DEST")}
 		main()
@@ -83,7 +83,9 @@ func TestSimpleDownloadProcess(t *testing.T) {
 		mode, want, failureMessage string
 		fail                       bool
 	}{
-		{"missing", "original", "file not found", true},
+		// Real B2's 404 not_found message for a missing name (b2-simulator docs/FIDELITY.md F-201,
+		// measured against production B2).
+		{"missing", "original", "b2_download_file_by_name: 404: File with such name does not exist.", true},
 		{"midstream", "original", "injected read failure", true},
 		{"empty", "", "", false},
 		{"present", "a sufficiently long payload", "", false},

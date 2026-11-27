@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/Backblaze/blazer/b2"
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
 type failingWriterTo struct{ err error }
@@ -39,7 +39,8 @@ func (f failingWriterTo) WriteTo(w io.Writer) (int64, error) {
 func TestOperateStreamCopyFailureDoesNotPublishPartialWriterTo(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client, err := b2.NewClient(ctx, "test-id", "test-key", b2.Transport(b2sim.New()))
+	sim := b2simtest.New(t)
+	client, err := b2.NewClient(ctx, b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(sim.Transport()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,8 @@ func newSimGroup(t *testing.T) (*b2.Client, *Group, context.Context) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	client, err := b2.NewClient(ctx, "test-id", "test-key", b2.Transport(b2sim.New()))
+	sim := b2simtest.New(t)
+	client, err := b2.NewClient(ctx, b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(sim.Transport()))
 	if err != nil {
 		t.Fatal(err)
 	}

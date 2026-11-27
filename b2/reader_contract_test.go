@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
 // EOF remains terminal for subsequent reads while the caller's context is live.
@@ -58,8 +58,9 @@ func TestReaderReadAfterEOF(t *testing.T) {
 func TestReaderZeroLengthRangeMakesNoRequests(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	transport := &attrsRequestCounter{next: b2sim.New()}
-	client, err := NewClient(ctx, "test-id", "test-key", Transport(transport))
+	sim := b2simtest.New(t)
+	transport := &attrsRequestCounter{next: sim.Transport()}
+	client, err := NewClient(ctx, b2simtest.KeyID, b2simtest.Key, APIBase(sim.URL), Transport(transport))
 	if err != nil {
 		t.Fatal(err)
 	}
