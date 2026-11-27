@@ -1,3 +1,0 @@
-kind: Fixed
-body: Reading a client's status before any request no longer panics when the client was built from a saved session; method counters are now initialized at construction.
-time: 2026-11-19T13:49:11.707598-06:00

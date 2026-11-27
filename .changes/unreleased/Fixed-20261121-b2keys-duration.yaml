@@ -1,3 +1,0 @@
-kind: Fixed
-body: b2keys now validates key duration before creating a key.
-time: 2026-11-21T13:00:00-06:00

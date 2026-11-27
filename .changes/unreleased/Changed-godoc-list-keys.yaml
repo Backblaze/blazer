@@ -1,3 +1,0 @@
-kind: Changed
-body: The godoc of the b2 listing, key and status types is simpler to read, with no behavior changes.
-time: 2026-11-26T12:00:00-06:00

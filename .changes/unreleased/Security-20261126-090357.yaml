@@ -1,3 +1,0 @@
-kind: Security
-body: Restored sessions now validate API, download, and S3 address schemes before reusing cached authorization tokens.
-time: 2026-11-26T09:03:57.82704-06:00

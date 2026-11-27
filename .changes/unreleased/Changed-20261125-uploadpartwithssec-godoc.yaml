@@ -1,3 +1,0 @@
-kind: Changed
-body: 'The documentation for base.FileChunk.UploadPartWithSSEC now states that callers must pass the same SSE-C configuration used to start the large file, because omitting it makes B2 reject the part.'
-time: 2026-11-25T14:30:00-06:00

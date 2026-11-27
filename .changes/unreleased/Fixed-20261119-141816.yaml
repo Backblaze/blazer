@@ -1,3 +1,0 @@
-kind: Fixed
-body: Reader.Verify returns an unavailable result instead of panicking before reading or after rejecting an invalid customer encryption key.
-time: 2026-11-19T14:18:16.785178-06:00

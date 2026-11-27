@@ -1,3 +1,0 @@
-kind: Security
-body: Verbose and debug logs now redact additional sensitive values.
-time: 2026-11-19T12:40:37.778877-06:00

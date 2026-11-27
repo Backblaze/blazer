@@ -1,3 +1,0 @@
-kind: Fixed
-body: Remove the local module replacement from b2keys so versioned installation works when a command-module tag is available.
-time: 2026-11-21T13:30:00-06:00

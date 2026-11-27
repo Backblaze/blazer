@@ -1,4 +1,0 @@
-kind: Changed
-body: >-
-  **Breaking:** For HTTP 500, 502, and 504 responses and other ambiguous failures of create key, create bucket, start or finish large file, hide file, copy file, and delete file version, as well as Bucket.Update, Bucket.Delete, Key.Delete, and large-file cancellation, base.Action now returns OutcomeUnknown instead of Retry. Callers switching on base.Action must handle OutcomeUnknown by reconciling the operation before retrying. These errors match ErrOutcomeUnknown through errors.Is, transport causes remain available through errors.Is/errors.As, and Idempotent exposes the retry-safety policy. Non-upload transport errors now include the method name instead of "b2 error"; upload transport errors omit ": 0:" from Error() text. HTTP 408, retryable 429/503 responses, definite pre-send failures (including proxy-connect and dial failures), reads, and reauthentication remain retried (#172).
-time: 2026-11-20T16:41:10.254786-06:00

@@ -1,3 +1,0 @@
-kind: Changed
-body: The godoc of the base, sync and x packages is simpler to read, with no behavior changes.
-time: 2026-11-26T00:00:00Z

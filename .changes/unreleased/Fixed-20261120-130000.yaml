@@ -1,3 +1,0 @@
-kind: Fixed
-body: NewBucket now applies requested default retention, and returns an error if the retention update fails. If cleanup also fails, it returns the remaining bucket with the error.
-time: 2026-11-20T13:00:00-06:00
