@@ -11,9 +11,13 @@ import (
 	"testing"
 
 	"github.com/Backblaze/blazer/b2"
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
+// lifecycleTransport stands in for a later B2 that has a lifecycle field this client does not know
+// (futurePolicy): it adds the field to listed buckets and records the rules the client sends back. The
+// server under it does not know the field and refuses it, as B2 does today, so the transport removes it
+// from the update it forwards.
 type lifecycleTransport struct {
 	sim  http.RoundTripper
 	sent json.RawMessage
@@ -25,12 +29,29 @@ func (t *lifecycleTransport) RoundTrip(req *http.Request) (*http.Response, error
 		if err != nil {
 			return nil, err
 		}
-		req.Body = io.NopCloser(bytes.NewReader(body))
 		var data map[string]json.RawMessage
 		if err = json.Unmarshal(body, &data); err != nil {
 			return nil, err
 		}
 		t.sent = data["lifecycleRules"]
+		if len(t.sent) != 0 {
+			var rules []map[string]json.RawMessage
+			if err = json.Unmarshal(t.sent, &rules); err != nil {
+				return nil, err
+			}
+			for _, rule := range rules {
+				delete(rule, "futurePolicy")
+			}
+			if data["lifecycleRules"], err = json.Marshal(rules); err != nil {
+				return nil, err
+			}
+			if body, err = json.Marshal(data); err != nil {
+				return nil, err
+			}
+		}
+		req = req.Clone(req.Context())
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
 	}
 	resp, err := t.sim.RoundTrip(req)
 	if err != nil || !strings.HasSuffix(req.URL.Path, "/b2_list_buckets") {
@@ -60,20 +81,20 @@ func (t *lifecycleTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 func TestSavePreservesUnknownLifecycleFields(t *testing.T) {
 	ctx := context.Background()
-	sim := b2sim.New()
-	setup, err := b2.NewClient(ctx, "a", "k", b2.Transport(sim))
+	sim := b2simtest.New(t)
+	setup, err := b2.NewClient(ctx, b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(sim.Transport()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = setup.NewBucket(ctx, "n", nil); err != nil {
+	if _, err = setup.NewBucket(ctx, "lifecycle", nil); err != nil {
 		t.Fatal(err)
 	}
-	tr := &lifecycleTransport{sim: sim}
-	client, err := b2.NewClient(ctx, "a", "k", b2.Transport(tr))
+	tr := &lifecycleTransport{sim: sim.Transport()}
+	client, err := b2.NewClient(ctx, b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(tr))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := client.Bucket(ctx, "n")
+	bucket, err := client.Bucket(ctx, "lifecycle")
 	if err != nil {
 		t.Fatal(err)
 	}

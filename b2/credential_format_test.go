@@ -7,22 +7,30 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
 func TestCredentialContainersRedactFormatting(t *testing.T) {
-	const secret = "synthetic-credential-287"
-	const token = "b2sim-token"
-	data := AuthData{AuthToken: token}
-	store := &InMemoryAccountInfo{}
-	store.Set(data)
-	sim := b2sim.New()
-	sim.Seed("audit")
-	client, err := NewClient(t.Context(), "id", secret, Transport(sim))
+	// The application key the client holds, and the session token the server issued to it.
+	const secret = b2simtest.Key
+	sim := b2simtest.New(t)
+	session := &InMemoryAccountInfo{}
+	client, err := NewClient(t.Context(), b2simtest.KeyID, secret, APIBase(sim.URL), Transport(sim.Transport()), WithAccountInfo(session))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := client.Bucket(t.Context(), "audit")
+	live, ok := session.AuthData()
+	if !ok || live.AuthToken == "" {
+		t.Fatal("the client stored no session token")
+	}
+	token := live.AuthToken
+	data := AuthData{AuthToken: token}
+	store := &InMemoryAccountInfo{}
+	store.Set(data)
+	if _, err := client.NewBucket(t.Context(), "audit-bucket", nil); err != nil {
+		t.Fatal(err)
+	}
+	bucket, err := client.Bucket(t.Context(), "audit-bucket")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +41,8 @@ func TestCredentialContainersRedactFormatting(t *testing.T) {
 		want  []string
 	}{
 		{"client", client, []string{"b2.Client", "redacted"}},
-		{"bucket", bucket, []string{"b2.Bucket", "Name:audit", "ID:" + bucket.ID()}},
-		{"bucket_value", *bucket, []string{"b2.Bucket", "Name:audit", "ID:" + bucket.ID()}},
+		{"bucket", bucket, []string{"b2.Bucket", "Name:audit-bucket", "ID:" + bucket.ID()}},
+		{"bucket_value", *bucket, []string{"b2.Bucket", "Name:audit-bucket", "ID:" + bucket.ID()}},
 		{"object", bucket.Object("item"), []string{"item"}},
 	} {
 		t.Run("metadata_"+tc.name, func(t *testing.T) {

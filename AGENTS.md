@@ -15,6 +15,8 @@ CI checks and local gate:
 - Run `make docs-lint` to report issues in changed `docs/` Markdown and `ARCHITECTURE.md`. Unchanged files do not get stale warnings.
 - Integration tests in `b2/integration_test.go` require `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY`;
   otherwise they skip.
+- Client tests that use `internal/b2simtest` need Node.js and `B2_SIMULATOR_DIR` (a b2-simulator checkout,
+  v0.6.0 or later) for `make test` and `make ci`; without it they fail, they do not skip.
 
 Maintainer-only commands (not run by CI):
 

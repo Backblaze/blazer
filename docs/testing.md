@@ -18,6 +18,7 @@ The rules every PR follows (TDD loop, five kinds, evidence) are in [testing-stan
 | --- | --- | --- | --- | --- |
 | Unit, fake backend | `b2/*_test.go` using the fake in `b2/b2_test.go` | `go test ./...` | Logic inside the `b2` package | What is sent on the wire |
 | Wire | New tests use `internal/b2wiretest`; existing per-feature fakes stay until rewritten (`*_wire_test.go`) | `go test ./...` | The exact request body, headers and query, and how a response is decoded | That B2 answers that way |
+| Client against b2-simulator | `b2`, `x/consistent` and `examples/simple` tests that call `internal/b2simtest.New` | `B2_SIMULATOR_DIR=<b2-simulator checkout> go test ./...` | The public client's requests and its handling of the answers of a B2 server, on loopback with the simulator's fixed test credentials | Behavior the simulator does not model, or where it differs from B2 (its `docs/FIDELITY.md`) |
 | Repo-owned SDK harness contract | `.sdkharness/` ([README](../.sdkharness/README.md)) | See below | Behavior against the B2 simulator ([`backblaze-labs/b2-simulator`](https://github.com/backblaze-labs/b2-simulator)), one scenario per capability | Behavior the simulator does not model (encryption keys, retention, replication effects) |
 | Live integration | `b2/integration_test.go`, `base/integration_test.go`, `b2/lock_test.go` | `B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... go test ./b2/ ./base/` | Real B2 behavior for that account on that day | Other accounts, regions or later B2 releases |
 
@@ -25,6 +26,8 @@ Object Lock behavior in `b2/lock.go` is live-only for service semantics. The exi
 `TestObjectLockLive` in `b2/lock_test.go` exercises retention and legal hold uploads and updates
 against B2. Without credentials, the test skips. Local validation and wire tests cannot prove B2 enforces
 those settings.
+
+Tests that call `internal/b2simtest.New` start their own [b2-simulator](https://github.com/backblaze-labs/b2-simulator) (v0.6.0 or later, profile `b2`) and need Node.js and `B2_SIMULATOR_DIR` set to its checkout, for `go test`, `make test` and `make ci` alike. Without it they fail with a message that says so; they do not skip. CI checks out the commit in `SIMULATOR_REVISION` (`.github/workflows/ci.yml`). The in-process `x/b2sim` keeps its own tests.
 
 `make ci` runs build, vet, gofmt, tidy, verify, lint, the race tests, b2keys, cross-compiles and the
 changelog check. Cross-compiling proves that the code builds for a platform. It does not prove that the

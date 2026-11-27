@@ -19,14 +19,15 @@ import (
 	"testing"
 
 	"github.com/Backblaze/blazer/base"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 	"github.com/Backblaze/blazer/internal/b2wiretest"
-	"github.com/Backblaze/blazer/x/b2sim"
 )
 
 func TestDefaultWriterOptionsRunOnlyForRealWriters(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
-	client, err := NewClient(ctx, "offline-id", "offline-key", Transport(b2sim.New()),
+	sim := b2simtest.New(t)
+	client, err := NewClient(ctx, b2simtest.KeyID, b2simtest.Key, APIBase(sim.URL), Transport(sim.Transport()),
 		DefaultWriterOptions(WriterOptionFunc(func(w *Writer) {
 			calls++
 			if w.o == nil || w.ctx == nil || w.cancel == nil {

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
 type attrsRequestCounter struct {
@@ -22,8 +22,9 @@ func (c *attrsRequestCounter) RoundTrip(req *http.Request) (*http.Response, erro
 
 func TestAttrsAfterListDoesNotMakeRequest(t *testing.T) {
 	ctx := context.Background()
-	counter := &attrsRequestCounter{next: b2sim.New()}
-	client, err := NewClient(ctx, "test-id", "test-key", Transport(counter))
+	sim := b2simtest.New(t)
+	counter := &attrsRequestCounter{next: sim.Transport()}
+	client, err := NewClient(ctx, b2simtest.KeyID, b2simtest.Key, APIBase(sim.URL), Transport(counter))
 	if err != nil {
 		t.Fatal(err)
 	}

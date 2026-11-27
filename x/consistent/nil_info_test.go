@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/Backblaze/blazer/b2"
-	"github.com/Backblaze/blazer/x/b2sim"
+	"github.com/Backblaze/blazer/internal/b2simtest"
 )
 
 // nullInfoTransport serves every call from the in-process simulator but
@@ -68,19 +68,19 @@ func (n nullInfoTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 func TestRegression_BucketWithoutInfoMapDoesNotCrash(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	sim := b2sim.New()
-	setup, err := b2.NewClient(ctx, "a", "k", b2.Transport(sim))
+	sim := b2simtest.New(t)
+	setup, err := b2.NewClient(ctx, b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(sim.Transport()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := setup.NewBucket(ctx, "n", nil); err != nil {
+	if _, err := setup.NewBucket(ctx, "nil-info", nil); err != nil {
 		t.Fatal(err)
 	}
-	client, err := b2.NewClient(ctx, "a", "k", b2.Transport(nullInfoTransport{sim: sim}))
+	client, err := b2.NewClient(ctx, b2simtest.KeyID, b2simtest.Key, b2.APIBase(sim.URL), b2.Transport(nullInfoTransport{sim: sim.Transport()}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket, err := client.Bucket(ctx, "n")
+	bucket, err := client.Bucket(ctx, "nil-info")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestRegression_BucketWithoutInfoMapDoesNotCrash(t *testing.T) {
 	}
 	// The stored state must hold the callback's output ("0": it saw no data).
 	// Read it through an independent client and group over the same simulator.
-	b2bucket, err := setup.Bucket(ctx, "n")
+	b2bucket, err := setup.Bucket(ctx, "nil-info")
 	if err != nil {
 		t.Fatal(err)
 	}
