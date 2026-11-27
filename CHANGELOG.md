@@ -9,6 +9,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Unreleased entries live in [`.changes/unreleased/`](.changes/unreleased/) until the next release. Add one with `changie new` (see [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries)).
 
+## [0.11.0] - 2026-11-27
+
+### Added
+
+- b2keys has a skill subcommand that prints the agent skill.
+
+### Changed
+
+- The godoc of the b2 copy, compose, replication, lock, encryption and notification types is simpler to read; no behavior changes.
+- Release publication now requires an annotated SSH-signed tag verified against the reviewed maintainer allowlist. After verification, a tag workflow automatically publishes the GitHub Release from its versioned release notes (#425).
+- **Breaking:** consistent.Group.OperateStream and its convenience methods replace any client-default WithCancelOnError callbacks with a 30-second bounded cleanup. Inspect the returned error to observe cancellation failures.
+- **Breaking:** For HTTP 500, 502, and 504 responses and other ambiguous failures of create key, create bucket, start or finish large file, hide file, copy file, and delete file version, as well as Bucket.Update, Bucket.Delete, Key.Delete, and large-file cancellation, base.Action now returns OutcomeUnknown instead of Retry. Callers switching on base.Action must handle OutcomeUnknown by reconciling the operation before retrying. These errors match ErrOutcomeUnknown through errors.Is, transport causes remain available through errors.Is/errors.As, and Idempotent exposes the retry-safety policy. Non-upload transport errors now include the method name instead of "b2 error"; upload transport errors omit ": 0:" from Error() text. HTTP 408, retryable 429/503 responses, definite pre-send failures (including proxy-connect and dial failures), reads, and reauthentication remain retried (#172).
+- **Breaking:** NewReader and NewRangeReader on an Object with a resolved ID now read that version, even after its name is overwritten. Uploads, Copy, Compose, listings, Attrs, Delete, Hide, Cancel, UpdateFileRetention and UpdateFileLegalHold can resolve the ID, even if a subsequent request fails. A deleted pinned version returns not-found; Hide leaves its pinned content readable by ID. Use a fresh bucket.Object(name) handle to read the latest visible version. Fresh handles resolve the name once, then use the ID for subsequent chunks and retries; transports must allow b2_download_file_by_id.
+- **Breaking for non-loopback HTTP endpoints:** APIBase requires HTTPS except for localhost and loopback IP addresses. Only non-loopback HTTP endpoints must use InsecureAPIBase; loopback HTTP, the default B2 endpoint, and HTTPS configurations are unchanged.
+- **Breaking:** Object.Hide accepts an optional customer encryption key; method values and interfaces using its previous signature must be adapted. Object.Delete accepts WithDeleteSSECKey to resolve protected objects.
+- **Breaking:** Diagnostic fmt output changes for base.AuthData, base.B2, base.Bucket, base.File, base.LargeFile, base.Key, base.URL, base.FileChunk, b2.AuthData, b2.Client, b2.Bucket, b2.InMemoryAccountInfo, b2.WebhookNotificationTarget and b2.NotificationCustomHeader. Credential containers use type labels and redacted credentials instead of raw struct output; file and bucket metadata and large-file IDs remain visible (for example, base.File{Name:cat.jpg Size:42 ... redacted}). Callers must use explicit fields or accessors for credentials and must not parse diagnostic fmt output. Public credential fields and JSON persistence are unchanged.
+- **Breaking:** Add DaysUnfinishedUntilCanceled to b2.LifecycleRule and base.LifecycleRule for server-side cleanup of unfinished large files. Callers using unkeyed struct literals must add the field or switch to keyed literals. Attrs-to-Update and x/consistent saves preserve unknown lifecycle-rule fields when rules are unchanged; changing any rule re-encodes the entire slice using known fields. Writer documentation describes the cleanup rule and billing of unfinished files.
+- The documentation for base.FileChunk.UploadPartWithSSEC now states that callers must pass the same SSE-C configuration used to start the large file, because omitting it makes B2 reject the part.
+- The godoc of the base, sync and x packages is simpler to read, with no behavior changes.
+- The godoc of the b2 upload types is simpler to read; behavior does not change.
+- The godoc for the b2 client and authentication is simpler to read, with no behavior changes.
+- **Breaking:** Writer.Resume now fails when two or more unfinished uploads share the object name, instead of resuming the last one the service listed. The error names the object and the file IDs. To continue, list the unfinished uploads with b2.ListUnfinished, call Object.Cancel on all but one of them, and retry.
+- The godoc of the internal packages is simpler to read, with no behavior changes.
+- The godoc of the b2 listing, key and status types is simpler to read, with no behavior changes.
+
+### Fixed
+
+- A rejected bucket update no longer leaves the attempted bucket type, CORS rules or default server-side encryption in the local bucket cache, where a later update on the same handle could resend them (#108).
+- `Writer.Close` no longer panics after the write buffer could not be created; the error is returned instead.
+- `Object.URL` and `Object.AuthURL` percent-escape object names, so names containing `#`, `?` or `%` produce working links. `URL` now returns `%20` for spaces.
+- `Bucket.Update` in `base` no longer panics when the response omits the lock or replication configuration.
+- `x/window` no longer loses events when `Insert` and `Reduce` run concurrently or when wall-clock and monotonic elapsed time straddle a bucket boundary.
+- Writer.ReadFrom and io.Copy now buffer OS pipe sources whose Seek fails and honor the current position of seekable sources. Writes after Close return ErrClosed for empty, small, and large uploads, including failed closes; closing an unused writer also releases its temporary buffer and status registration (#181).
+- Fix a 32-bit integer overflow in the download chunk-offset calculation that produced a wrong or negative offset for objects larger than ~2 GiB on 32-bit platforms (linux/386, linux/arm).
+- Reading a client's status before any request no longer panics when the client was built from a saved session; method counters are now initialized at construction.
+- Reader.Verify returns an unavailable result instead of panicking before reading or after rejecting an invalid customer encryption key.
+- Writer.ReadFrom now records source read errors so Close refuses to commit a partial upload. README upload examples cancel before closing after an io.Copy error, including when the source supplies its own WriteTo method (#187).
+- Bucket.Reveal now reports listing failures instead of reporting the object as absent.
+- Writer.Close rejects a resumed large-file upload when the source has fewer parts than the unfinished upload, instead of publishing stale trailing data.
+- Bucket updates now clear CORS rules when given an explicitly empty list.
+- Deleting an application key now reauthorizes and retries when the account authorization token has expired.
+- Fix crashes from overflowing time-window bucket indices on 32-bit systems.
+- Close the consistent group writer and cancel unfinished large uploads when copying callback output fails.
+- Bucket updates retain the returned revision for subsequent conflict checks, and large-file sizes exclude streamed SHA-1 trailers.
+- NewBucket now applies requested default retention, and returns an error if the retention update fails. If cleanup also fails, it returns the remaining bucket with the error.
+- Writers now reject negative chunk sizes without panicking and release chunk buffers after resume mismatches or buffer-reader failures.
+- Folder sync now rejects nil options without panicking and reports object names exceeding 1024 bytes in both dry runs and uploads.
+- Honor ListPrefix on unfinished large-file listings, including subsequent pages, and add base.Bucket.ListUnfinishedLargeFilesWithPrefix. Version and key listings also continue past name-only and empty-page cursors, and file listings explicitly request the default page size of 100 and support page sizes up to 10,000 (#184).
+- Prevent AfterNBytes from panicking on 32-bit platforms by aligning its atomic counters.
+- Chunked readers pin a file version so overwrites cannot mix downloaded versions, and reader status reports allocated chunks from zero, including those awaiting response headers. The in-memory simulator supports the ID-based downloads used by pinned readers.
+- Concurrent transfers of the same object name now each appear in Client.Status instead of overwriting one another in the status display.
+- Preserve existing local files and their permission bits in the README and simple download examples when downloading; the simple program now reports errors on stderr and exits non-zero on failure.
+- Bound buffered API responses, redact authorization tokens when formatting AuthData, and preserve non-JSON error details.
+- Report unexpected EOFs from large-file upload workers and apply exponential backoff when retrying simple and multipart uploads.
+- Wrapped b2 errors now expose their underlying causes to errors.Is, errors.As, and base error inspection helpers.
+- Reader status now keeps retrying and failed chunks incomplete instead of reporting them as finished before a successful download. Speculative probes beyond the earliest confirmed EOF are omitted so their cancellation does not leave successful reads looking incomplete.
+- Add a newline to missing-credential errors in b2keys, initialize consistent-group metadata when bucket info is absent, and wake download chunk waiters on cancellation.
+- b2keys now validates key duration before creating a key.
+- Remove the local module replacement from b2keys so versioned installation works when a command-module tag is available.
+- Allow loopback HTTP endpoints with APIBase and restore SDK harness compatibility with published releases.
+- Redact credential containers in diagnostic formatting while preserving explicit credential access and JSON persistence.
+- Preserve plus characters in object download and authorized URLs.
+- The documentation for x/consistent.Writer now correctly describes it as an io.WriteCloser instead of an io.ReadCloser.
+- Make b2 not-found errors match fs.ErrNotExist with errors.Is.
+- Bucket.Update no longer sends cached default encryption when the caller does not change it.
+- Return independent RPC snapshots from Client.Status.
+- The simple example and b2keys now accept each other's legacy secret variable name as a last fallback, preserving each program's existing credential precedence.
+- Several b2 godoc comments now match the code.
+- OperateStream now accepts a callback that returns its input reader.
+- The Sync godoc now says that a client default writer option can enable Resume.
+- The godoc of AfterNBytes and Response in x/transport now matches the code.
+
+### Security
+
+- Verbose and debug logs now redact additional sensitive values.
+- Restored sessions now validate API, download, and S3 address schemes before reusing cached authorization tokens.
+
+[0.11.0]: https://github.com/Backblaze/blazer/compare/v0.10.1...v0.11.0
+
 ## [0.10.1] - 2026-11-17
 
 This is a documentation and test-infrastructure maintenance release. No new SDK APIs or library runtime fixes are introduced; library source is unchanged from v0.10.0 apart from the standard release-version metadata.

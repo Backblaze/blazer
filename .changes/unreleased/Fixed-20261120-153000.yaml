@@ -1,3 +1,0 @@
-kind: Fixed
-body: Writers now reject negative chunk sizes without panicking and release chunk buffers after resume mismatches or buffer-reader failures.
-time: 2026-11-20T15:30:00-06:00

@@ -1,3 +1,0 @@
-kind: Fixed
-body: Make b2 not-found errors match fs.ErrNotExist with errors.Is.
-time: 2026-11-26T09:00:00-06:00

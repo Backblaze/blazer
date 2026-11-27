@@ -1,3 +1,0 @@
-kind: Fixed
-body: Folder sync now rejects nil options without panicking and reports object names exceeding 1024 bytes in both dry runs and uploads.
-time: 2026-11-20T21:36:37Z

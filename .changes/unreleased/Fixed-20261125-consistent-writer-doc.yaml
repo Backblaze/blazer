@@ -1,3 +1,0 @@
-kind: Fixed
-body: The documentation for x/consistent.Writer now correctly describes it as an io.WriteCloser instead of an io.ReadCloser.
-time: 2026-11-25T14:37:39-06:00

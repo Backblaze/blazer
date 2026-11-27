@@ -1,3 +1,0 @@
-kind: Fixed
-body: Deleting an application key now reauthorizes and retries when the account authorization token has expired.
-time: 2026-11-20T12:00:00.000000-06:00

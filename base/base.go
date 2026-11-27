@@ -45,7 +45,7 @@ import (
 
 const (
 	APIBase          = "https://api.backblazeb2.com"
-	DefaultUserAgent = "blazer/0.10.1"
+	DefaultUserAgent = "blazer/0.11.0"
 )
 
 // ErrOutcomeUnknown marks a failed request that may already have been applied.

@@ -1,2 +1,0 @@
-kind: Changed
-body: The godoc of the b2 copy, compose, replication, lock, encryption and notification types is simpler to read; no behavior changes.

@@ -1,3 +1,0 @@
-kind: Fixed
-body: Report unexpected EOFs from large-file upload workers and apply exponential backoff when retrying simple and multipart uploads.
-time: 2026-11-21T09:00:00-06:00

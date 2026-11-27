@@ -1,3 +1,0 @@
-kind: Fixed
-body: Bucket updates retain the returned revision for subsequent conflict checks, and large-file sizes exclude streamed SHA-1 trailers.
-time: 2026-11-20T12:01:00.000000-06:00
